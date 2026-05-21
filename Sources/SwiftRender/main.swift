@@ -34,6 +34,7 @@ let sceneRunners: [String: SceneRunner] = [
     "CardStack":        SceneRunner(CardStack.self),
     "ParticleField":    SceneRunner(ParticleField.self),
     "ShaderShowcase":   SceneRunner(ShaderShowcase.self),
+    "ShaderGallery":    SceneRunner(ShaderGallery.self),
 
     // OpenEar — real-world consumer scenes living inside the repo
     "LogoReveal":       SceneRunner(LogoReveal.self),

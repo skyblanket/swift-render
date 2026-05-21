@@ -4,9 +4,13 @@
 
 The Apple-ecosystem answer to Remotion / After Effects. Built for an era where AI writes the motion graphics.
 
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.mp4
+
+*30-second gallery reel: liquid metal, kaleidoscope, truchet weave, spiral galaxy, synthwave grid, smoke flow — six fresh Metal shaders from `Cookbook2.metal`, all rendered with swift-render. Click ▶ to play.*
+
 ![OpenEar vinyl scene rendered with the spinningVinyl Metal shader + SwiftUI components](docs/assets/openear-vinyl.png)
 
-*Above: real-world scene from the OpenEar app launch — a Metal-shaded vinyl record with anisotropic specular and groove micro-patterns, beside a glossy album sleeve (also shader-rendered), captioned with SwiftUI text. Every frame is a pure function of time.*
+*Real-world scene from the OpenEar launch — Metal-shaded vinyl with groove micro-patterns + glossy sleeve + SwiftUI text caption. Every frame is a pure function of time.*
 
 ```bash
 swift run swift-render render TextReveal --out out/hero.mp4
@@ -129,6 +133,27 @@ The Cookbook (`Sources/SwiftRender/Shaders/Cookbook.metal`) ships with 6 ready-t
 Render the showcase to see all six in motion:
 ```bash
 swift run swift-render render ShaderShowcase --out out/cookbook.mp4
+```
+
+### Cookbook Vol. 2 — six more, full-frame
+
+A second cookbook (`Cookbook2.metal`) ships six full-frame "wow factor" shaders inspired by classic demoscene / ShaderToy patterns:
+
+<table>
+<tr>
+<td align="center"><img src="docs/assets/shader-liquidMetal.png" width="320"/><br/><code>liquidMetal</code></td>
+<td align="center"><img src="docs/assets/shader-kaleidoscope.png" width="320"/><br/><code>kaleidoscope</code></td>
+<td align="center"><img src="docs/assets/shader-truchet.png" width="320"/><br/><code>truchet</code></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/shader-galaxy.png" width="320"/><br/><code>galaxy</code></td>
+<td align="center"><img src="docs/assets/shader-neonGrid.png" width="320"/><br/><code>neonGrid</code></td>
+<td align="center"><img src="docs/assets/shader-smokeFlow.png" width="320"/><br/><code>smokeFlow</code></td>
+</tr>
+</table>
+
+```bash
+swift run swift-render render ShaderGallery --out out/gallery.mp4
 ```
 
 ## Example scenes
