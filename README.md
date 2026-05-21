@@ -4,6 +4,10 @@
 
 The Apple-ecosystem answer to Remotion / After Effects. Built for an era where AI writes the motion graphics.
 
+![OpenEar vinyl scene rendered with the spinningVinyl Metal shader + SwiftUI components](docs/assets/openear-vinyl.png)
+
+*Above: real-world scene from the OpenEar app launch — a Metal-shaded vinyl record with anisotropic specular and groove micro-patterns, beside a glossy album sleeve (also shader-rendered), captioned with SwiftUI text. Every frame is a pure function of time.*
+
 ```bash
 swift run swift-render render TextReveal --out out/hero.mp4
 swift run swift-render render ShaderShowcase --out out/cookbook.mp4
@@ -100,6 +104,19 @@ Rectangle()
 
 The Cookbook (`Sources/SwiftRender/Shaders/Cookbook.metal`) ships with 6 ready-to-use shaders:
 
+<table>
+<tr>
+<td align="center"><img src="docs/assets/shader-rimglow.png" width="320"/><br/><code>rimGlow</code></td>
+<td align="center"><img src="docs/assets/shader-foil.png" width="320"/><br/><code>foilHolographic</code></td>
+<td align="center"><img src="docs/assets/shader-plasma.png" width="320"/><br/><code>plasmaField</code></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/shader-audiobars.png" width="320"/><br/><code>audioBars</code></td>
+<td align="center"><img src="docs/assets/shader-caustics.png" width="320"/><br/><code>caustics</code></td>
+<td align="center"><img src="docs/assets/shader-chroma.png" width="320"/><br/><code>chromaticAberration</code></td>
+</tr>
+</table>
+
 | Shader | What it does |
 |---|---|
 | `rimGlow(size, color, intensity, time)` | Soft glowing rim around the view's edges |
@@ -109,10 +126,25 @@ The Cookbook (`Sources/SwiftRender/Shaders/Cookbook.metal`) ships with 6 ready-t
 | `audioBars(size, level, barCount, time)` | Symmetric audio-reactive frequency bars |
 | `caustics(size, time, intensity)` | Pool-of-water rippling highlights |
 
-Render the showcase to see all six:
+Render the showcase to see all six in motion:
 ```bash
 swift run swift-render render ShaderShowcase --out out/cookbook.mp4
 ```
+
+## Example scenes
+
+Four generic scenes ship in the box. Use them as starting points or paste into an LLM as reference.
+
+<table>
+<tr>
+<td align="center"><img src="docs/assets/scene-text-reveal.png" width="420"/><br/><code>TextReveal</code> — kinetic typography</td>
+<td align="center"><img src="docs/assets/scene-card-stack.png" width="420"/><br/><code>CardStack</code> — 3D-ish floating cards with foil shimmer</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/scene-particle-field.png" width="420"/><br/><code>ParticleField</code> — particles over plasma backdrop</td>
+<td align="center"><img src="docs/assets/openear-vinyl.png" width="420"/><br/><code>VinylSpin</code> (OpenEar example) — shader-rendered vinyl + sleeve</td>
+</tr>
+</table>
 
 ## CLI
 
