@@ -1,0 +1,8 @@
+.build
+.swiftpm
+.DS_Store
+out/*.mp4
+out/*.mov
+Package.resolved
+*.xcodeproj
+.idea
