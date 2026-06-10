@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- StyleReel + StyleReelVertical (9:16) — 12-aesthetic showcase scenes with
+  card-zoom transitions + tools/make_reel_audio.py
+
 - `contact <Scene> --cols 5 --rows 3` — labelled grid contact sheet PNG
   (full-size layouts downscaled, last sample lands before the end fade)
 - `LaunchFilm` scene (57.5s launch film) + `tools/make_launch_audio.py`
