@@ -1,337 +1,213 @@
+<div align="center">
+
 # swift-render
 
 **Programmatic motion graphics in Swift. SwiftUI scenes + real Metal shaders → MP4.**
 
-The Apple-ecosystem answer to Remotion / After Effects. Built for an era where AI writes the motion graphics.
+*The native-Apple answer to Remotion — built for the era where AI writes the motion graphics.*
 
-https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.mp4
+[![CI](https://github.com/skyblanket/swift-render/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblanket/swift-render/actions/workflows/ci.yml)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
+![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
+![Release](https://img.shields.io/github/v/tag/skyblanket/swift-render?label=release&color=C7FF1A)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-*30-second gallery reel: liquid metal, kaleidoscope, truchet weave, spiral galaxy, synthwave grid, smoke flow — six fresh Metal shaders from `Cookbook2.metal`, all rendered with swift-render. Click ▶ to play.*
+</div>
 
-![OpenEar vinyl scene rendered with the spinningVinyl Metal shader + SwiftUI components](docs/assets/openear-vinyl.png)
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/just-render-it.mp4
 
-*Real-world scene from the OpenEar launch — Metal-shaded vinyl with groove micro-patterns + glossy sleeve + SwiftUI text caption. Every frame is a pure function of time.*
+> **This entire ad — every cut, the kinetic type, the Metal smoke, the beat-synced soundtrack — is one Swift file.** Written by an AI in a single pass, rendered in **6.4 seconds** on a MacBook. Click ▶. Sound on.
 
 ```bash
-swift run swift-render render TextReveal --out out/hero.mp4
-swift run swift-render render ShaderShowcase --out out/cookbook.mp4
-swift run swift-render render LaunchReel --aspect 9:16 --out out/vert.mp4
+git clone https://github.com/skyblanket/swift-render && cd swift-render
+swift run swift-render render JustRenderIt --audio audio/jri.m4a --out out/ad.mp4   # ~7s later: a finished ad, sound included
 ```
 
 ---
 
-## Why this exists
+## Why not just use Remotion?
 
-**Remotion** is React rendered by headless Chromium. Slow (30–60fps), JS-only, no GPU shaders, no native Apple typography. **After Effects** is a closed app. **Motion Canvas** is TypeScript. There's been no good native-Apple programmatic motion graphics framework.
+Remotion is great — and it's React rendered by **headless Chromium**, frame by frame, screenshot by screenshot. swift-render is a different bet: render natively on the GPU-accelerated Apple stack, and make every frame a **pure function of time**.
 
-swift-render fills that gap with three things that matter:
+| | **swift-render** | **Remotion** |
+|---|---|---|
+| Render engine | Native SwiftUI `ImageRenderer` | Headless Chromium screenshots |
+| 1080p60 render speed | **~100–140 fps** (M-series) | typically ~15–30 fps |
+| Animation model | `t: Double` → View. That's the whole API | `useCurrentFrame()` + hooks, refs, effect deps |
+| Determinism | **Proven** — byte-identical re-renders, tested in CI | best-effort (browser, font, thread timing) |
+| GPU shaders | **Real Metal** (`.colorEffect`, 12 shaders included) | WebGL/canvas workarounds |
+| Typography | Native SF / CoreText, SF Symbols, full blend modes | Web fonts in a browser |
+| Audio-reactive | Built-in offline FFT → `audio.band(.bass, at: t)` | `useAudioData` + visualization utils |
+| Data-driven renders | `--props file.json` (Codable) | `inputProps` ✓ |
+| Sequencing | `Timeline { Clip }` result builder | `<Sequence>` / `<Series>` ✓ |
+| Install weight | Swift package, **zero dependencies** | node_modules + a Chromium download |
+| Toolchain | `swift run`, done | npm, bundler, browser binaries |
+| Runs on | macOS 14+ | anywhere Node runs ✓ |
+| Web preview/player | ❌ render PNG/MP4 fast instead | ✓ Studio + `<Player>` — genuinely good |
+| Render farm | your Mac (it's fast) | Lambda ✓ |
 
-1. **Native SwiftUI rendering** — CoreAnimation interpolation, real Apple typography, SF Symbols, glassmorphism, `.colorEffect`/`.layerEffect` shaders. ~100fps render speed.
-2. **Real Metal shaders.** Drop a `.metal` file into the package, call it via `ShaderLibrary.bundle(.module).yourShader(...)` on any view. Iridescent foil, animated noise, caustics, audio-reactive bars — all real GPU code.
-3. **Frame-deterministic scene API.** Every scene is a pure function of `t: Double`. No `@State`, no `Timer.publish`, no `withAnimation` race conditions. LLM-shaped.
+**Use Remotion** if you need browser embeds, a web player, or Lambda-scale farms.
+**Use swift-render** if you want native quality, 5–10× faster local renders, real shaders, and an API a language model writes correctly on the first try.
 
-That last point is the kicker for AI workflows. Remotion has hooks, `useCurrentFrame`, refs, effect deps — LLMs get those wrong. swift-render has `t: Double`. That's it. Write a SwiftUI scene as a pure function of time, get an MP4.
+## The whole API fits in your head
 
----
-
-## Quick start
-
-```bash
-git clone https://github.com/<you>/swift-render.git
-cd swift-render
-swift build
-swift run swift-render list             # list available scenes
-swift run swift-render render TextReveal --out out/hello.mp4
-```
-
-Output is a real H.264 MP4 at `out/hello.mp4`. Frame-deterministic, ~100fps render speed at 1080p.
-
-## Writing a scene
+A scene is a pure function: time in, view out. No state, no timers, no animation races — and nothing for an LLM to hallucinate.
 
 ```swift
 import SwiftUI
 
-public struct MyHero: RenderScene {
+public struct Hello: RenderScene {
     public static let defaultDuration: Double = 3.0
-    public static func body(at t: Double, duration: Double) -> some View {
-        let p = Ease.easeOut(Ease.clip(t, 0.0, 0.6))
+
+    @MainActor public static func body(at t: Double, duration: Double) -> some View {
+        let p = Ease.spring(t, from: 0, to: 1, response: 0.5, dampingFraction: 0.6)
         Text("hello.")
-            .font(.system(size: 96, weight: .semibold))
+            .font(.system(size: 120, weight: .black))
             .foregroundStyle(.white)
-            .opacity(p)
-            .scaleEffect(0.94 + 0.06 * CGFloat(p))
+            .scaleEffect(0.8 + 0.2 * p)
+            .opacity(Ease.clip(t, 0, 0.4))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
+            .background(.black)
     }
 }
 ```
 
-Register in `main.swift`:
-```swift
-"MyHero": SceneRunner(MyHero.self),
-```
-
-Then:
-```bash
-swift run swift-render render MyHero --out out/hero.mp4
-```
-
-That's it. No build configuration, no project files, no AVAssetWriter boilerplate. The recorder takes care of everything.
-
-## Using Metal shaders
-
-Drop a `.metal` file into `Sources/SwiftRender/Shaders/`. Then **rebuild the `default.metallib`**:
+Register it in `Sources/SwiftRenderCLI/main.swift`, then:
 
 ```bash
-# From the package root:
-cd Sources/SwiftRender/Shaders
-xcrun -sdk macosx metal -c *.metal -o /tmp/all.air
-xcrun -sdk macosx metallib /tmp/*.air -o ../Resources/default.metallib
+swift run swift-render render Hello --out out/hello.mp4
+swift run swift-render frame Hello --at 1.2 --out out/check.png   # preview one frame in ~1s
 ```
 
-Then call the shader function on any SwiftUI view:
+### Sequencing — `Timeline`
+
+No segment math, no frame counting. Clips get **local time**; transitions overlap automatically; pinned clips float over everything:
 
 ```swift
-Rectangle()
-    .fill(.black)
-    .colorEffect(
-        ShaderLibrary.bundle(.module).rimGlow(
-            .float2(640, 480),
-            .color(.pink),
-            .float(1.2),
-            .float(Float(t))
-        )
-    )
-```
-
-> **Why the rebuild step?** Swift Package Manager doesn't compile `.metal` files automatically (yet). The pre-built `default.metallib` bundled in `Resources/` is what SwiftUI's `ShaderLibrary` actually loads. If you edit a shader, re-run the two commands above. (PRs welcome to automate this via a build plugin.)
-
-The Cookbook (`Sources/SwiftRender/Shaders/Cookbook.metal`) ships with 6 ready-to-use shaders:
-
-<table>
-<tr>
-<td align="center"><img src="docs/assets/shader-rimglow.png" width="320"/><br/><code>rimGlow</code></td>
-<td align="center"><img src="docs/assets/shader-foil.png" width="320"/><br/><code>foilHolographic</code></td>
-<td align="center"><img src="docs/assets/shader-plasma.png" width="320"/><br/><code>plasmaField</code></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/assets/shader-audiobars.png" width="320"/><br/><code>audioBars</code></td>
-<td align="center"><img src="docs/assets/shader-caustics.png" width="320"/><br/><code>caustics</code></td>
-<td align="center"><img src="docs/assets/shader-chroma.png" width="320"/><br/><code>chromaticAberration</code></td>
-</tr>
-</table>
-
-| Shader | What it does |
-|---|---|
-| `rimGlow(size, color, intensity, time)` | Soft glowing rim around the view's edges |
-| `foilHolographic(size, seed, intensity)` | Iridescent rainbow foil layered over a surface |
-| `plasmaField(size, time, scale)` | Flowing animated noise — great backdrop |
-| `chromaticAberration(size, amount)` | RGB channel split toward the frame edges |
-| `audioBars(size, level, barCount, time)` | Symmetric audio-reactive frequency bars |
-| `caustics(size, time, intensity)` | Pool-of-water rippling highlights |
-
-Render the showcase to see all six in motion:
-```bash
-swift run swift-render render ShaderShowcase --out out/cookbook.mp4
-```
-
-### Cookbook Vol. 2 — six more, full-frame
-
-A second cookbook (`Cookbook2.metal`) ships six full-frame "wow factor" shaders inspired by classic demoscene / ShaderToy patterns:
-
-<table>
-<tr>
-<td align="center"><img src="docs/assets/shader-liquidMetal.png" width="320"/><br/><code>liquidMetal</code></td>
-<td align="center"><img src="docs/assets/shader-kaleidoscope.png" width="320"/><br/><code>kaleidoscope</code></td>
-<td align="center"><img src="docs/assets/shader-truchet.png" width="320"/><br/><code>truchet</code></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/assets/shader-galaxy.png" width="320"/><br/><code>galaxy</code></td>
-<td align="center"><img src="docs/assets/shader-neonGrid.png" width="320"/><br/><code>neonGrid</code></td>
-<td align="center"><img src="docs/assets/shader-smokeFlow.png" width="320"/><br/><code>smokeFlow</code></td>
-</tr>
-</table>
-
-```bash
-swift run swift-render render ShaderGallery --out out/gallery.mp4
-```
-
-## Timeline, springs & transitions
-
-Sequencing without hand-rolled `if t < segB` switching — `Timeline` lays clips
-end-to-end, remaps each clip to local time, and cross-transitions between them.
-Everything stays a pure function of `t`:
-
-```swift
-public static func body(at t: Double, duration: Double) -> some View {
-    Timeline(t) {
-        Clip(2.0) { local in ColdOpen(t: local) }
-        Clip(3.0) { local in WordSlams(t: local) }.transition(.flash())
-        Clip(4.0) { local in ShaderBloom(t: local) }.transition(.fade(0.4))
-        Clip(at: 0, for: 9.0) { local in HUD(t: local) }   // pinned overlay
-    }
+Timeline(t) {
+    Clip(2.2) { local in TitleCard(t: local) }
+    Clip(2.4) { local in SpringShowcase(t: local) }.transition(.slide(0.45))
+    Clip(2.4) { local in MetalMoment(t: local) }.transition(.flash())
+    Clip(4.0) { local in Outro(t: local) }.transition(.fade(0.5))
+    Clip(at: 0, for: 9.9) { local in ProgressHUD(t: local) }   // pinned overlay
 }
 ```
 
-Analytic springs (closed-form, no integration — scrub to any frame and get
-identical pixels) plus `easeOutBack`, `elastic`, `bounce`, `expo`, and
-`cubicBezier`:
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/timeline-demo.mp4
 
-```swift
-let y = Ease.spring(t, from: 0, to: 1, response: 0.5, dampingFraction: 0.7)
-let s = Ease.easeOutBack(Ease.clip(t, 0.2, 0.6))
-```
+### Springs — closed-form, scrub-safe
 
-## Audio-reactive scenes
+`Spring` is solved **analytically** (under/critical/overdamped) — position at any `t` is computed directly, never integrated. Scrub to frame 4081 and get the exact same pixels, every run. Plus `easeOutBack`, `elastic`, `bounce`, `expo`, `cubicBezier(…)`.
 
-Pass `--audio`, get a pre-analyzed `AudioTrack` — RMS level plus bass/mid/high
-band envelopes, computed once before the render loop so scenes stay pure:
+### Audio-reactive — `--audio`
+
+The file is FFT-analyzed **once** before rendering (RMS + bass/mid/high envelopes); scenes read it as a pure lookup, so determinism survives:
 
 ```swift
 public struct AudioBars: PropsAudioScene {
     public static func body(at t: Double, duration: Double,
                             props: Props, audio: AudioTrack) -> some View {
-        let bass = audio.band(.bass, at: t)   // 0…1, deterministic
-        // ...scale, glow, slam on the beat
+        let bass = audio.band(.bass, at: t)        // 0…1
+        // scale, glow, slam on the beat …
     }
 }
 ```
 
-```bash
-swift run swift-render render AudioBars --audio music/beat.wav --out out/bars.mp4
-```
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/audiobars.mp4
 
-## Props — data-driven scenes
+> The soundtrack itself is generated by `tools/make_jri_audio.py` — kicks, whooshes and an 808 placed at the scene's exact timeline anchors. Audio and video can't drift, by construction.
 
-Scenes can take a Codable props payload, so AI and data pipelines can render
-variants without touching Swift:
+### Data-driven — `--props`
 
 ```bash
-swift run swift-render props AudioBars > bars.json   # print defaults template
-# edit bars.json …
-swift run swift-render render AudioBars --props bars.json --out out/custom.mp4
+swift run swift-render props AudioBars > p.json     # JSON template from the scene's defaults
+swift run swift-render render AudioBars --props p.json --audio beat.wav
 ```
 
-## Example scenes
+Pipe in JSON per record and render a thousand personalized variants — the AI/data-pipeline workflow Remotion's `inputProps` made popular, native.
 
-Four generic scenes ship in the box. Use them as starting points or paste into an LLM as reference.
+## Real Metal shaders
 
-<table>
-<tr>
-<td align="center"><img src="docs/assets/scene-text-reveal.png" width="420"/><br/><code>TextReveal</code> — kinetic typography</td>
-<td align="center"><img src="docs/assets/scene-card-stack.png" width="420"/><br/><code>CardStack</code> — 3D-ish floating cards with foil shimmer</td>
-</tr>
-<tr>
-<td align="center"><img src="docs/assets/scene-particle-field.png" width="420"/><br/><code>ParticleField</code> — particles over plasma backdrop</td>
-<td align="center"><img src="docs/assets/openear-vinyl.png" width="420"/><br/><code>VinylSpin</code> (OpenEar example) — shader-rendered vinyl + sleeve</td>
-</tr>
-</table>
+Drop a `.metal` file in `Sources/SwiftRender/Shaders/`, run `tools/build_shaders.sh`, call it on any view:
+
+```swift
+Rectangle().fill(.black).colorEffect(
+    ShaderLibrary.bundle(.module).galaxy(.float2(1920, 1080), .float(Float(t)))
+)
+```
+
+Twelve ship in two cookbooks — `rimGlow`, `foilHolographic`, `plasmaField`, `chromaticAberration`, `audioBars`, `caustics`, `liquidMetal`, `kaleidoscope`, `truchet`, `galaxy`, `neonGrid`, `smokeFlow`:
+
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.mp4
+
+(If a `.metal` file is newer than the compiled metallib, the CLI warns you loudly — no silently-stale shaders.)
+
+## More demos
+
+| | |
+|---|---|
+| `Kinetic` — 12s kinetic-typography reel: word slams, marquee, galaxy iris, odometer ring | `swift run swift-render render Kinetic` |
+| `JustRenderIt` — the hero ad, beat-synced soundtrack included | `swift run swift-render render JustRenderIt --audio audio/jri.m4a` |
+| `AudioBars` — audio-reactive + props reference scene | `swift run swift-render render AudioBars --audio audio/jri.m4a` |
+| `TimelineDemo` — Timeline/transition/springs reference | `swift run swift-render render TimelineDemo` |
+| `ShaderGallery`, `ShaderShowcase`, `TextReveal`, `CardStack`, `ParticleField`, … | `swift run swift-render list` |
+
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/kinetic.mp4
 
 ## CLI
 
-Fast iteration without a preview app:
-
-```bash
-swift run swift-render frame Kinetic --at 3.5 --out out/check.png   # one frame in ~1s
-swift run swift-render render Kinetic --range 2.0:4.5               # partial render
+```text
+swift-render render <Scene> [--duration s] [--fps n] [--aspect 16:9|9:16|1:1]
+                            [--audio file] [--props file.json] [--range a:b]
+                            [--no-postfx] [--out path]
+swift-render frame  <Scene> --at <t> [--out path.png]    fast single-frame preview
+swift-render props  <Scene>                              print default props JSON
+swift-render list                                        all registered scenes
 ```
 
+## How it works
 
-```
-swift-render render <Scene> [opts]    Render a scene to MP4
-swift-render list                      List available scenes
-swift-render --help                    Show usage
+1. Your scene is `(t, duration) → some View` — pure, deterministic, `@MainActor`.
+2. `Recorder` walks frames `0..<duration*fps`, renders each via `ImageRenderer`, pipes BGRA pixel buffers into `AVAssetWriter` (H.264), muxes audio with `AVMutableComposition`.
+3. A global `PostFX` pass (film grain + vignette, seeded and deterministic) makes raw SwiftUI feel cinema-grade. Opt out with `--no-postfx` or own it per-scene with `ownsPostFX`.
+4. There is no step 4. No browser, no server, no project file.
 
-OPTIONS:
-  --duration <s>           Override default duration
-  --fps <n>                Frame rate (default 60)
-  --aspect 16:9|9:16|1:1   Output aspect
-  --width <px>             Custom width
-  --height <px>            Custom height
-  --scale <n>              Display scale (default 1.0)
-  --out <path>             Output mp4 path
-  --audio <path>           Mux this audio track into the output
+Determinism isn't a vibe — `swift test` includes a render-twice-byte-identical check, and CI runs it on every push.
+
+## Use it as a library
+
+```swift
+.package(url: "https://github.com/skyblanket/swift-render", from: "0.5.0")
 ```
 
-## How rendering actually works
+```swift
+import SwiftRender
 
-`Recorder` wraps `AVAssetWriter` + `ImageRenderer`. For each frame `i ∈ [0, fps × duration)`:
-
-1. Compute `t = i / fps`
-2. Build the SwiftUI tree by calling `body(at: t, duration: …)`
-3. Wrap in `PostFX` (subtle vignette + film grain)
-4. `ImageRenderer.nsImage` → `CGImage` → `CVPixelBuffer` (via `CIContext`)
-5. Append to `AVAssetWriterInputPixelBufferAdaptor` at PTS `i × (1/fps)`
-
-Finalize → H.264 MP4. Optional audio mux via `AVMutableComposition` + `AVAssetExportSession`.
-
-No display link, no Mirror reflection, no live SwiftUI window. The whole render is deterministic — same scene + same `t` = identical pixel output.
-
-## Why this is the right shape for AI
-
-LLMs are great at writing pure functions and bad at writing reactive code with side effects. swift-render leans into that:
-
-- One file per scene
-- One function per scene: `body(at: t, duration:)`
-- No `@State`, no `Timer`, no `withAnimation` — animation is `Ease.clip(t, start, end)` math
-- Errors are deterministic and reproducible (same `t` → same output)
-- Scene = self-contained unit that fits a small LLM context
-
-Plus Metal Shading Language is C-family — LLMs already write it well. Combining "LLM writes SwiftUI scene + Metal shader" gets you motion graphics no browser-based tool can produce.
-
-## Architecture
-
+let recorder = Recorder(config: .init(fps: 60, size: .init(width: 1920, height: 1080)))
+try await recorder.render(to: url, duration: 5) { t in MyView(t: t) }
 ```
-Sources/SwiftRender/
-├── main.swift                  # CLI: render | list | --help
-├── RenderScene.swift           # protocol — body(at: t, duration:) -> View
-├── Recorder/
-│   └── Recorder.swift          # AVAssetWriter + ImageRenderer pipeline
-├── PostFX.swift                # global vignette + tiled grain overlay
-├── Easing.swift                # clip / easeIn / easeOut / easeInOut
-├── Asset.swift                 # bundled image loader
-├── Components/                 # reusable SwiftUI components
-├── Shaders/
-│   ├── Cookbook.metal          # 6 generic motion-graphics shaders
-│   └── *.metal                 # any custom shaders you add
-├── Scenes/
-│   ├── TextReveal.swift        # kinetic typography
-│   ├── CardStack.swift         # 3D-ish floating-card reveal
-│   ├── ParticleField.swift     # animated particle field
-│   ├── ShaderShowcase.swift    # demo reel of the Cookbook
-│   └── …                       # any custom scenes you add
-└── Resources/
-    ├── default.metallib        # pre-compiled shader library
-    ├── *.ttf / *.ttc           # any custom fonts you ship
-    └── *.png                   # any images
-```
+
+## For AI agents
+
+`docs/ai-quickstart.md` is a compact, LLM-ready guide to the whole API. The design goal: an agent that has never seen this repo writes a working, good-looking scene on the first attempt. (This README's hero ad is the proof.)
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
-- Swift 5.10+ / Xcode 15+
+- macOS 14+ (Apple silicon recommended; that's where the speed numbers come from)
+- Xcode 15+ toolchain (`xcrun metal` needed only when editing shaders)
+- ffmpeg optional — handy for GIF/thumbnail post-processing
 
-## Status
+## Roadmap
 
-| Feature | Status |
-|---|---|
-| Native AVAssetWriter recorder | ✅ shipped |
-| Frame-deterministic scenes | ✅ shipped |
-| Metal shader cookbook | ✅ shipped |
-| Audio mux via `--audio` | ✅ shipped |
-| Aspect presets (16:9, 9:16, 1:1) | ✅ shipped |
-| PostFX (vignette, grain) | ✅ shipped |
-| CLI subcommands | ✅ shipped |
-| Live preview window | ⏳ planned |
-| Build-plugin Metal compilation | ⏳ planned |
-| ProRes / HDR encoding | ⏳ planned |
-| MCP server for agent integration | ⏳ planned |
-| Scene composition DSL | ⏳ planned |
+- SwiftPM build plugin for automatic metallib compilation
+- `contact <Scene>` grid-sheet export · transparent ProRes 4444 · 10-bit masters
+- Audio-reactive FFT improvements (configurable bands, onset detection)
+- Linux? No — this is proudly the native-Apple lane.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-PRs welcome. See `CONTRIBUTING.md` for the development loop.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Scenes must stay pure functions of `t` — that rule is the product.
