@@ -15,6 +15,7 @@ let sceneRunners: [String: SceneRunner] = [
     "AudioBars":        SceneRunner(AudioBars.self),
     "TimelineDemo":     SceneRunner(TimelineDemo.self),
     "LaunchFilm":       SceneRunner(LaunchFilm.self),
+    "LaunchFilm2":      SceneRunner(LaunchFilm2.self),
     "CardStack":        SceneRunner(CardStack.self),
     "ParticleField":    SceneRunner(ParticleField.self),
     "ShaderShowcase":   SceneRunner(ShaderShowcase.self),
