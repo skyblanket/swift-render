@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `contact <Scene> --cols 5 --rows 3` — labelled grid contact sheet PNG
+  (full-size layouts downscaled, last sample lands before the end fade)
+- `LaunchFilm` scene (57.5s launch film) + `tools/make_launch_audio.py`
+  soundtrack engine (two-bus sidechain) + `tools/mix_vo.py` VO mixer
+- Mono.metal studio shader pack: metaballs, inkFlow, interference,
+  voronoiInk, monoTunnel (designed palettes)
+
 ## 0.5.0 — 2026-06-10
 
 First release cut with the full "beat Remotion" API surface.

@@ -165,6 +165,8 @@ struct CLIArgs {
     var rangeEnd: Double? = nil
     var props: String? = nil
     var postFX: Bool = true
+    var cols: Int = 5
+    var rows: Int = 3
 }
 
 func parseArgs(_ argv: [String]) -> CLIArgs {
@@ -210,6 +212,8 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
         case "--at":       args.at = Double(v) ?? 0; i += 2
         case "--props":    args.props = v; i += 2
         case "--no-postfx": args.postFX = false; i += 1
+        case "--cols":     args.cols = max(1, Int(v) ?? 5); i += 2
+        case "--rows":     args.rows = max(1, Int(v) ?? 3); i += 2
         case "--range":
             let parts = v.split(separator: ":").compactMap { Double($0) }
             if parts.count == 2 { args.rangeStart = parts[0]; args.rangeEnd = parts[1] }
@@ -231,6 +235,7 @@ func printUsage() {
       swift-render render <Scene> [opts]    Render a scene to MP4
       swift-render frame <Scene> --at <t>   Render one frame to PNG (fast preview)
       swift-render props <Scene>            Print a scene's default props as JSON
+      swift-render contact <Scene>           Render a grid contact sheet to PNG
       swift-render list                     List available scenes
       swift-render --help                   Show this help
       swift-render --version                Print version
@@ -247,6 +252,7 @@ func printUsage() {
       --range <a:b>            Render only seconds a..b (audio mux skipped)
       --at <t>                 Frame timestamp for the `frame` subcommand
       --props <file.json>      JSON props for parameterized scenes
+      --cols/--rows <n>        Contact sheet grid (default 5×3)
       --no-postfx              Disable the global grain+vignette pass
 
     EXAMPLES:
@@ -280,7 +286,7 @@ func run() async throws {
     case "--version":
         print(swiftRenderVersion)
         return
-    case "render", "frame", "props":
+    case "render", "frame", "props", "contact":
         break
     default:
         fputs("Unknown subcommand: \(args.subcommand)\n", stderr)
@@ -316,6 +322,31 @@ func run() async throws {
         postFX: args.postFX
     )
     let recorder = Recorder(config: config)
+
+    if args.subcommand == "contact" {
+        let outPath = args.out == "out/render.mp4" ? "out/contact.png" : args.out
+        // full-size layout, downscaled by ImageRenderer — scenes keep their 1080p coordinates
+        let thumbConfig = Recorder.Config(fps: args.fps, size: size,
+                                          scale: 384.0 / size.width, postFX: args.postFX)
+        let thumbRecorder = Recorder(config: thumbConfig)
+        let n = args.cols * args.rows
+        // last sample lands one frame before the end — scenes often fade to black at t == duration
+        let step = (duration - 1.0 / Double(args.fps)) / Double(max(1, n - 1))
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sr-contact-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        var cells: [(Double, URL)] = []
+        for i in 0..<n {
+            let t = Double(i) * step
+            let cell = tmpDir.appendingPathComponent(String(format: "c%03d.png", i))
+            try runner.frame(thumbRecorder, cell, t, duration, audioURL, propsURL)
+            cells.append((t, cell))
+        }
+        try composeContactSheet(cells: cells, columns: args.cols, to: URL(fileURLWithPath: outPath))
+        print("[swift-render] contact sheet \(args.cols)×\(args.rows) → \(outPath)")
+        return
+    }
 
     if args.subcommand == "frame" {
         let outPath = args.out == "out/render.mp4" ? "out/frame.png" : args.out
