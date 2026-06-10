@@ -266,3 +266,36 @@ half4 smokeFlow(
 
     return half4(half3(col), 1.0h);
 }
+
+// =====================================================================
+//  warpTunnel — perspective grid tunnel, fake-3D depth via 1/r
+// =====================================================================
+
+[[ stitchable ]]
+half4 warpTunnel(
+    float2 position,
+    half4 currentColor,
+    float2 size,
+    float time
+) {
+    float2 uv = (position / size) * 2.0 - 1.0;
+    uv.x *= size.x / max(size.y, 1.0);
+
+    float r = max(length(uv), 1e-3);
+    float a = atan2(uv.y, uv.x);
+
+    float depth = 0.35 / r;            // perspective projection: rings at 1/r
+    float z = depth + time * 1.6;
+
+    // bright lines at cell borders, in angle and in depth
+    float ringLine = smoothstep(0.44, 0.5, abs(fract(z) - 0.5));
+    float spokeLine = smoothstep(0.46, 0.5, abs(fract(a * 12.0 / 6.28318 + time * 0.05) - 0.5));
+    float grid = clamp(ringLine + spokeLine, 0.0, 1.0);
+
+    float fog = exp(-depth * 0.30);    // far cells fade to black
+    float3 volt = float3(0.55, 0.95, 0.18);
+    float3 col = mix(float3(0.015, 0.02, 0.05), volt, grid) * fog;
+    col += volt * exp(-r * 4.0) * 0.35;   // vanishing-point glow
+
+    return half4(half3(col), 1.0h);
+}

@@ -14,9 +14,9 @@
 
 </div>
 
-https://github.com/skyblanket/swift-render/raw/main/docs/assets/just-render-it.mp4
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/launch-film.mp4
 
-> **This entire ad — every cut, the kinetic type, the Metal smoke, the beat-synced soundtrack — is one Swift file.** Written by an AI in a single pass, rendered in **6.4 seconds** on a MacBook. Click ▶. Sound on.
+> **The 55-second launch film above is one Swift file** ([`LaunchFilm.swift`](Sources/SwiftRender/Scenes/LaunchFilm.swift)) — Timeline sequencing, springs, four live Metal shaders, 3D, an audio-reactive segment, and a synthesized soundtrack. Written by an AI, **3,300 frames rendered in 26 seconds** on a MacBook. Click ▶. Sound on.
 
 ```bash
 git clone https://github.com/skyblanket/swift-render && cd swift-render
@@ -136,7 +136,7 @@ Rectangle().fill(.black).colorEffect(
 )
 ```
 
-Twelve ship in two cookbooks — `rimGlow`, `foilHolographic`, `plasmaField`, `chromaticAberration`, `audioBars`, `caustics`, `liquidMetal`, `kaleidoscope`, `truchet`, `galaxy`, `neonGrid`, `smokeFlow`:
+Thirteen ship in two cookbooks — `rimGlow`, `foilHolographic`, `plasmaField`, `chromaticAberration`, `audioBars`, `caustics`, `liquidMetal`, `kaleidoscope`, `truchet`, `galaxy`, `neonGrid`, `smokeFlow`, `warpTunnel`:
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.mp4
 
@@ -146,6 +146,7 @@ https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.m
 
 | | |
 |---|---|
+| `LaunchFilm` — the 55s launch film: every feature, one file | `swift run swift-render render LaunchFilm --audio out/launch.wav` |
 | `Kinetic` — 12s kinetic-typography reel: word slams, marquee, galaxy iris, odometer ring | `swift run swift-render render Kinetic` |
 | `JustRenderIt` — the hero ad, beat-synced soundtrack included | `swift run swift-render render JustRenderIt --audio audio/jri.m4a` |
 | `AudioBars` — audio-reactive + props reference scene | `swift run swift-render render AudioBars --audio audio/jri.m4a` |
