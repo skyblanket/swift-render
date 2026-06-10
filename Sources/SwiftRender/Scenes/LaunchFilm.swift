@@ -28,23 +28,23 @@ import SwiftUI
 ///  45.0  lockup + slash
 ///  49.0  URL + CTA, fade out
 public struct LaunchFilm: AudioReactiveScene {
-    public static let defaultDuration: Double = 55.0
+    public static let defaultDuration: Double = 57.5
     public static var ownsPostFX: Bool { true }
 
     static let volt = Color.white   // monochrome redesign: accent = white
-    static let boundaries: [Double] = [4.2, 7.2, 10.8, 14.4, 18.0, 21.6,
-                                       25.2, 28.8, 32.4, 36.0, 39.6, 43.2, 45.0]
+    static let boundaries: [Double] = [4.2, 7.2, 9.6, 12.0, 14.4, 16.8, 20.0, 23.2,
+                                       26.4, 29.6, 32.8, 36.0, 39.2, 42.4, 46.0, 47.8]
 
     @MainActor
     public static func body(at t: Double, duration: Double, audio: AudioTrack) -> some View {
-        let pumpGate = 1 - Ease.clip(t, 42.6, 43.2)   // FFT pump off after the build
+        let pumpGate = 1 - Ease.clip(t, 45.4, 46.0)   // FFT pump off after the build
         let bass = audio.band(.bass, at: t) * pumpGate
         let fade = Ease.easeIn(Ease.clip(t, duration - 1.0, duration))
         // Nike-style impact shake: decaying jitter on every cut + finale slams,
         // and a heavy one on the 808 lockup hit. Deterministic, kick-synced.
-        let hits = [3.0] + boundaries + [43.8, 44.4]
+        let hits = [3.0] + boundaries + [46.6, 47.2]
         var jolt = JustRenderIt.shake(t, impacts: hits, amp: 13)
-        let big = JustRenderIt.shake(t, impacts: [45.0], amp: 30)
+        let big = JustRenderIt.shake(t, impacts: [47.8], amp: 30)
         jolt = CGSize(width: jolt.width + big.width, height: jolt.height + big.height)
 
         return ZStack {
@@ -53,19 +53,22 @@ public struct LaunchFilm: AudioReactiveScene {
             Timeline(t) {
                 Clip(4.2) { l in hook(l) }
                 Clip(3.0) { l in title(l) }
-                Clip(3.6) { l in pureFn(l) }
-                Clip(3.6) { l in springs(l) }
-                Clip(3.6) { l in timelineCard(l) }
-                Clip(3.6) { l in shaderWall(l) }
-                Clip(3.6) { l in threeD(l) }
-                Clip(3.6) { l in audioRx(l, audio: audio, base: 25.2) }
-                Clip(3.6) { l in speedRace(l) }
-                Clip(3.6) { l in determinism(l) }
-                Clip(3.6) { l in aiNative(l) }
+                Clip(2.4) { l in shaderCard(0, l) }
+                Clip(2.4) { l in shaderCard(1, l) }
+                Clip(2.4) { l in shaderCard(2, l) }
+                Clip(2.4) { l in shaderCard(3, l) }
+                Clip(3.2) { l in pureFn(l) }
+                Clip(3.2) { l in springs(l) }
+                Clip(3.2) { l in timelineCard(l) }
+                Clip(3.2) { l in threeD(l) }
+                Clip(3.2) { l in audioRx(l, audio: audio, base: 29.6) }
+                Clip(3.2) { l in speedRace(l) }
+                Clip(3.2) { l in determinism(l) }
+                Clip(3.2) { l in aiNative(l) }
                 Clip(3.6) { l in noWall(l) }
                 Clip(1.8) { l in slams(l) }
-                Clip(4.0) { l in lockup(l) }
-                Clip(6.0) { l in outro(l) }
+                Clip(3.6) { l in lockup(l) }
+                Clip(6.1) { l in outro(l) }
                 Clip(at: 0, for: duration) { l in hud(l, total: duration) }
             }
             .scaleEffect(1 + 0.018 * CGFloat(bass))   // the whole film breathes with the sub
@@ -253,54 +256,84 @@ public struct LaunchFilm: AudioReactiveScene {
         .overlay(alignment: .bottomLeading) { chip("03 · SEQUENCING WITHOUT SEGMENT MATH") }
     }
 
-    // MARK: 04 · shader wall
+    // MARK: shader showcase — one fullscreen card per shader, spec panel
+
+    static let shaderSpecs: [(name: String, lines: [String])] = [
+        ("metaballs", [
+            "raymarched signed-distance field · 64 steps per pixel",
+            "smooth-min blends · analytic normals · iridescent fresnel rim",
+            "~40 lines of MSL, called like any SwiftUI modifier",
+        ]),
+        ("inkFlow", [
+            "double domain-warped fBM · 6 octaves",
+            "ridge-extracted veins · navy → teal → cream",
+            "every pixel computed fresh, every frame, on the GPU",
+        ]),
+        ("interference", [
+            "three moving wave sources · cosine field sum",
+            "hard-threshold zebra fringes + node glow",
+            "deterministic: same t in, same fringes out",
+        ]),
+        ("voronoiInk", [
+            "animated voronoi · F2−F1 crack borders",
+            "kintsugi palette — clay cells, gold seams, ember cores",
+            "drop a .metal file in, call it on any View",
+        ]),
+    ]
 
     @ViewBuilder @MainActor
-    static func shaderWall(_ t: Double) -> some View {
-        let inP = Ease.easeOut(min(1, t / 0.4))
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                shaderTile("metaballs", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).metaballs(.float2(sz, sz * 0.5635), .float(tt))
-                }
-                shaderTile("inkFlow", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).inkFlow(.float2(sz, sz * 0.5635), .float(tt))
+    static func shaderCard(_ idx: Int, _ t: Double) -> some View {
+        let spec = shaderSpecs[idx]
+        let inP = Ease.easeOut(Ease.clip(t, 0.12, 0.45))
+        ZStack(alignment: .bottomLeading) {
+            shaderBG(idx, t).ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("METAL SHADER \(idx + 1)/4")
+                    .font(.system(size: 19, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .tracking(4)
+                Text(spec.name)
+                    .font(.system(size: 96, weight: .black, design: .monospaced))
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(0..<spec.lines.count, id: \.self) { i in
+                        let lp = Ease.easeOut(Ease.clip(t, 0.4 + Double(i) * 0.16, 0.75 + Double(i) * 0.16))
+                        Text(spec.lines[i])
+                            .font(.system(size: 22, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .opacity(lp)
+                            .offset(x: CGFloat(1 - lp) * 18)
+                    }
                 }
             }
-            HStack(spacing: 6) {
-                shaderTile("interference", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).interference(.float2(sz, sz * 0.5635), .float(tt))
-                }
-                shaderTile("voronoiInk", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).voronoiInk(.float2(sz, sz * 0.5635), .float(tt))
-                }
-            }
+            .padding(38)
+            .background(Rectangle().fill(.black.opacity(0.84)))
+            .overlay(Rectangle().stroke(.white.opacity(0.35), lineWidth: 1))
+            .padding(.leading, 80)
+            .padding(.bottom, 110)
+            .opacity(inP)
+            .offset(y: CGFloat(1 - inP) * 36)
         }
-        .scaleEffect(1.04 - 0.04 * inP)
-        .opacity(inP)
-        .overlay {
-            Text("REAL METAL")
-                .font(.system(size: 150, weight: .black)).fontWidth(.condensed)
-                .foregroundStyle(.white)
-                .blendMode(.difference)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .bottomLeading) { chip("04 · RAYMARCHED ON THE GPU, NO WEBGL") }
     }
 
-    @MainActor
-    static func shaderTile(_ name: String, _ t: Double,
-                           _ make: (Float, Float) -> Shader) -> some View {
-        Rectangle()
-            .fill(.black)
-            .colorEffect(make(956, Float(t * 0.7 + 3)))
-            .frame(width: 956, height: 537)
-            .overlay(alignment: .bottomTrailing) {
-                Text(name)
-                    .font(.system(size: 17, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .padding(10)
-            }
+    @ViewBuilder @MainActor
+    static func shaderBG(_ idx: Int, _ t: Double) -> some View {
+        let tt = Float(t * 0.8 + 2.0)
+        switch idx {
+        case 0:
+            Rectangle().fill(.black).colorEffect(
+                ShaderLibrary.bundle(.module).metaballs(.float2(1920, 1080), .float(tt)))
+        case 1:
+            Rectangle().fill(.black).colorEffect(
+                ShaderLibrary.bundle(.module).inkFlow(.float2(1920, 1080), .float(tt)))
+        case 2:
+            Rectangle().fill(.black).colorEffect(
+                ShaderLibrary.bundle(.module).interference(.float2(1920, 1080), .float(tt)))
+        default:
+            Rectangle().fill(.black).colorEffect(
+                ShaderLibrary.bundle(.module).voronoiInk(.float2(1920, 1080), .float(tt)))
+        }
     }
 
     // MARK: 05 · 3D
@@ -462,38 +495,32 @@ public struct LaunchFilm: AudioReactiveScene {
     @ViewBuilder @MainActor
     static func determinism(_ t: Double) -> some View {
         let inP = Ease.easeOut(min(1, t / 0.5))
-        let check = Ease.easeOutBack(Ease.clip(t, 1.2, 1.7))
-        HStack(spacing: 70) {
-            ForEach(0..<2, id: \.self) { run in
-                VStack(spacing: 16) {
-                    Rectangle().fill(.black)
-                        .colorEffect(ShaderLibrary.bundle(.module).inkFlow(
-                            .float2(560, 315), .float(4.31)))   // same t on purpose
-                        .frame(width: 560, height: 315)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.25)))
-                    Text("RUN \(run + 1) · t = 4.31")
-                        .font(.system(size: 21, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text("sha256: 9f3aa1…e2c4")
-                        .font(.system(size: 19, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.8))
+        let check = Ease.easeOutBack(Ease.clip(t, 1.1, 1.6))
+        VStack(spacing: 34) {
+            Text("BYTE-IDENTICAL")
+                .font(.system(size: 110, weight: .black)).fontWidth(.condensed)
+                .foregroundStyle(.white)
+                .scaleEffect(CGFloat(0.9 + 0.1 * check))
+            Text("XCTAssertEqual(runA, runB) — enforced in CI")
+                .font(.system(size: 23, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+            HStack(spacing: 70) {
+                ForEach(0..<2, id: \.self) { run in
+                    VStack(spacing: 12) {
+                        Rectangle().fill(.black)
+                            .colorEffect(ShaderLibrary.bundle(.module).inkFlow(
+                                .float2(520, 292), .float(4.31)))   // same t on purpose
+                            .frame(width: 520, height: 292)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.25)))
+                        Text("RUN \(run + 1) · t = 4.31 · sha256: 9f3aa1…e2c4")
+                            .font(.system(size: 19, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                 }
             }
         }
         .opacity(inP)
-        .overlay {
-            VStack(spacing: 4) {
-                Text("BYTE-IDENTICAL")
-                    .font(.system(size: 96, weight: .black)).fontWidth(.condensed)
-                    .foregroundStyle(volt)
-                Text("XCTAssertEqual(runA, runB) — enforced in CI")
-                    .font(.system(size: 23, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-            .scaleEffect(CGFloat(check))
-            .shadow(color: .black.opacity(0.9), radius: 24)
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("08 · DETERMINISM, TESTED NOT PROMISED") }
     }

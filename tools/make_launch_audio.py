@@ -2,8 +2,9 @@
 """Soundtrack for the LaunchFilm scene (55s).
 
 Section boundaries mirror LaunchFilm.swift's Timeline clips exactly:
-hook 0-4.2 | title 4.2 | montage 7.2..32.4 (7x3.6) | breakdown 32.4-39.6
-| riser+build 39.6-43.2 | finale drop 43.2 | lockup 45.0 | outro 49.0-55.
+hook 0-4.2 | title 4.2 | shader cards 7.2..16.8 (4x2.4) | features 16.8..36.0
+(6x3.2) | breakdown 36.0-42.4 | riser+build 42.4-46.0 | slams 46.0 | lockup
+47.8 | outro 51.4-57.5.
 
 Usage: python3 tools/make_launch_audio.py out/launch.wav
 """
@@ -13,7 +14,7 @@ import wave
 import numpy as np
 
 SR = 44100
-DUR = 55.0
+DUR = 57.5
 N = int(SR * DUR)
 
 L = np.zeros(N)
@@ -127,7 +128,7 @@ add(boom(0.7, 1.6), 4.2)
 add(crash(0.32), 4.2)
 
 # ---- montage groove 4.2–32.4: four-on-floor + claps + 16th hats + bass ----
-GROOVE_END = 32.4
+GROOVE_END = 36.0
 BASS_PATTERN = [55.0, 55.0, 65.41, 48.99]          # A A C G — moody
 tk, step, i = 4.8, 0.6, 0
 while tk < GROOVE_END - 0.01:
@@ -144,37 +145,37 @@ while tk < GROOVE_END:
     tk += 0.15
     i += 1
 # boundary crashes at each chapter cut
-for b in [7.2, 10.8, 14.4, 18.0, 21.6, 25.2, 28.8]:
+for b in [7.2, 9.6, 12.0, 14.4, 16.8, 20.0, 23.2, 26.4, 29.6, 32.8]:
     add(crash(0.26, seed=int(b * 10)), b)
     add(kick(1.0, t0=b), b)
 
-# ---- breakdown 32.4–39.6: drop to drone + sparse ticks --------------------
-add(whoosh(0.5, 0.8, rising=False, seed=13), 32.1)
-add(boom(0.55, 1.4), 32.4)
-add(drone(0.16, 7.2, f=55.0), 32.4)
-for j, tk in enumerate(np.arange(33.3, 39.6, 0.9)):
+# ---- breakdown 36.0–42.4: drop to drone + sparse ticks --------------------
+add(whoosh(0.5, 0.8, rising=False, seed=13), 35.7)
+add(boom(0.55, 1.4), 36.0)
+add(drone(0.16, 6.4, f=55.0), 36.0)
+for j, tk in enumerate(np.arange(36.9, 42.4, 0.9)):
     add(hat(0.09, seed=60 + j), tk, pan=0.35 if j % 2 else -0.35)
 
-# ---- build 39.6–43.2: riser + accelerating kicks --------------------------
-add(riser(0.6, 3.4), 39.7)
-for tk in [39.6, 40.5, 41.3, 42.0, 42.5, 42.85, 43.05]:
+# ---- build 42.4–46.0: riser + accelerating kicks --------------------------
+add(riser(0.6, 3.4), 42.5)
+for tk in [42.4, 43.3, 44.1, 44.8, 45.3, 45.65, 45.85]:
     add(kick(0.8, sweep=(140, 50), t0=tk), tk)
 
-# ---- finale drop 43.2: JUST(43.2) RENDER(43.8) IT.(44.4) → lockup 45.0 ----
-for tk in [43.2, 43.8, 44.4]:
+# ---- finale drop 46.0: JUST(46.0) RENDER(46.6) IT.(47.2) → lockup 47.8 ----
+for tk in [46.0, 46.6, 47.2]:
     add(kick(1.0, sweep=(170, 40), t0=tk), tk)
-add(boom(1.0), 45.0)
-add(crash(0.35, seed=77), 45.0)
-tk, i = 45.6, 0
-while tk < 48.9:                                    # short groove under lockup
+add(boom(1.0), 47.8)
+add(crash(0.35, seed=77), 47.8)
+tk, i = 48.4, 0
+while tk < 51.3:                                    # short groove under lockup
     add(kick(0.8, t0=tk), tk)
     add(bass_note(BASS_PATTERN[i % 4], amp=0.28, dur=0.5), tk + 0.02)
     tk += 0.6
     i += 1
 
-# ---- outro 49.0–55: drone + final tick, fade ------------------------------
-add(drone(0.12, 5.5, f=55.0, seed=12), 49.0)
-add(hat(0.1, seed=99), 49.5)
+# ---- outro 51.4–57.5: drone + final tick, fade -----------------------------
+add(drone(0.12, 5.8, f=55.0, seed=12), 51.4)
+add(hat(0.1, seed=99), 52.0)
 
 # ---- master: sidechain pump from kicks, soft clip, fade -------------------
 t_axis = np.arange(N) / SR
