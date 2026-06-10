@@ -8,6 +8,13 @@ The film: `swift run swift-render render LaunchFilm --audio out/launch.wav --out
 VO is synthesized on sushi via fish-speech s2-pro and mixed by `tools/mix_vo.py`
 (places each line at its timecode, ducks music to 40% under voice).
 
+Voice: zero-shot cloned from a single pinned reference
+(`~/fish-speech/references/narrator/` on sushi) — an 18s public-domain LibriVox
+narration segment chosen by measuring median f0 across candidates (picked the
+deepest at ~92 Hz). Always pass `reference_id` — promptless fish rolls a random
+speaker per request. Cloning from real human speech, never from TTS output
+(cloning a clone sounds robotic).
+
 Pipeline:
 ```bash
 # on sushi: start the API, generate lines from a TSV (id <TAB> start <TAB> text)
@@ -32,7 +39,7 @@ Final lines (fish pace ≈ 2.9 words/sec — keep lines ≤ slot × 2.8 words):
 | 7.6 | "Real Metal shaders… raymarched live, on the GPU. Ink. Interference. Voronoi. Every pixel computed fresh, every frame." |
 | 17.2 | "One pure function of time. The whole API." |
 | 20.8 | "Springs, solved in closed form." |
-| 23.6 | "Timeline clips. Local time. Zero math." |
+| 23.6 | "Timeline clips. Zero math." |
 | 26.8 | "Real 3D. No game engine." |
 | 30.0 | "It hears its own soundtrack." |
 | 33.2 | "Nine hundred frames, in six seconds." |
