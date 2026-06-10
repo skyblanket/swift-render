@@ -443,26 +443,34 @@ public struct LaunchFilm2: AudioReactiveScene {
         }
     }
 
-    // MARK: 11 · speed
+    // MARK: 11 · vs the current king — honest, then the receipts
 
     @ViewBuilder @MainActor
     static func speed(_ t: Double) -> some View {
-        let p = Ease.easeInOut(Ease.clip(t, 0.2, 3.0))
-        let frames = Int(p * 3450)
-        VStack(spacing: 44) {
-            Text("This film rendered in 26 seconds")
-                .font(.system(size: 64, weight: .black)).fontWidth(.condensed)
-                .foregroundStyle(.white)
-            ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.12)).frame(width: 1200, height: 30)
-                Capsule().fill(.white).frame(width: max(10, CGFloat(p) * 1200), height: 30)
+        let us = Ease.easeOut(Ease.clip(t, 0.5, 1.5))
+        let them = Ease.clip(t, 0.5, 3.4) * 0.16
+        VStack(spacing: 36) {
+            VStack(spacing: 8) {
+                Text("Video-as-code isn't new. Remotion proved it.")
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text("But it renders a web browser. We render native.")
+                    .font(.system(size: 44, weight: .black)).fontWidth(.condensed)
+                    .foregroundStyle(.white)
+                    .opacity(Ease.easeOut(Ease.clip(t, 0.35, 0.8)))
             }
-            HStack(spacing: 60) {
-                Text("frame \(frames) / 3450").monospacedDigit()
-                Text("on a MacBook — no render farm")
+            VStack(spacing: 26) {
+                LaunchFilm.raceRow("swift-render", sub: "native, on your Mac's GPU",
+                                   p: us, color: .white,
+                                   tag: us >= 1 ? "DONE · this film: 26s" : "rendering…")
+                LaunchFilm.raceRow("the browser way", sub: "headless Chrome screenshots",
+                                   p: them, color: .white.opacity(0.3),
+                                   tag: "still rendering…")
             }
-            .font(.system(size: 27, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.7))
+            Text("5–10× faster · free for companies (Remotion charges $25/dev/mo)")
+                .font(.system(size: 25, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.6))
+                .opacity(Ease.easeOut(Ease.clip(t, 1.8, 2.3)))
         }
     }
 
