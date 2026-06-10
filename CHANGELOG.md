@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `RenderContext` environment value — scenes can read render size/fps/duration
+  (`@Environment(\.renderContext)`) and adapt layout per aspect
+
 - MetalCompilerPlugin: .metal files now compile automatically at build time —
   checked-in metallib and manual tools/build_shaders.sh step are gone
 

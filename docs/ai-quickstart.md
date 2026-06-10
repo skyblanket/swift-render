@@ -192,6 +192,20 @@ swift run swift-render render MyScene --props p.json
 ```
 Keep payloads complete — JSON decoding does not apply Swift default values.
 
+## Adapting to render size
+
+Views inside scenes can read the render target from the environment —
+one scene, any aspect:
+
+```swift
+struct Hero: View {
+    @Environment(\.renderContext) var ctx   // size, fps, duration
+    var body: some View {
+        Text("hi").font(.system(size: ctx.isVertical ? 90 : 140))
+    }
+}
+```
+
 ## Fast iteration
 
 ```bash

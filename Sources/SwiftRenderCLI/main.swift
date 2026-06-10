@@ -54,7 +54,7 @@ struct SceneRunner {
             }
         }
         frame = { recorder, out, t, dur, _, _ in
-            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
                 S.body(at: tt, duration: dur)
             }
         }
@@ -71,7 +71,7 @@ struct SceneRunner {
         }
         frame = { recorder, out, t, dur, audio, _ in
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
                 S.body(at: tt, duration: dur, audio: track)
             }
         }
@@ -88,7 +88,7 @@ struct SceneRunner {
         }
         frame = { recorder, out, t, dur, _, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
                 S.body(at: tt, duration: dur, props: props)
             }
         }
@@ -107,7 +107,7 @@ struct SceneRunner {
         frame = { recorder, out, t, dur, audio, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
                 S.body(at: tt, duration: dur, props: props, audio: track)
             }
         }

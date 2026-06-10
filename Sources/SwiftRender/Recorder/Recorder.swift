@@ -116,6 +116,7 @@ public final class Recorder {
                 content(t)
             }
             .frame(width: config.size.width, height: config.size.height)
+            .environment(\.renderContext, RenderContext(size: config.size, fps: config.fps, duration: duration))
             .modifier(PostFX(time: t, enabled: applyFX))
 
             let renderer = ImageRenderer(content: rootView)
@@ -156,6 +157,7 @@ public final class Recorder {
         at t: Double,
         to url: URL,
         postFX: Bool = true,
+        duration: Double = 0,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) throws {
         try FileManager.default.createDirectory(
@@ -164,6 +166,7 @@ public final class Recorder {
         )
         let rootView = ZStack { content(t) }
             .frame(width: config.size.width, height: config.size.height)
+            .environment(\.renderContext, RenderContext(size: config.size, fps: config.fps, duration: duration))
             .modifier(PostFX(time: t, enabled: config.postFX && postFX))
         let renderer = ImageRenderer(content: rootView)
         renderer.scale = config.scale
