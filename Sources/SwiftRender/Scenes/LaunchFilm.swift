@@ -420,28 +420,28 @@ public struct LaunchFilm: AudioReactiveScene {
         let level = audio.level(at: g)
         let bass = audio.band(.bass, at: g)
         let high = audio.band(.high, at: g)
-        ZStack {
-            RadialGradient(colors: [Color.white.opacity(0.04 + 0.14 * bass), .clear],
-                           center: .center, startRadius: 0, endRadius: 950)
-                .ignoresSafeArea()
+        VStack(spacing: 44) {
+            Text("THIS FRAME HEARS THE MUSIC")
+                .font(.system(size: 86, weight: .black)).fontWidth(.condensed)
+                .foregroundStyle(.white.opacity(0.5 + 0.5 * level))
             HStack(alignment: .center, spacing: 7) {
                 ForEach(0..<64, id: \.self) { i in
                     let phase = Double(i) / 64.0 * 0.16
                     let v = audio.level(at: max(0, g - phase))
-                    Capsule().fill(Color.white.opacity(0.25 + 0.55 * high))
-                        .frame(width: 13, height: 30 + 540 * v)
+                    Capsule().fill(Color.white.opacity(0.30 + 0.55 * high))
+                        .frame(width: 13, height: 16 + 380 * v)
                 }
             }
-            VStack(spacing: 10) {
-                Text("THIS FRAME HEARS THE MUSIC")
-                    .font(.system(size: 92, weight: .black)).fontWidth(.condensed)
-                    .foregroundStyle(.white.opacity(0.35 + 0.65 * level))
-                    .blendMode(.difference)
-                Text("audio.band(.bass, at: t) — FFT analyzed once, read as a pure function")
-                    .font(.system(size: 23, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.65))
-            }
+            .frame(height: 420)
+            Text("audio.band(.bass, at: t) — FFT analyzed once, read as a pure function")
+                .font(.system(size: 23, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.65))
         }
+        .background(
+            RadialGradient(colors: [Color.white.opacity(0.04 + 0.14 * bass), .clear],
+                           center: .center, startRadius: 0, endRadius: 950)
+                .ignoresSafeArea()
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("06 · AUDIO-REACTIVE, STILL DETERMINISTIC") }
     }

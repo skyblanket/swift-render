@@ -17,19 +17,25 @@ SR = 44100
 DUR = 57.5
 N = int(SR * DUR)
 
-L = np.zeros(N)
+L = np.zeros(N)   # ducked bus (bass, hats, claps, drone, risers, crashes)
 R = np.zeros(N)
+KL = np.zeros(N)  # clean bus (kicks, booms) — never ducked, transients intact
+KR = np.zeros(N)
 kick_times = []  # collected for the sidechain pump
 
 
-def add(sig, start, pan=0.0):
+def add(sig, start, pan=0.0, clean=False):
     i = int(start * SR)
     j = min(N, i + len(sig))
     if i >= N or j <= i:
         return
     seg = sig[: j - i]
-    L[i:j] += seg * (1 - max(0, pan))
-    R[i:j] += seg * (1 + min(0, pan))
+    if clean:
+        KL[i:j] += seg * (1 - max(0, pan))
+        KR[i:j] += seg * (1 + min(0, pan))
+    else:
+        L[i:j] += seg * (1 - max(0, pan))
+        R[i:j] += seg * (1 + min(0, pan))
 
 
 def env_exp(n, rate):
@@ -119,12 +125,12 @@ def whoosh(amp=0.5, dur=0.7, rising=True, seed=11):
 # ---- hook 0–4.2: ticks, then the inverted-slam kick -----------------------
 for i, tk in enumerate([0.8, 1.6, 2.4]):
     add(hat(0.1, seed=20 + i), tk, pan=0.4 if i % 2 else -0.4)
-add(kick(0.7, sweep=(120, 48), t0=3.0), 3.0)
+add(kick(0.7, sweep=(120, 48), t0=3.0), 3.0, clean=True)
 add(whoosh(0.5, 0.6, rising=True), 3.65)
 
 # ---- title drop 4.2 --------------------------------------------------------
-add(kick(1.0, t0=4.2), 4.2)
-add(boom(0.7, 1.6), 4.2)
+add(kick(1.0, t0=4.2), 4.2, clean=True)
+add(boom(0.7, 1.6), 4.2, clean=True)
 add(crash(0.32), 4.2)
 
 # ---- montage groove 4.2–32.4: four-on-floor + claps + 16th hats + bass ----
@@ -132,7 +138,7 @@ GROOVE_END = 36.0
 BASS_PATTERN = [55.0, 55.0, 65.41, 48.99]          # A A C G — moody
 tk, step, i = 4.8, 0.6, 0
 while tk < GROOVE_END - 0.01:
-    add(kick(0.92, t0=tk), tk)
+    add(kick(0.92, t0=tk), tk, clean=True)
     add(bass_note(BASS_PATTERN[i % 4], dur=0.5), tk + 0.02)
     if i % 2 == 1:
         add(clap(0.42, seed=30 + (i % 5)), tk, pan=0.18)
@@ -147,11 +153,10 @@ while tk < GROOVE_END:
 # boundary crashes at each chapter cut
 for b in [7.2, 9.6, 12.0, 14.4, 16.8, 20.0, 23.2, 26.4, 29.6, 32.8]:
     add(crash(0.26, seed=int(b * 10)), b)
-    add(kick(1.0, t0=b), b)
 
 # ---- breakdown 36.0–42.4: drop to drone + sparse ticks --------------------
 add(whoosh(0.5, 0.8, rising=False, seed=13), 35.7)
-add(boom(0.55, 1.4), 36.0)
+add(boom(0.55, 1.4), 36.0, clean=True)
 add(drone(0.16, 6.4, f=55.0), 36.0)
 for j, tk in enumerate(np.arange(36.9, 42.4, 0.9)):
     add(hat(0.09, seed=60 + j), tk, pan=0.35 if j % 2 else -0.35)
@@ -159,16 +164,16 @@ for j, tk in enumerate(np.arange(36.9, 42.4, 0.9)):
 # ---- build 42.4–46.0: riser + accelerating kicks --------------------------
 add(riser(0.6, 3.4), 42.5)
 for tk in [42.4, 43.3, 44.1, 44.8, 45.3, 45.65, 45.85]:
-    add(kick(0.8, sweep=(140, 50), t0=tk), tk)
+    add(kick(0.8, sweep=(140, 50), t0=tk), tk, clean=True)
 
 # ---- finale drop 46.0: JUST(46.0) RENDER(46.6) IT.(47.2) → lockup 47.8 ----
 for tk in [46.0, 46.6, 47.2]:
-    add(kick(1.0, sweep=(170, 40), t0=tk), tk)
-add(boom(1.0), 47.8)
+    add(kick(1.0, sweep=(170, 40), t0=tk), tk, clean=True)
+add(boom(1.0), 47.8, clean=True)
 add(crash(0.35, seed=77), 47.8)
 tk, i = 48.4, 0
 while tk < 51.3:                                    # short groove under lockup
-    add(kick(0.8, t0=tk), tk)
+    add(kick(0.8, t0=tk), tk, clean=True)
     add(bass_note(BASS_PATTERN[i % 4], amp=0.28, dur=0.5), tk + 0.02)
     tk += 0.6
     i += 1
@@ -186,11 +191,7 @@ for tk in kick_times:
     j = min(N, i0 + n)
     seg = np.arange(j - i0) / SR
     duck[i0:j] = np.minimum(duck[i0:j], 1 - 0.5 * np.exp(-seg / 0.11))
-mix = np.stack([L * duck, R * duck])
-# but kicks themselves should not be ducked — re-add them on top
-K = np.zeros(N)
-for tk in kick_times:
-    sig = kick(0.0)  # placeholder, kicks already in L/R pre-duck... acceptable pump
+mix = np.stack([L * duck + KL, R * duck + KR])
 mix = np.tanh(mix * 1.15)
 fade_n = int(1.2 * SR)
 mix[:, -fade_n:] *= np.linspace(1, 0, fade_n)
