@@ -37,9 +37,15 @@ public struct LaunchFilm: AudioReactiveScene {
 
     @MainActor
     public static func body(at t: Double, duration: Double, audio: AudioTrack) -> some View {
-        let pumpGate = 1 - Ease.clip(t, 42.6, 43.2)   // steady text after the build
+        let pumpGate = 1 - Ease.clip(t, 42.6, 43.2)   // FFT pump off after the build
         let bass = audio.band(.bass, at: t) * pumpGate
         let fade = Ease.easeIn(Ease.clip(t, duration - 1.0, duration))
+        // Nike-style impact shake: decaying jitter on every cut + finale slams,
+        // and a heavy one on the 808 lockup hit. Deterministic, kick-synced.
+        let hits = [3.0] + boundaries + [43.8, 44.4]
+        var jolt = JustRenderIt.shake(t, impacts: hits, amp: 13)
+        let big = JustRenderIt.shake(t, impacts: [45.0], amp: 30)
+        jolt = CGSize(width: jolt.width + big.width, height: jolt.height + big.height)
 
         return ZStack {
             Color.black.ignoresSafeArea()
@@ -63,6 +69,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 Clip(at: 0, for: duration) { l in hud(l, total: duration) }
             }
             .scaleEffect(1 + 0.018 * CGFloat(bass))   // the whole film breathes with the sub
+            .offset(jolt)
 
             flash(t)
         }
