@@ -1,6 +1,6 @@
 //
-//  Mono.metal — the monochrome pack. High-frequency, crisp, black & white.
-//  Built for the LaunchFilm shader wall: detail over gradients.
+//  Mono.metal — the studio pack. High-frequency, crisp, each with its own
+//  designed palette. Built for the LaunchFilm shader wall: detail over gradients.
 //
 #include <metal_stdlib>
 #include <SwiftUI/SwiftUI_Metal.h>
@@ -45,11 +45,16 @@ half4 inkFlow(float2 position, half4 currentColor, float2 size, float time) {
                       mo_fbm(p + 4.0 * q + float2(8.3, 2.8) - t * 0.4));
     float f = mo_fbm(p + 4.0 * r);
 
-    float g = f * f * 1.6;                                   // deep contrast body
+    float g = clamp(f * f * 1.6, 0.0, 1.0);                  // deep contrast body
     float ridge = 1.0 - smoothstep(0.0, 0.05, abs(f - 0.5)); // thin bright vein
     float ridge2 = 1.0 - smoothstep(0.0, 0.03, abs(mo_fbm(p * 2.0 + r) - 0.5));
-    g = g * 0.55 + ridge * 0.5 + ridge2 * 0.25;
-    return half4(half3(clamp(g, 0.0, 1.0)), 1.0h);
+
+    float3 navy = float3(0.015, 0.04, 0.10);
+    float3 teal = float3(0.05, 0.55, 0.60);
+    float3 cream = float3(1.0, 0.94, 0.82);
+    float3 col = mix(navy, teal, g * 0.9);
+    col = mix(col, cream, clamp(ridge * 0.85 + ridge2 * 0.35, 0.0, 1.0));
+    return half4(half3(clamp(col, 0.0, 1.0)), 1.0h);
 }
 
 // =====================================================================
@@ -96,9 +101,14 @@ half4 metaballs(float2 position, half4 currentColor, float2 size, float time) {
         float diff = max(dot(n, l), 0.0);
         float fres = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
         float spec = pow(max(dot(reflect(-l, n), -rd), 0.0), 48.0);
-        g = 0.05 + diff * 0.35 + fres * 0.75 + spec * 1.1;
+        float chrome = 0.05 + diff * 0.30 + spec * 1.1;
+        // iridescent rim: cosine palette driven by fresnel + view angle
+        float h = fres * 2.2 + n.y * 0.6;
+        float3 irid = 0.5 + 0.5 * cos(6.28318 * (h + float3(0.0, 0.33, 0.67)));
+        float3 col = float3(chrome) + irid * fres * 0.85;
+        return half4(half3(clamp(col, 0.0, 1.0)), 1.0h);
     }
-    return half4(half3(clamp(g, 0.0, 1.0)), 1.0h);
+    return half4(half3(float3(0.015, 0.015, 0.03)), 1.0h);
 }
 
 // =====================================================================
@@ -118,8 +128,12 @@ half4 interference(float2 position, half4 currentColor, float2 size, float time)
             + cos(length(uv - s2) * 64.0 + t * 3.2)
             + cos(length(uv - s3) * 58.0 - t * 2.5);
     float g = smoothstep(0.47, 0.53, 0.5 + v / 6.0);          // hard zebra edge
-    float glow = exp(-abs(v) * 0.9) * 0.25;                   // soft node glow
-    return half4(half3(clamp(g + glow, 0.0, 1.0)), 1.0h);
+    float glow = exp(-abs(v) * 0.9);                          // soft node glow
+    float3 indigo = float3(0.03, 0.02, 0.10);
+    float3 cyan = float3(0.25, 0.92, 1.0);
+    float3 magenta = float3(0.9, 0.2, 0.75);
+    float3 col = indigo + cyan * g + magenta * glow * 0.30;
+    return half4(half3(clamp(col, 0.0, 1.0)), 1.0h);
 }
 
 // =====================================================================
@@ -145,9 +159,13 @@ half4 voronoiInk(float2 position, half4 currentColor, float2 size, float time) {
         }
     }
     float border = 1.0 - smoothstep(0.0, 0.07, f2 - f1);      // thin crack lines
-    float cellShade = 0.04 + 0.10 * mo_hash(ip);              // faint cell tone
-    float core = exp(-f1 * 3.5) * 0.15;                       // dim cell nuclei
-    return half4(half3(clamp(border * 0.95 + cellShade + core, 0.0, 1.0)), 1.0h);
+    float cellShade = 0.03 + 0.07 * mo_hash(ip);              // faint cell tone
+    float core = exp(-f1 * 3.5);                              // cell nuclei
+    float3 clay = float3(0.05, 0.045, 0.05) + cellShade * float3(0.5, 0.45, 0.5);
+    float3 gold = float3(1.0, 0.76, 0.28);
+    float3 ember = float3(0.85, 0.30, 0.12);
+    float3 col = clay + gold * border * 0.95 + ember * core * 0.22;
+    return half4(half3(clamp(col, 0.0, 1.0)), 1.0h);
 }
 
 // =====================================================================
@@ -169,6 +187,10 @@ half4 monoTunnel(float2 position, half4 currentColor, float2 size, float time) {
 
     float fog = exp(-depth * 0.32);
     float g = clamp(rings + fine + spokes, 0.0, 1.0) * fog;
-    g += exp(-r * 4.5) * 0.5;                                  // white-hot vanishing point
-    return half4(half3(clamp(g, 0.0, 1.0)), 1.0h);
+    float3 cyan = float3(0.30, 0.85, 1.0);
+    float3 violet = float3(0.55, 0.25, 0.95);
+    float3 tint = mix(cyan, violet, clamp(depth * 0.45, 0.0, 1.0));
+    float3 col = tint * g;
+    col += float3(1.0) * exp(-r * 4.5) * 0.55;                 // white-hot vanishing point
+    return half4(half3(clamp(col, 0.0, 1.0)), 1.0h);
 }
