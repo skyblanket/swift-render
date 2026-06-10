@@ -129,7 +129,7 @@ Pipe in JSON per record and render a thousand personalized variants — the AI/d
 
 ## Real Metal shaders
 
-Drop a `.metal` file in `Sources/SwiftRender/Shaders/`, run `tools/build_shaders.sh`, call it on any view:
+Drop a `.metal` file in `Sources/SwiftRender/Shaders/` and `swift build` — shaders compile automatically (SwiftPM build plugin). Call them on any view:
 
 ```swift
 Rectangle().fill(.black).colorEffect(

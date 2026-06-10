@@ -12,14 +12,19 @@ let package = Package(
         .target(
             name: "SwiftRender",
             dependencies: [],
+            exclude: ["Shaders"],
             resources: [
                 .process("Resources"),
-                .process("Shaders"),
-            ]
+            ],
+            plugins: ["MetalCompilerPlugin"]
         ),
         .executableTarget(
             name: "SwiftRenderCLI",
             dependencies: ["SwiftRender"]
+        ),
+        .plugin(
+            name: "MetalCompilerPlugin",
+            capability: .buildTool()
         ),
         .testTarget(
             name: "SwiftRenderTests",

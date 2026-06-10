@@ -31,16 +31,10 @@ open out/test.mp4
 
 ## Adding a shader
 
-1. Add a `[[ stitchable ]]` function to `Sources/SwiftRender/Shaders/Cookbook.metal` (or create a new `.metal` file in `Shaders/`).
-2. Rebuild the metallib:
-   ```bash
-   cd Sources/SwiftRender/Shaders
-   xcrun -sdk macosx metal -c *.metal -o /tmp/all.air
-   xcrun -sdk macosx metallib /tmp/*.air -o ../Resources/default.metallib
-   ```
+1. Add a `[[ stitchable ]]` function to a `.metal` file in `Sources/SwiftRender/Shaders/`.
+2. `swift build` — the MetalCompilerPlugin compiles all shaders into the
+   metallib automatically (requires full Xcode for the metal toolchain).
 3. Use it in a scene via `ShaderLibrary.bundle(.module).yourShader(...)`.
-
-> If you can automate step 2 via a SwiftPM build tool plugin, please open a PR — that's high on the wishlist.
 
 ## Style
 
