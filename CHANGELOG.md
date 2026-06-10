@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- MetalCompilerPlugin: .metal files now compile automatically at build time —
+  checked-in metallib and manual tools/build_shaders.sh step are gone
+
 - StyleReel + StyleReelVertical (9:16) — 12-aesthetic showcase scenes with
   card-zoom transitions + tools/make_reel_audio.py
 
