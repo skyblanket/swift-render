@@ -26,6 +26,35 @@ public struct LaunchFilm2: AudioReactiveScene {
     static let boundaries: [Double] = [4.2, 7.2, 16.8, 20.0, 23.2, 26.4,
                                        29.6, 32.8, 36.0, 42.4, 46.0, 47.8, 51.4]
 
+    /// Port of tools/make_launch_audio.py — now declared beside the Timeline.
+    public static func soundtrack(duration: Double) -> Score? {
+        Score(duration: duration) {
+            hat(at: 0.8, pan: -0.4); hat(at: 1.6, pan: 0.4); hat(at: 2.4, pan: -0.4)
+            kick(at: 3.0, amp: 0.7)
+            whoosh(at: 3.65, rising: true, duration: 0.6)
+
+            kick(at: 4.2); boom(at: 4.2, amp: 0.7, duration: 1.6); crash(at: 4.2, amp: 0.32)
+            fourOnFloor(from: 4.8, to: 36.0)
+            hatSixteenths(from: 4.2, to: 36.0)
+            bassline([.a1, .a1, .c2, .g1], from: 4.8, to: 36.0)
+            crashes(at: [7.2, 9.6, 12.0, 14.4, 16.8, 20.0, 23.2, 26.4, 29.6, 32.8])
+
+            whoosh(at: 35.7, rising: false, amp: 0.5, duration: 0.8)
+            boom(at: 36.0, amp: 0.55, duration: 1.4)
+            drone(.a1, from: 36.0, for: 6.4, amp: 0.16)
+            every(0.9, from: 36.9, to: 42.4) { hat(at: $0, amp: 0.09) }
+
+            riser(at: 42.5, duration: 3.4, amp: 0.6)
+            kicks(at: [42.4, 43.3, 44.1, 44.8, 45.3, 45.65, 45.85], amp: 0.8)
+            kicks(at: [46.0, 46.6, 47.2], amp: 1.0)
+            boom(at: 47.8); crash(at: 47.8, amp: 0.35)
+            fourOnFloor(from: 48.4, to: 51.3, amp: 0.8, claps: false)
+            bassline([.a1, .a1, .c2, .g1], from: 48.4, to: 51.3, amp: 0.28)
+            drone(.a1, from: 51.4, for: 5.8, amp: 0.12)
+            hat(at: 52.0, amp: 0.1)
+        }
+    }
+
     @MainActor
     public static func body(at t: Double, duration: Double, audio: AudioTrack) -> some View {
         let pumpGate = 1 - Ease.clip(t, 45.4, 46.0)

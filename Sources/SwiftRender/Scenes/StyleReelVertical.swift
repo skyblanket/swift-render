@@ -10,6 +10,10 @@ public struct StyleReelVertical: RenderScene {
     public static let defaultDuration: Double = 38.4
     public static var ownsPostFX: Bool { true }
 
+    public static func soundtrack(duration: Double) -> Score? {
+        StyleReel.soundtrack(duration: duration)
+    }
+
     @MainActor public static func body(at t: Double, duration: Double) -> some View {
         let switches = (0..<12).map { StyleReel.segStart + Double($0) * StyleReel.segLen } + [StyleReel.outroStart]
         let jolt = JustRenderIt.shake(t, impacts: switches, amp: 10)

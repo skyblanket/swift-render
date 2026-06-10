@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- LaunchFilm2, StyleReel, StyleReelVertical now score themselves in Swift —
+  the Python soundtrack sidecars (make_launch/reel/kinetic_audio.py) are gone
+
 - **Sound, in Swift** — `Score` DSL (`soundtrack(duration:)` on every scene
   protocol): kicks/claps/hats/crashes/bass/risers/booms/drones/whooshes with
   pattern helpers (fourOnFloor, hatSixteenths, bassline) and anchor placement
