@@ -11,6 +11,7 @@ let sceneRunners: [String: SceneRunner] = [
     // Generic scenes (Cookbook + library — public API examples)
     "TextReveal":       SceneRunner(TextReveal.self),
     "Kinetic":          SceneRunner(Kinetic.self),
+    "KineticType":      SceneRunner(KineticType.self),
     "JustRenderIt":     SceneRunner(JustRenderIt.self),
     "AudioBars":        SceneRunner(AudioBars.self),
     "TimelineDemo":     SceneRunner(TimelineDemo.self),
