@@ -36,21 +36,69 @@ let sceneRunners: [String: SceneRunner] = [
     "IGOutro":          SceneRunner(IGOutro.self),
 ]
 
+enum AudioSource {
+    case none
+    case file(URL)
+    case score(Score)
+}
+
+/// Resolves an AudioSource into (AudioTrack for reactive scenes, mux URL).
+/// Scores synthesize once: samples analyzed in memory, temp WAV only for mux.
+struct AudioPlan {
+    let track: AudioTrack
+    let muxURL: URL?
+    private let tempURL: URL?
+
+    func cleanup() { if let tempURL { try? FileManager.default.removeItem(at: tempURL) } }
+
+    static func make(_ source: AudioSource, fps: Int,
+                     needsTrack: Bool, needsMux: Bool) throws -> AudioPlan {
+        switch source {
+        case .none:
+            return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
+        case .file(let url):
+            let track = needsTrack ? try AudioAnalyzer.analyze(url: url, fps: fps) : .silent
+            return AudioPlan(track: track, muxURL: needsMux ? url : nil, tempURL: nil)
+        case .score(let score):
+            guard needsTrack || needsMux else {
+                return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
+            }
+            let (l, r) = ScoreSynth.render(score)
+            var track = AudioTrack.silent
+            if needsTrack {
+                var mono = [Float](repeating: 0, count: l.count)
+                for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
+                track = try AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: fps)
+            }
+            guard needsMux else { return AudioPlan(track: track, muxURL: nil, tempURL: nil) }
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sr-score-\(UUID().uuidString).wav")
+            try WAV.write(left: l, right: r, to: tmp)
+            return AudioPlan(track: track, muxURL: tmp, tempURL: tmp)
+        }
+    }
+}
+
 @MainActor
 struct SceneRunner {
     let defaultDuration: Double
     /// Pretty-printed default-props JSON; nil for prop-less scenes.
     let propsTemplate: (() -> String)?
-    /// (recorder, outURL, endTime, startTime, audioURL, propsURL)
-    let render: (Recorder, URL, Double, Double, URL?, URL?) async throws -> Void
-    /// (recorder, outURL, t, duration, audioURL, propsURL)
-    let frame: (Recorder, URL, Double, Double, URL?, URL?) throws -> Void
+    /// Scene-declared soundtrack, if any (duration-aware).
+    let soundtrack: (Double) -> Score?
+    /// (recorder, outURL, endTime, startTime, audioSource, propsURL)
+    let render: (Recorder, URL, Double, Double, AudioSource, URL?) async throws -> Void
+    /// (recorder, outURL, t, duration, audioSource, propsURL)
+    let frame: (Recorder, URL, Double, Double, AudioSource, URL?) throws -> Void
 
     init<S: RenderScene>(_ type: S.Type) {
         defaultDuration = S.defaultDuration
         propsTemplate = nil
-        render = { recorder, out, dur, start, audio, _ in
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur)
             }
         }
@@ -64,16 +112,18 @@ struct SceneRunner {
     init<S: AudioReactiveScene>(_ type: S.Type) {
         defaultDuration = S.defaultDuration
         propsTemplate = nil
-        render = { recorder, out, dur, start, audio, _ in
-            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
-                S.body(at: t, duration: dur, audio: track)
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur, audio: plan.track)
             }
         }
-        frame = { recorder, out, t, dur, audio, _ in
-            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+        frame = { recorder, out, t, dur, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: false)
             try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
-                S.body(at: tt, duration: dur, audio: track)
+                S.body(at: tt, duration: dur, audio: plan.track)
             }
         }
     }
@@ -81,9 +131,12 @@ struct SceneRunner {
     init<S: PropsScene>(_ type: S.Type) {
         defaultDuration = S.defaultDuration
         propsTemplate = { Self.templateJSON(S.defaultProps) }
-        render = { recorder, out, dur, start, audio, propsURL in
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur, props: props)
             }
         }
@@ -98,18 +151,20 @@ struct SceneRunner {
     init<S: PropsAudioScene>(_ type: S.Type) {
         defaultDuration = S.defaultDuration
         propsTemplate = { Self.templateJSON(S.defaultProps) }
-        render = { recorder, out, dur, start, audio, propsURL in
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
-                S.body(at: t, duration: dur, props: props, audio: track)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur, props: props, audio: plan.track)
             }
         }
-        frame = { recorder, out, t, dur, audio, propsURL in
+        frame = { recorder, out, t, dur, source, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: false)
             try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
-                S.body(at: tt, duration: dur, props: props, audio: track)
+                S.body(at: tt, duration: dur, props: props, audio: plan.track)
             }
         }
     }
@@ -240,6 +295,7 @@ func printUsage() {
       swift-render frame <Scene> --at <t>   Render one frame to PNG (fast preview)
       swift-render props <Scene>            Print a scene's default props as JSON
       swift-render contact <Scene>           Render a grid contact sheet to PNG
+      swift-render audio <Scene> --out x.wav Export a scene's Score as WAV
       swift-render list                     List available scenes
       swift-render --help                   Show this help
       swift-render --version                Print version
@@ -289,7 +345,7 @@ func run() async throws {
     case "--version":
         print(swiftRenderVersion)
         return
-    case "render", "frame", "props", "contact":
+    case "render", "frame", "props", "contact", "audio":
         break
     default:
         fputs("Unknown subcommand: \(args.subcommand)\n", stderr)
@@ -318,6 +374,28 @@ func run() async throws {
     let audioURL = args.audio.map { URL(fileURLWithPath: $0) }
     let propsURL = args.props.map { URL(fileURLWithPath: $0) }
 
+    // Precedence: explicit --audio > scene-declared Score > silence.
+    let audioSource: AudioSource
+    if let audioURL {
+        audioSource = .file(audioURL)
+    } else if let score = runner.soundtrack(duration) {
+        audioSource = .score(score)
+    } else {
+        audioSource = .none
+    }
+
+    if args.subcommand == "audio" {
+        guard let score = runner.soundtrack(duration) else {
+            fputs("\(args.sceneName) declares no soundtrack\n", stderr)
+            exit(1)
+        }
+        let outPath = args.out == "out/render.mp4" ? "out/score.wav" : args.out
+        try ScoreSynth.writeWAV(score, to: URL(fileURLWithPath: outPath))
+        print(String(format: "[swift-render] score %.2fs (%d events) → %@",
+                     score.duration, score.events.count, outPath))
+        return
+    }
+
     let config = Recorder.Config(
         fps: args.fps,
         size: size,
@@ -343,7 +421,7 @@ func run() async throws {
         for i in 0..<n {
             let t = Double(i) * step
             let cell = tmpDir.appendingPathComponent(String(format: "c%03d.png", i))
-            try runner.frame(thumbRecorder, cell, t, duration, audioURL, propsURL)
+            try runner.frame(thumbRecorder, cell, t, duration, audioSource, propsURL)
             cells.append((t, cell))
         }
         try composeContactSheet(cells: cells, columns: args.cols, to: URL(fileURLWithPath: outPath))
@@ -354,7 +432,7 @@ func run() async throws {
     if args.subcommand == "frame" {
         let outPath = args.out == "out/render.mp4" ? "out/frame.png" : args.out
         let outURL = URL(fileURLWithPath: outPath)
-        try runner.frame(recorder, outURL, args.at, duration, audioURL, propsURL)
+        try runner.frame(recorder, outURL, args.at, duration, audioSource, propsURL)
         print("[swift-render] frame t=\(args.at)s → \(outPath)")
         return
     }
@@ -367,10 +445,14 @@ func run() async throws {
     let endTime = args.rangeEnd ?? duration
     let totalFrames = Int(((endTime - startTime) * Double(args.fps)).rounded())
     print("[swift-render] scene=\(args.sceneName) duration=\(duration)s range=\(startTime)-\(endTime)s fps=\(args.fps) size=\(Int(size.width))×\(Int(size.height)) frames=\(totalFrames) → \(args.out)")
-    if let audioURL = audioURL { print("[swift-render] audio: \(audioURL.path)") }
+    switch audioSource {
+    case .file(let u): print("[swift-render] audio: \(u.path)")
+    case .score(let sc): print(String(format: "[swift-render] audio: synthesized score (%d events)", sc.events.count))
+    case .none: break
+    }
 
     let start = Date()
-    try await runner.render(recorder, outURL, endTime, startTime, args.rangeStart == nil ? audioURL : nil, propsURL)
+    try await runner.render(recorder, outURL, endTime, startTime, args.rangeStart == nil ? audioSource : .none, propsURL)
     let elapsed = Date().timeIntervalSince(start)
     print(String(format: "[swift-render] done in %.1fs → %@", elapsed, args.out))
 }

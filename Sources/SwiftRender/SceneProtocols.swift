@@ -8,6 +8,7 @@ public struct NoProps: Codable, Sendable { public init() {} }
 /// so `body` remains deterministic frame-for-frame.
 public protocol AudioReactiveScene {
     static var ownsPostFX: Bool { get }
+    static func soundtrack(duration: Double) -> Score?
     associatedtype Body: View
     static var defaultDuration: Double { get }
     @MainActor static func body(at t: Double, duration: Double, audio: AudioTrack) -> Body
@@ -18,6 +19,7 @@ public protocol AudioReactiveScene {
 /// it as a JSON template for AI/data pipelines.
 public protocol PropsScene {
     static var ownsPostFX: Bool { get }
+    static func soundtrack(duration: Double) -> Score?
     associatedtype Props: Codable
     associatedtype Body: View
     static var defaultDuration: Double { get }
@@ -29,6 +31,7 @@ public protocol PropsScene {
 /// conforming to two makes `SceneRunner(X.self)` ambiguous (by design).
 public protocol PropsAudioScene {
     static var ownsPostFX: Bool { get }
+    static func soundtrack(duration: Double) -> Score?
     associatedtype Props: Codable
     associatedtype Body: View
     static var defaultDuration: Double { get }
@@ -38,12 +41,15 @@ public protocol PropsAudioScene {
 
 public extension AudioReactiveScene {
     static var ownsPostFX: Bool { false }
+    static func soundtrack(duration: Double) -> Score? { nil }
 }
 
 public extension PropsScene {
     static var ownsPostFX: Bool { false }
+    static func soundtrack(duration: Double) -> Score? { nil }
 }
 
 public extension PropsAudioScene {
     static var ownsPostFX: Bool { false }
+    static func soundtrack(duration: Double) -> Score? { nil }
 }

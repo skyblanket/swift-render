@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Sound, in Swift** — `Score` DSL (`soundtrack(duration:)` on every scene
+  protocol): kicks/claps/hats/crashes/bass/risers/booms/drones/whooshes with
+  pattern helpers (fourOnFloor, hatSixteenths, bassline) and anchor placement
+  (`crashes(at: chapters)`) so cuts and hits share one source of truth.
+  Deterministic pure-Swift synth (vDSP), two-bus sidechain master, auto-mux —
+  `render <Scene>` needs no --audio. `audio <Scene>` exports the WAV.
+  In-memory FFT path: audio-reactive scenes react to their own score.
+
 - `RenderContext` environment value — scenes can read render size/fps/duration
   (`@Environment(\.renderContext)`) and adapt layout per aspect
 

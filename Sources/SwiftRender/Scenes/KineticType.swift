@@ -17,6 +17,28 @@ public struct KineticType: RenderScene {
 
     static let chapters: [Double] = (1...14).map { 2.4 * Double($0) }
 
+    /// The soundtrack lives next to the Timeline it scores — `chapters`
+    /// drives both, so the cuts and the crashes cannot drift apart.
+    public static func soundtrack(duration: Double) -> Score? {
+        Score(duration: duration) {
+            hat(at: 0.3, pan: -0.4); hat(at: 0.9, pan: 0.4); hat(at: 1.5, pan: -0.4)
+            kick(at: 1.8, amp: 0.6)
+            whoosh(at: 1.95, rising: true)
+
+            boom(at: chapters[0], amp: 0.8, duration: 1.5)
+            fourOnFloor(from: chapters[0], to: chapters[13])
+            hatSixteenths(from: chapters[0], to: chapters[13])
+            bassline([.a1, .a1, .c2, .g1], from: chapters[0], to: chapters[13])
+            crashes(at: Array(chapters.prefix(14)))
+
+            riser(at: chapters[13], duration: 2.4)
+            kicks(at: [33.6, 33.9, 34.2, 34.5, 34.8, 35.1, 35.35, 35.6, 35.8], amp: 0.85)
+            boom(at: 36.0); crash(at: 36.0, amp: 0.36)
+            kicks(at: [36.6, 37.2], amp: 0.9)
+            drone(.a1, from: 36.6, for: 5.4, amp: 0.14)
+        }
+    }
+
     @MainActor public static func body(at t: Double, duration: Double) -> some View {
         let jolt = JustRenderIt.shake(t, impacts: chapters + [36.0], amp: 11)
         let fade = Ease.easeIn(Ease.clip(t, duration - 1.0, duration))

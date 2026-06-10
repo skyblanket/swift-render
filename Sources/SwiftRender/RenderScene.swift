@@ -8,11 +8,15 @@ public protocol RenderScene {
     /// Return true when the scene applies its own `PostFX` modifier; the
     /// recorder then skips its global pass instead of doubling grain/vignette.
     static var ownsPostFX: Bool { get }
+    /// Declare the soundtrack next to the Timeline it scores. Return nil
+    /// (the default) for silent scenes or when using an external --audio file.
+    static func soundtrack(duration: Double) -> Score?
     @MainActor static func body(at t: Double, duration: Double) -> Body
 }
 
 public extension RenderScene {
     static var ownsPostFX: Bool { false }
+    static func soundtrack(duration: Double) -> Score? { nil }
 }
 
 /// Aspect-ratio presets.

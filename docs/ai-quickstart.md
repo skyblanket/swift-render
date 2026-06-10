@@ -206,6 +206,23 @@ struct Hero: View {
 }
 ```
 
+## Soundtracks
+
+Declare audio inside the scene — reuse the same time constants as the Timeline:
+
+```swift
+public static func soundtrack(duration: Double) -> Score? {
+    Score(duration: duration) {
+        fourOnFloor(from: 0, to: chapters.last!)   // kick groove + claps
+        crashes(at: chapters)                       // hits on every cut
+        boom(at: finale)
+    }
+}
+```
+Events: kick/clap/hat/crash/boom/bass/riser/drone/whoosh (at:). Patterns:
+fourOnFloor, hatSixteenths, bassline(notes:from:to:), every(interval:...).
+Render normally — the score synthesizes and muxes automatically.
+
 ## Fast iteration
 
 ```bash

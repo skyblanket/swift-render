@@ -127,6 +127,35 @@ swift run swift-render render AudioBars --props p.json --audio beat.wav
 
 Pipe in JSON per record and render a thousand personalized variants — the AI/data-pipeline workflow Remotion's `inputProps` made popular, native.
 
+## Sound, in Swift
+
+Scenes declare their own soundtrack — same constants drive the cuts and the
+hits, so audio/video sync is structural, not manual. The synth (kicks, claps,
+hats, crashes, sub bass, risers, 808 booms, drones, whooshes — with two-bus
+sidechain pumping) is pure Swift, deterministic, and renders a minute of audio
+in ~0.1s:
+
+```swift
+public static func soundtrack(duration: Double) -> Score? {
+    Score(duration: duration) {
+        fourOnFloor(from: 2.4, to: 33.6)          // kicks + backbeat claps
+        hatSixteenths(from: 2.4, to: 33.6)
+        bassline([.a1, .a1, .c2, .g1], from: 2.4, to: 33.6)
+        crashes(at: chapters)                      // the SAME array as the Timeline
+        riser(at: 33.6, duration: 2.4)
+        boom(at: 36.0)
+    }
+}
+```
+
+```bash
+swift run swift-render render KineticType        # score synthesized + muxed, zero flags
+swift run swift-render audio KineticType --out out/score.wav   # export the track alone
+```
+
+`--audio file` always wins over a scene's score. Audio-reactive scenes react
+to their own synthesized score — declare the beat, and the visuals hear it.
+
 ## Real Metal shaders
 
 Drop a `.metal` file in `Sources/SwiftRender/Shaders/` and `swift build` — shaders compile automatically (SwiftPM build plugin). Call them on any view:

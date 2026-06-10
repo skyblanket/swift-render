@@ -31,9 +31,6 @@ public enum AudioAnalyzer {
         attack: Double = 0.03,
         release: Double = 0.25
     ) throws -> AudioTrack {
-        precondition(fps > 0 && windowSize > 1 && (windowSize & (windowSize - 1)) == 0,
-                     "windowSize must be a power of two")
-
         // ---- 1. Decode to mono Float32 -----------------------------------
         let file: AVAudioFile
         do { file = try AVAudioFile(forReading: url) }
@@ -57,7 +54,27 @@ public enum AudioAnalyzer {
             vDSP_vsmul(mono, 1, &inv, &mono, 1, vDSP_Length(n))
         }
 
-        let sr = format.sampleRate
+        return try analyze(samples: mono, sampleRate: format.sampleRate, fps: fps,
+                           windowSize: windowSize, attack: attack, release: release)
+    }
+
+    /// In-memory path — shared FFT/envelope pipeline. Used directly by the
+    /// score-synthesis flow so a scene can react to its own synthesized track
+    /// without a file round trip.
+    public static func analyze(
+        samples: [Float],
+        sampleRate: Double,
+        fps: Int,
+        windowSize: Int = 2048,
+        attack: Double = 0.03,
+        release: Double = 0.25
+    ) throws -> AudioTrack {
+        precondition(fps > 0 && windowSize > 1 && (windowSize & (windowSize - 1)) == 0,
+                     "windowSize must be a power of two")
+        guard !samples.isEmpty else { return .silent }
+        let mono = samples
+        let n = mono.count
+        let sr = sampleRate
         let duration = Double(n) / sr
         let frameTotal = max(1, Int((duration * Double(fps)).rounded(.up)))
 
