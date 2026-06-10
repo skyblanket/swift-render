@@ -37,7 +37,8 @@ public struct LaunchFilm: AudioReactiveScene {
 
     @MainActor
     public static func body(at t: Double, duration: Double, audio: AudioTrack) -> some View {
-        let bass = audio.band(.bass, at: t)
+        let pumpGate = 1 - Ease.clip(t, 42.6, 43.2)   // steady text after the build
+        let bass = audio.band(.bass, at: t) * pumpGate
         let fade = Ease.easeIn(Ease.clip(t, duration - 1.0, duration))
 
         return ZStack {
@@ -167,6 +168,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white.opacity(0.6))
                 .opacity(Ease.easeOut(Ease.clip(t, 0.9, 1.4)))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("01 · PURE FUNCTION OF TIME") }
     }
 
@@ -203,6 +205,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white.opacity(0.55))
                 .opacity(Ease.easeOut(Ease.clip(t, 1.6, 2.1)))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("02 · SPRINGS, SOLVED ANALYTICALLY") }
     }
 
@@ -239,6 +242,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white.opacity(0.55))
                 .opacity(Ease.easeOut(Ease.clip(t, 1.7, 2.2)))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("03 · SEQUENCING WITHOUT SEGMENT MATH") }
     }
 
@@ -273,6 +277,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.9), radius: 30)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("04 · 13 GPU SHADERS, NO WEBGL") }
     }
 
@@ -317,6 +322,7 @@ public struct LaunchFilm: AudioReactiveScene {
                     .padding(.bottom, 130)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("05 · 3D, NO ENGINE REQUIRED") }
     }
 
@@ -396,6 +402,7 @@ public struct LaunchFilm: AudioReactiveScene {
                     .foregroundStyle(.white.opacity(0.65))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("06 · AUDIO-REACTIVE, STILL DETERMINISTIC") }
     }
 
@@ -420,6 +427,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white.opacity(0.55))
                 .opacity(Ease.easeOut(Ease.clip(t, 1.8, 2.3)))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("07 · 5–10× FASTER LOCAL RENDERS") }
     }
 
@@ -479,6 +487,7 @@ public struct LaunchFilm: AudioReactiveScene {
             .scaleEffect(CGFloat(check))
             .shadow(color: .black.opacity(0.9), radius: 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("08 · DETERMINISM, TESTED NOT PROMISED") }
     }
 
@@ -513,6 +522,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 .foregroundStyle(.white.opacity(0.6))
                 .opacity(Ease.easeOut(Ease.clip(t, 2.3, 2.8)))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottomLeading) { chip("09 · BUILT FOR THE AI ERA") }
     }
 
@@ -575,29 +585,35 @@ public struct LaunchFilm: AudioReactiveScene {
 
     @ViewBuilder @MainActor
     static func outro(_ t: Double) -> some View {
-        let p = Ease.easeOut(min(1, t / 0.5))
-        let cta = Ease.easeOut(Ease.clip(t, 0.8, 1.3))
-        VStack(spacing: 30) {
-            Text("github.com/skyblanket/swift-render")
-                .font(.system(size: 54, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white)
-            Text("MIT · open source · macOS 14+")
-                .font(.system(size: 26, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.6))
-            HStack(spacing: 14) {
-                Text("⭐").font(.system(size: 30))
-                Text("swift run swift-render render LaunchFilm")
-                    .font(.system(size: 24, design: .monospaced))
-                    .foregroundStyle(volt)
+        let letters = Array("swift-render.")
+        let sweep = Ease.easeInOut(Ease.clip(t, 0.7, 1.25))
+        let urlP = Ease.easeOut(Ease.clip(t, 1.1, 1.6))
+        let mitP = Ease.easeOut(Ease.clip(t, 1.5, 2.0))
+        VStack(spacing: 28) {
+            HStack(spacing: 2) {
+                ForEach(Array(letters.enumerated()), id: \.offset) { idx, ch in
+                    let st = 0.1 + Double(idx) * 0.04
+                    let p = Ease.easeOut(Ease.clip(t, st, st + 0.35))
+                    Text(String(ch))
+                        .font(.system(size: 110, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .opacity(p)
+                        .blur(radius: (1 - p) * 9)
+                        .offset(y: CGFloat(1 - p) * 24)
+                }
             }
-            .padding(.horizontal, 36).padding(.vertical, 18)
-            .background(Capsule().fill(.white.opacity(0.07)))
-            .overlay(Capsule().stroke(volt.opacity(0.5)))
-            .opacity(cta)
-            .offset(y: CGFloat(1 - cta) * 16)
+            Rectangle().fill(.white)
+                .frame(width: CGFloat(sweep) * 760, height: 4)
+            Text("github.com/skyblanket/swift-render")
+                .font(.system(size: 30, design: .monospaced))
+                .foregroundStyle(volt)
+                .opacity(urlP)
+                .offset(y: CGFloat(1 - urlP) * 12)
+            Text("MIT · open source · macOS 14+")
+                .font(.system(size: 22, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+                .opacity(mitP)
         }
-        .opacity(p)
-        .scaleEffect(0.97 + 0.03 * CGFloat(p))
     }
 
     // MARK: shared
