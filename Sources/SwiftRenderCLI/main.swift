@@ -272,7 +272,6 @@ func printUsage() {
 @MainActor
 func run() async throws {
     registerBundledFonts()
-    checkShaderFreshness()
     let args = parseArgs(CommandLine.arguments)
 
     switch args.subcommand {

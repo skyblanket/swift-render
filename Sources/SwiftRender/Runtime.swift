@@ -27,29 +27,3 @@ public func registerBundledFonts() {
 
 // MARK: - Shader freshness
 
-/// default.metallib is pre-compiled and checked in; editing a .metal file does
-/// nothing until it is rebuilt. Catch that silently-stale state loudly.
-public func checkShaderFreshness() {
-    let bundle = Bundle.module
-    let fm = FileManager.default
-    guard let lib = bundle.url(forResource: "default", withExtension: "metallib"),
-          let libDate = (try? fm.attributesOfItem(atPath: lib.path))?[.modificationDate] as? Date
-    else { return }
-    let stale = (bundle.urls(forResourcesWithExtension: "metal", subdirectory: nil) ?? [])
-        .filter { url in
-            ((try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date)
-                .map { $0 > libDate } ?? false
-        }
-        .map(\.lastPathComponent)
-    if !stale.isEmpty {
-        fputs("""
-        !!! ────────────────────────────────────────────────────────────────
-        !!! STALE SHADERS: \(stale.joined(separator: ", "))
-        !!!   are newer than default.metallib — your .metal edits are NOT live.
-        !!!   Fix:  tools/build_shaders.sh && swift build
-        !!! ────────────────────────────────────────────────────────────────
-
-        """, stderr)
-    }
-}
-

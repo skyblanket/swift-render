@@ -203,5 +203,5 @@ swift run swift-render render MyScene --no-postfx                    # raw frame
 If a scene applies its own `PostFX`, declare `static var ownsPostFX: Bool { true }`
 or the recorder's global pass doubles it.
 
-After editing any `.metal` file run `tools/build_shaders.sh` (the CLI warns loudly
-if the compiled metallib is stale).
+Editing a `.metal` file just works — shaders recompile automatically on
+`swift build` (SwiftPM build plugin).
