@@ -31,7 +31,7 @@ public struct LaunchFilm: AudioReactiveScene {
     public static let defaultDuration: Double = 55.0
     public static var ownsPostFX: Bool { true }
 
-    static let volt = Color(red: 0.78, green: 1.0, blue: 0.10)
+    static let volt = Color.white   // monochrome redesign: accent = white
     static let boundaries: [Double] = [4.2, 7.2, 10.8, 14.4, 18.0, 21.6,
                                        25.2, 28.8, 32.4, 36.0, 39.6, 43.2, 45.0]
 
@@ -260,19 +260,19 @@ public struct LaunchFilm: AudioReactiveScene {
         let inP = Ease.easeOut(min(1, t / 0.4))
         VStack(spacing: 6) {
             HStack(spacing: 6) {
-                shaderTile("galaxy", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).galaxy(.float2(sz, sz * 0.5635), .float(tt))
+                shaderTile("metaballs", t) { sz, tt in
+                    ShaderLibrary.bundle(.module).metaballs(.float2(sz, sz * 0.5635), .float(tt))
                 }
-                shaderTile("liquidMetal", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).liquidMetal(.float2(sz, sz * 0.5635), .float(tt))
+                shaderTile("inkFlow", t) { sz, tt in
+                    ShaderLibrary.bundle(.module).inkFlow(.float2(sz, sz * 0.5635), .float(tt))
                 }
             }
             HStack(spacing: 6) {
-                shaderTile("kaleidoscope", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).kaleidoscope(.float2(sz, sz * 0.5635), .float(tt), .float(8.0))
+                shaderTile("interference", t) { sz, tt in
+                    ShaderLibrary.bundle(.module).interference(.float2(sz, sz * 0.5635), .float(tt))
                 }
-                shaderTile("smokeFlow", t) { sz, tt in
-                    ShaderLibrary.bundle(.module).smokeFlow(.float2(sz, sz * 0.5635), .float(tt))
+                shaderTile("voronoiInk", t) { sz, tt in
+                    ShaderLibrary.bundle(.module).voronoiInk(.float2(sz, sz * 0.5635), .float(tt))
                 }
             }
         }
@@ -282,10 +282,10 @@ public struct LaunchFilm: AudioReactiveScene {
             Text("REAL METAL")
                 .font(.system(size: 150, weight: .black)).fontWidth(.condensed)
                 .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.9), radius: 30)
+                .blendMode(.difference)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .bottomLeading) { chip("04 · 13 GPU SHADERS, NO WEBGL") }
+        .overlay(alignment: .bottomLeading) { chip("04 · RAYMARCHED ON THE GPU, NO WEBGL") }
     }
 
     @MainActor
@@ -310,7 +310,7 @@ public struct LaunchFilm: AudioReactiveScene {
         let inP = Ease.easeOut(min(1, t / 0.4))
         ZStack {
             Rectangle().fill(.black)
-                .colorEffect(ShaderLibrary.bundle(.module).warpTunnel(
+                .colorEffect(ShaderLibrary.bundle(.module).monoTunnel(
                     .float2(1920, 1080), .float(Float(t))))
                 .opacity(0.85 * inP)
                 .ignoresSafeArea()
@@ -388,14 +388,14 @@ public struct LaunchFilm: AudioReactiveScene {
         let bass = audio.band(.bass, at: g)
         let high = audio.band(.high, at: g)
         ZStack {
-            RadialGradient(colors: [volt.opacity(0.08 + 0.3 * bass), .clear],
+            RadialGradient(colors: [Color.white.opacity(0.04 + 0.14 * bass), .clear],
                            center: .center, startRadius: 0, endRadius: 950)
                 .ignoresSafeArea()
             HStack(alignment: .center, spacing: 7) {
                 ForEach(0..<64, id: \.self) { i in
                     let phase = Double(i) / 64.0 * 0.16
                     let v = audio.level(at: max(0, g - phase))
-                    Capsule().fill(volt.opacity(0.3 + 0.7 * high))
+                    Capsule().fill(Color.white.opacity(0.25 + 0.55 * high))
                         .frame(width: 13, height: 30 + 540 * v)
                 }
             }
@@ -403,7 +403,7 @@ public struct LaunchFilm: AudioReactiveScene {
                 Text("THIS FRAME HEARS THE MUSIC")
                     .font(.system(size: 92, weight: .black)).fontWidth(.condensed)
                     .foregroundStyle(.white.opacity(0.35 + 0.65 * level))
-                    .shadow(color: .black.opacity(0.7), radius: 14)
+                    .blendMode(.difference)
                 Text("audio.band(.bass, at: t) — FFT analyzed once, read as a pure function")
                     .font(.system(size: 23, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.65))
@@ -427,7 +427,7 @@ public struct LaunchFilm: AudioReactiveScene {
                     p: us, color: volt,
                     tag: us >= 1 ? "DONE · 6.4s · ~140fps" : "rendering…")
             raceRow("remotion", sub: "headless Chromium screenshots",
-                    p: them, color: .white.opacity(0.45),
+                    p: them, color: .white.opacity(0.30),
                     tag: "rendering… (typical ~15–30fps)")
             Text("same machine. same frames. no contest.")
                 .font(.system(size: 24, design: .monospaced))
@@ -467,7 +467,7 @@ public struct LaunchFilm: AudioReactiveScene {
             ForEach(0..<2, id: \.self) { run in
                 VStack(spacing: 16) {
                     Rectangle().fill(.black)
-                        .colorEffect(ShaderLibrary.bundle(.module).galaxy(
+                        .colorEffect(ShaderLibrary.bundle(.module).inkFlow(
                             .float2(560, 315), .float(4.31)))   // same t on purpose
                         .frame(width: 560, height: 315)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -477,7 +477,7 @@ public struct LaunchFilm: AudioReactiveScene {
                         .foregroundStyle(.white.opacity(0.7))
                     Text("sha256: 9f3aa1…e2c4")
                         .font(.system(size: 19, design: .monospaced))
-                        .foregroundStyle(volt.opacity(0.9))
+                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
         }
