@@ -52,6 +52,7 @@ public final class Recorder {
     public func render<V: View>(
         to outputURL: URL,
         duration: Double,
+        startTime: Double = 0,
         audioURL: URL? = nil,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) async throws {
@@ -94,7 +95,7 @@ public final class Recorder {
         }
         writer.startSession(atSourceTime: .zero)
 
-        let totalFrames = max(1, Int((duration * Double(config.fps)).rounded()))
+        let totalFrames = max(1, Int(((duration - startTime) * Double(config.fps)).rounded()))
         let timescale: CMTimeScale = CMTimeScale(config.fps)
         let frameDuration = CMTime(value: 1, timescale: timescale)
 
@@ -102,7 +103,7 @@ public final class Recorder {
         let scaleCG = config.scale
 
         for frameIdx in 0..<totalFrames {
-            let t = Double(frameIdx) / Double(config.fps)
+            let t = startTime + Double(frameIdx) / Double(config.fps)
 
             // Build a fresh view for this frame; apply PostFX wrapper at the top.
             let rootView = ZStack {
@@ -141,6 +142,38 @@ public final class Recorder {
         if let audioURL = audioURL, FileManager.default.fileExists(atPath: audioURL.path) {
             try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: duration)
         }
+    }
+
+    /// Render a single frame at time `t` straight to a PNG. The fast path for
+    /// checking a scene without producing video — Remotion has Studio, we have this.
+    public func renderPNG<V: View>(
+        at t: Double,
+        to url: URL,
+        @ViewBuilder content: @escaping @MainActor (Double) -> V
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let rootView = ZStack { content(t) }
+            .frame(width: config.size.width, height: config.size.height)
+            .modifier(PostFX(time: t))
+        let renderer = ImageRenderer(content: rootView)
+        renderer.scale = config.scale
+        guard let nsImage = renderer.nsImage,
+              let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else {
+            throw NSError(domain: "Recorder", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Frame render produced no image"
+            ])
+        }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "Recorder", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "PNG encode failed"
+            ])
+        }
+        try png.write(to: url)
     }
 
     /// Replace the file at `outputURL` with one that has both video and audio tracks.

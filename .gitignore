@@ -6,3 +6,4 @@ out/*.mov
 Package.resolved
 *.xcodeproj
 .idea
+out/

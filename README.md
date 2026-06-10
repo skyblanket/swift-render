@@ -156,6 +156,62 @@ A second cookbook (`Cookbook2.metal`) ships six full-frame "wow factor" shaders 
 swift run swift-render render ShaderGallery --out out/gallery.mp4
 ```
 
+## Timeline, springs & transitions
+
+Sequencing without hand-rolled `if t < segB` switching — `Timeline` lays clips
+end-to-end, remaps each clip to local time, and cross-transitions between them.
+Everything stays a pure function of `t`:
+
+```swift
+public static func body(at t: Double, duration: Double) -> some View {
+    Timeline(t) {
+        Clip(2.0) { local in ColdOpen(t: local) }
+        Clip(3.0) { local in WordSlams(t: local) }.transition(.flash())
+        Clip(4.0) { local in ShaderBloom(t: local) }.transition(.fade(0.4))
+        Clip(at: 0, for: 9.0) { local in HUD(t: local) }   // pinned overlay
+    }
+}
+```
+
+Analytic springs (closed-form, no integration — scrub to any frame and get
+identical pixels) plus `easeOutBack`, `elastic`, `bounce`, `expo`, and
+`cubicBezier`:
+
+```swift
+let y = Ease.spring(t, from: 0, to: 1, response: 0.5, dampingFraction: 0.7)
+let s = Ease.easeOutBack(Ease.clip(t, 0.2, 0.6))
+```
+
+## Audio-reactive scenes
+
+Pass `--audio`, get a pre-analyzed `AudioTrack` — RMS level plus bass/mid/high
+band envelopes, computed once before the render loop so scenes stay pure:
+
+```swift
+public struct AudioBars: PropsAudioScene {
+    public static func body(at t: Double, duration: Double,
+                            props: Props, audio: AudioTrack) -> some View {
+        let bass = audio.band(.bass, at: t)   // 0…1, deterministic
+        // ...scale, glow, slam on the beat
+    }
+}
+```
+
+```bash
+swift run swift-render render AudioBars --audio music/beat.wav --out out/bars.mp4
+```
+
+## Props — data-driven scenes
+
+Scenes can take a Codable props payload, so AI and data pipelines can render
+variants without touching Swift:
+
+```bash
+swift run swift-render props AudioBars > bars.json   # print defaults template
+# edit bars.json …
+swift run swift-render render AudioBars --props bars.json --out out/custom.mp4
+```
+
 ## Example scenes
 
 Four generic scenes ship in the box. Use them as starting points or paste into an LLM as reference.
@@ -172,6 +228,14 @@ Four generic scenes ship in the box. Use them as starting points or paste into a
 </table>
 
 ## CLI
+
+Fast iteration without a preview app:
+
+```bash
+swift run swift-render frame Kinetic --at 3.5 --out out/check.png   # one frame in ~1s
+swift run swift-render render Kinetic --range 2.0:4.5               # partial render
+```
+
 
 ```
 swift-render render <Scene> [opts]    Render a scene to MP4

@@ -165,10 +165,14 @@ half4 galaxy(
 
     float core = exp(-r * r * 7.0) * 1.4;
 
-    // Star scatter
+    // Star scatter — round point stars inside each hash cell, not whole cells
     float2 ip = floor(p * 35.0);
+    float2 fp = fract(p * 35.0) - 0.5;
     float h = c2_hash(ip);
-    float star = smoothstep(0.992, 1.0, h);
+    float twinkle = 0.75 + 0.25 * sin(time * 3.0 + h * 40.0);
+    float star = smoothstep(0.978, 1.0, h)
+               * smoothstep(0.28, 0.0, length(fp))
+               * twinkle;
 
     float3 arms = float3(0.45, 0.65, 1.00) * density;
     float3 sun  = float3(1.00, 0.85, 0.55) * core;

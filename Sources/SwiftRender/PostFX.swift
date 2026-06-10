@@ -48,6 +48,7 @@ private struct GrainTile: View {
 
         Image(nsImage: img)
             .resizable(resizingMode: .tile)
+            .padding(-80)  // overscan: the per-frame offset below must never expose a bare edge strip
             .opacity(amount * 1.4)
             .offset(x: dx, y: dy)
     }
@@ -59,10 +60,12 @@ private struct GrainTile: View {
         let bytesPerPixel = 4
         let bytesPerRow = size * bytesPerPixel
         var data = [UInt8](repeating: 0, count: size * bytesPerRow)
+        var rng: UInt64 = 0x9E37_79B9_7F4A_7C15  // fixed seed — grain must be identical across runs
         for y in 0..<size {
             for x in 0..<size {
                 let i = y * bytesPerRow + x * bytesPerPixel
-                let n = UInt8.random(in: 0...255)
+                rng = rng &* 6364136223846793005 &+ 1442695040888963407
+                let n = UInt8(truncatingIfNeeded: rng >> 33)
                 data[i + 0] = n        // B
                 data[i + 1] = n        // G
                 data[i + 2] = n        // R

@@ -26,11 +26,42 @@ func registerBundledFonts() {
     }
 }
 
+// MARK: - Shader freshness
+
+/// default.metallib is pre-compiled and checked in; editing a .metal file does
+/// nothing until it is rebuilt. Catch that silently-stale state loudly.
+func checkShaderFreshness() {
+    let bundle = Bundle.module
+    let fm = FileManager.default
+    guard let lib = bundle.url(forResource: "default", withExtension: "metallib"),
+          let libDate = (try? fm.attributesOfItem(atPath: lib.path))?[.modificationDate] as? Date
+    else { return }
+    let stale = (bundle.urls(forResourcesWithExtension: "metal", subdirectory: nil) ?? [])
+        .filter { url in
+            ((try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date)
+                .map { $0 > libDate } ?? false
+        }
+        .map(\.lastPathComponent)
+    if !stale.isEmpty {
+        fputs("""
+        !!! ────────────────────────────────────────────────────────────────
+        !!! STALE SHADERS: \(stale.joined(separator: ", "))
+        !!!   are newer than default.metallib — your .metal edits are NOT live.
+        !!!   Fix:  tools/build_shaders.sh && swift build
+        !!! ────────────────────────────────────────────────────────────────
+
+        """, stderr)
+    }
+}
+
 // MARK: - Scene registry
 
 let sceneRunners: [String: SceneRunner] = [
     // Generic scenes (Cookbook + library — public API examples)
     "TextReveal":       SceneRunner(TextReveal.self),
+    "Kinetic":          SceneRunner(Kinetic.self),
+    "JustRenderIt":     SceneRunner(JustRenderIt.self),
+    "AudioBars":        SceneRunner(AudioBars.self),
     "CardStack":        SceneRunner(CardStack.self),
     "ParticleField":    SceneRunner(ParticleField.self),
     "ShaderShowcase":   SceneRunner(ShaderShowcase.self),
@@ -51,14 +82,115 @@ let sceneRunners: [String: SceneRunner] = [
 @MainActor
 struct SceneRunner {
     let defaultDuration: Double
-    let render: (Recorder, URL, Double, URL?) async throws -> Void
+    /// Pretty-printed default-props JSON; nil for prop-less scenes.
+    let propsTemplate: (() -> String)?
+    /// (recorder, outURL, endTime, startTime, audioURL, propsURL)
+    let render: (Recorder, URL, Double, Double, URL?, URL?) async throws -> Void
+    /// (recorder, outURL, t, duration, audioURL, propsURL)
+    let frame: (Recorder, URL, Double, Double, URL?, URL?) throws -> Void
 
     init<S: RenderScene>(_ type: S.Type) {
-        self.defaultDuration = S.defaultDuration
-        self.render = { recorder, out, dur, audio in
-            try await recorder.render(to: out, duration: dur, audioURL: audio) { t in
+        defaultDuration = S.defaultDuration
+        propsTemplate = nil
+        render = { recorder, out, dur, start, audio, _ in
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
                 S.body(at: t, duration: dur)
             }
+        }
+        frame = { recorder, out, t, dur, _, _ in
+            try recorder.renderPNG(at: t, to: out) { tt in
+                S.body(at: tt, duration: dur)
+            }
+        }
+    }
+
+    init<S: AudioReactiveScene>(_ type: S.Type) {
+        defaultDuration = S.defaultDuration
+        propsTemplate = nil
+        render = { recorder, out, dur, start, audio, _ in
+            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+                S.body(at: t, duration: dur, audio: track)
+            }
+        }
+        frame = { recorder, out, t, dur, audio, _ in
+            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+            try recorder.renderPNG(at: t, to: out) { tt in
+                S.body(at: tt, duration: dur, audio: track)
+            }
+        }
+    }
+
+    init<S: PropsScene>(_ type: S.Type) {
+        defaultDuration = S.defaultDuration
+        propsTemplate = { Self.templateJSON(S.defaultProps) }
+        render = { recorder, out, dur, start, audio, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+                S.body(at: t, duration: dur, props: props)
+            }
+        }
+        frame = { recorder, out, t, dur, _, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            try recorder.renderPNG(at: t, to: out) { tt in
+                S.body(at: tt, duration: dur, props: props)
+            }
+        }
+    }
+
+    init<S: PropsAudioScene>(_ type: S.Type) {
+        defaultDuration = S.defaultDuration
+        propsTemplate = { Self.templateJSON(S.defaultProps) }
+        render = { recorder, out, dur, start, audio, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+                S.body(at: t, duration: dur, props: props, audio: track)
+            }
+        }
+        frame = { recorder, out, t, dur, audio, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
+            try recorder.renderPNG(at: t, to: out) { tt in
+                S.body(at: tt, duration: dur, props: props, audio: track)
+            }
+        }
+    }
+
+    private static func loadProps<P: Codable>(_: P.Type, defaults: P, from url: URL?) throws -> P {
+        guard let url else { return defaults }
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch { throw PropsError.unreadable(url, error.localizedDescription) }
+        do { return try JSONDecoder().decode(P.self, from: data) }
+        catch let e as DecodingError { throw PropsError.decode(url, describe(e)) }
+    }
+
+    private static func templateJSON<P: Codable>(_ value: P) -> String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return (try? enc.encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    private static func describe(_ e: DecodingError) -> String {
+        func path(_ c: [CodingKey]) -> String { c.map(\.stringValue).joined(separator: ".") }
+        switch e {
+        case .keyNotFound(let k, let ctx): return "missing key '\(k.stringValue)' at \(path(ctx.codingPath))"
+        case .typeMismatch(let t, let ctx): return "expected \(t) at \(path(ctx.codingPath))"
+        case .valueNotFound(let t, let ctx): return "null for \(t) at \(path(ctx.codingPath))"
+        case .dataCorrupted(let ctx): return "invalid JSON: \(ctx.debugDescription)"
+        @unknown default: return String(describing: e)
+        }
+    }
+}
+
+enum PropsError: Error, CustomStringConvertible {
+    case unreadable(URL, String)
+    case decode(URL, String)
+    var description: String {
+        switch self {
+        case .unreadable(let u, let why): return "cannot read props \(u.path): \(why)"
+        case .decode(let u, let why):     return "props decode failed for \(u.path): \(why)"
         }
     }
 }
@@ -75,6 +207,10 @@ struct CLIArgs {
     var scale: CGFloat = 1.0
     var out: String = "out/render.mp4"
     var audio: String? = nil
+    var at: Double = 0          // `frame` subcommand: timestamp
+    var rangeStart: Double? = nil
+    var rangeEnd: Double? = nil
+    var props: String? = nil
 }
 
 func parseArgs(_ argv: [String]) -> CLIArgs {
@@ -117,6 +253,12 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
         case "--scale":    args.scale = CGFloat(Double(v) ?? Double(args.scale)); i += 2
         case "--out":      args.out = v; i += 2
         case "--audio":    args.audio = v; i += 2
+        case "--at":       args.at = Double(v) ?? 0; i += 2
+        case "--props":    args.props = v; i += 2
+        case "--range":
+            let parts = v.split(separator: ":").compactMap { Double($0) }
+            if parts.count == 2 { args.rangeStart = parts[0]; args.rangeEnd = parts[1] }
+            i += 2
         default:           i += 1
         }
     }
@@ -129,6 +271,8 @@ func printUsage() {
 
     USAGE:
       swift-render render <Scene> [opts]    Render a scene to MP4
+      swift-render frame <Scene> --at <t>   Render one frame to PNG (fast preview)
+      swift-render props <Scene>            Print a scene's default props as JSON
       swift-render list                     List available scenes
       swift-render --help                   Show this help
 
@@ -141,6 +285,9 @@ func printUsage() {
       --scale <n>              Display scale (default 1.0)
       --out <path>             Output mp4 path (default out/render.mp4)
       --audio <path>           Optional audio file to mux into the output
+      --range <a:b>            Render only seconds a..b (audio mux skipped)
+      --at <t>                 Frame timestamp for the `frame` subcommand
+      --props <file.json>      JSON props for parameterized scenes
 
     EXAMPLES:
       swift-render render LogoReveal --out out/hero.mp4
@@ -156,6 +303,7 @@ func printUsage() {
 @MainActor
 func run() async throws {
     registerBundledFonts()
+    checkShaderFreshness()
     let args = parseArgs(CommandLine.arguments)
 
     switch args.subcommand {
@@ -169,7 +317,7 @@ func run() async throws {
     case "--help", "-h":
         printUsage()
         return
-    case "render":
+    case "render", "frame", "props":
         break
     default:
         fputs("Unknown subcommand: \(args.subcommand)\n", stderr)
@@ -183,10 +331,20 @@ func run() async throws {
         exit(1)
     }
 
-    let outURL = URL(fileURLWithPath: args.out)
+    if args.subcommand == "props" {
+        if let template = runner.propsTemplate {
+            print(template())
+        } else {
+            fputs("\(args.sceneName) takes no props\n", stderr)
+            exit(1)
+        }
+        return
+    }
+
     let duration = args.duration ?? runner.defaultDuration
     let size = args.size ?? args.aspect.size
     let audioURL = args.audio.map { URL(fileURLWithPath: $0) }
+    let propsURL = args.props.map { URL(fileURLWithPath: $0) }
 
     let config = Recorder.Config(
         fps: args.fps,
@@ -195,12 +353,23 @@ func run() async throws {
     )
     let recorder = Recorder(config: config)
 
-    let totalFrames = Int((duration * Double(args.fps)).rounded())
-    print("[swift-render] scene=\(args.sceneName) duration=\(duration)s fps=\(args.fps) size=\(Int(size.width))×\(Int(size.height)) frames=\(totalFrames) → \(args.out)")
+    if args.subcommand == "frame" {
+        let outPath = args.out == "out/render.mp4" ? "out/frame.png" : args.out
+        let outURL = URL(fileURLWithPath: outPath)
+        try runner.frame(recorder, outURL, args.at, duration, audioURL, propsURL)
+        print("[swift-render] frame t=\(args.at)s → \(outPath)")
+        return
+    }
+
+    let outURL = URL(fileURLWithPath: args.out)
+    let startTime = args.rangeStart ?? 0
+    let endTime = args.rangeEnd ?? duration
+    let totalFrames = Int(((endTime - startTime) * Double(args.fps)).rounded())
+    print("[swift-render] scene=\(args.sceneName) duration=\(duration)s range=\(startTime)-\(endTime)s fps=\(args.fps) size=\(Int(size.width))×\(Int(size.height)) frames=\(totalFrames) → \(args.out)")
     if let audioURL = audioURL { print("[swift-render] audio: \(audioURL.path)") }
 
     let start = Date()
-    try await runner.render(recorder, outURL, duration, audioURL)
+    try await runner.render(recorder, outURL, endTime, startTime, args.rangeStart == nil ? audioURL : nil, propsURL)
     let elapsed = Date().timeIntervalSince(start)
     print(String(format: "[swift-render] done in %.1fs → %@", elapsed, args.out))
 }
