@@ -1,58 +1,9 @@
 import AVFoundation
-import CoreText
 import Foundation
+import SwiftRender
 import SwiftUI
 
-// MARK: - Font registration
-
-@MainActor
-func registerBundledFonts() {
-    let bundle = Bundle.module
-    let names = ["Inter", "InterVariable"]
-    for name in names {
-        for ext in ["ttc", "ttf"] {
-            if let url = bundle.url(forResource: name, withExtension: ext) {
-                var error: Unmanaged<CFError>?
-                if !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) {
-                    if let e = error?.takeRetainedValue() {
-                        let desc = CFErrorCopyDescription(e) as String
-                        if !desc.contains("already") {
-                            fputs("font register fail \(name).\(ext): \(desc)\n", stderr)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Shader freshness
-
-/// default.metallib is pre-compiled and checked in; editing a .metal file does
-/// nothing until it is rebuilt. Catch that silently-stale state loudly.
-func checkShaderFreshness() {
-    let bundle = Bundle.module
-    let fm = FileManager.default
-    guard let lib = bundle.url(forResource: "default", withExtension: "metallib"),
-          let libDate = (try? fm.attributesOfItem(atPath: lib.path))?[.modificationDate] as? Date
-    else { return }
-    let stale = (bundle.urls(forResourcesWithExtension: "metal", subdirectory: nil) ?? [])
-        .filter { url in
-            ((try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date)
-                .map { $0 > libDate } ?? false
-        }
-        .map(\.lastPathComponent)
-    if !stale.isEmpty {
-        fputs("""
-        !!! ────────────────────────────────────────────────────────────────
-        !!! STALE SHADERS: \(stale.joined(separator: ", "))
-        !!!   are newer than default.metallib — your .metal edits are NOT live.
-        !!!   Fix:  tools/build_shaders.sh && swift build
-        !!! ────────────────────────────────────────────────────────────────
-
-        """, stderr)
-    }
-}
+let swiftRenderVersion = "0.5.0"
 
 // MARK: - Scene registry
 
@@ -62,6 +13,7 @@ let sceneRunners: [String: SceneRunner] = [
     "Kinetic":          SceneRunner(Kinetic.self),
     "JustRenderIt":     SceneRunner(JustRenderIt.self),
     "AudioBars":        SceneRunner(AudioBars.self),
+    "TimelineDemo":     SceneRunner(TimelineDemo.self),
     "CardStack":        SceneRunner(CardStack.self),
     "ParticleField":    SceneRunner(ParticleField.self),
     "ShaderShowcase":   SceneRunner(ShaderShowcase.self),
@@ -93,12 +45,12 @@ struct SceneRunner {
         defaultDuration = S.defaultDuration
         propsTemplate = nil
         render = { recorder, out, dur, start, audio, _ in
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur)
             }
         }
         frame = { recorder, out, t, dur, _, _ in
-            try recorder.renderPNG(at: t, to: out) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
                 S.body(at: tt, duration: dur)
             }
         }
@@ -109,13 +61,13 @@ struct SceneRunner {
         propsTemplate = nil
         render = { recorder, out, dur, start, audio, _ in
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur, audio: track)
             }
         }
         frame = { recorder, out, t, dur, audio, _ in
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try recorder.renderPNG(at: t, to: out) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
                 S.body(at: tt, duration: dur, audio: track)
             }
         }
@@ -126,13 +78,13 @@ struct SceneRunner {
         propsTemplate = { Self.templateJSON(S.defaultProps) }
         render = { recorder, out, dur, start, audio, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur, props: props)
             }
         }
         frame = { recorder, out, t, dur, _, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            try recorder.renderPNG(at: t, to: out) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
                 S.body(at: tt, duration: dur, props: props)
             }
         }
@@ -144,14 +96,14 @@ struct SceneRunner {
         render = { recorder, out, dur, start, audio, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio) { t in
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: audio, postFX: !S.ownsPostFX) { t in
                 S.body(at: t, duration: dur, props: props, audio: track)
             }
         }
         frame = { recorder, out, t, dur, audio, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let track = try audio.map { try AudioAnalyzer.analyze(url: $0, fps: recorder.config.fps) } ?? .silent
-            try recorder.renderPNG(at: t, to: out) { tt in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX) { tt in
                 S.body(at: tt, duration: dur, props: props, audio: track)
             }
         }
@@ -211,6 +163,7 @@ struct CLIArgs {
     var rangeStart: Double? = nil
     var rangeEnd: Double? = nil
     var props: String? = nil
+    var postFX: Bool = true
 }
 
 func parseArgs(_ argv: [String]) -> CLIArgs {
@@ -222,7 +175,7 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
     let sub = argv[1]
     var args = CLIArgs(subcommand: sub)
 
-    if sub == "list" || sub == "--help" || sub == "-h" {
+    if sub == "list" || sub == "--help" || sub == "-h" || sub == "--version" {
         return args
     }
 
@@ -255,11 +208,15 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
         case "--audio":    args.audio = v; i += 2
         case "--at":       args.at = Double(v) ?? 0; i += 2
         case "--props":    args.props = v; i += 2
+        case "--no-postfx": args.postFX = false; i += 1
         case "--range":
             let parts = v.split(separator: ":").compactMap { Double($0) }
             if parts.count == 2 { args.rangeStart = parts[0]; args.rangeEnd = parts[1] }
             i += 2
-        default:           i += 1
+        default:
+            fputs("Unknown option: \(k)\n\n", stderr)
+            printUsage()
+            exit(64)
         }
     }
     return args
@@ -275,6 +232,7 @@ func printUsage() {
       swift-render props <Scene>            Print a scene's default props as JSON
       swift-render list                     List available scenes
       swift-render --help                   Show this help
+      swift-render --version                Print version
 
     SCENE OPTIONS:
       --duration <seconds>     Override scene's default duration
@@ -288,6 +246,7 @@ func printUsage() {
       --range <a:b>            Render only seconds a..b (audio mux skipped)
       --at <t>                 Frame timestamp for the `frame` subcommand
       --props <file.json>      JSON props for parameterized scenes
+      --no-postfx              Disable the global grain+vignette pass
 
     EXAMPLES:
       swift-render render LogoReveal --out out/hero.mp4
@@ -316,6 +275,9 @@ func run() async throws {
         return
     case "--help", "-h":
         printUsage()
+        return
+    case "--version":
+        print(swiftRenderVersion)
         return
     case "render", "frame", "props":
         break
@@ -349,7 +311,8 @@ func run() async throws {
     let config = Recorder.Config(
         fps: args.fps,
         size: size,
-        scale: args.scale
+        scale: args.scale,
+        postFX: args.postFX
     )
     let recorder = Recorder(config: config)
 
@@ -362,6 +325,9 @@ func run() async throws {
     }
 
     let outURL = URL(fileURLWithPath: args.out)
+    if args.rangeStart != nil && args.audio != nil {
+        fputs("[swift-render] note: --range renders skip the audio mux (partial-clip sync); render the full scene to mux audio\n", stderr)
+    }
     let startTime = args.rangeStart ?? 0
     let endTime = args.rangeEnd ?? duration
     let totalFrames = Int(((endTime - startTime) * Double(args.fps)).rounded())

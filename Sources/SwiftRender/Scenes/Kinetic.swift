@@ -13,6 +13,7 @@ import SwiftUI
 /// it survives inverted frames). Every frame is a pure function of `t`.
 public struct Kinetic: RenderScene {
     public static let defaultDuration: Double = 12.0
+    public static var ownsPostFX: Bool { true }
 
     // Movement boundaries (seconds)
     static let segB = 2.6

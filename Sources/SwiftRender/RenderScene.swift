@@ -5,7 +5,14 @@ import SwiftUI
 public protocol RenderScene {
     associatedtype Body: View
     static var defaultDuration: Double { get }
+    /// Return true when the scene applies its own `PostFX` modifier; the
+    /// recorder then skips its global pass instead of doubling grain/vignette.
+    static var ownsPostFX: Bool { get }
     @MainActor static func body(at t: Double, duration: Double) -> Body
+}
+
+public extension RenderScene {
+    static var ownsPostFX: Bool { false }
 }
 
 /// Aspect-ratio presets.

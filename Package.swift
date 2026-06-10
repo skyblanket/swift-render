@@ -5,16 +5,25 @@ let package = Package(
     name: "SwiftRender",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "swift-render", targets: ["SwiftRender"]),
+        .library(name: "SwiftRender", targets: ["SwiftRender"]),
+        .executable(name: "swift-render", targets: ["SwiftRenderCLI"]),
     ],
     targets: [
-        .executableTarget(
+        .target(
             name: "SwiftRender",
             dependencies: [],
             resources: [
                 .process("Resources"),
                 .process("Shaders"),
             ]
+        ),
+        .executableTarget(
+            name: "SwiftRenderCLI",
+            dependencies: ["SwiftRender"]
+        ),
+        .testTarget(
+            name: "SwiftRenderTests",
+            dependencies: ["SwiftRender"]
         ),
     ]
 )

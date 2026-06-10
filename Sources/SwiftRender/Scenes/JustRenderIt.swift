@@ -16,6 +16,7 @@ import SwiftUI
 ///  13.40–15.00 outro — swift-render. + repo URL, fade to black
 public struct JustRenderIt: RenderScene {
     public static let defaultDuration: Double = 15.0
+    public static var ownsPostFX: Bool { true }
 
     static let volt = Color(red: 0.78, green: 1.0, blue: 0.10)
 

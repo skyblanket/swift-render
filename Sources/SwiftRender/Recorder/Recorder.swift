@@ -16,19 +16,23 @@ public final class Recorder {
         public var scale: CGFloat
         public var codec: AVVideoCodecType
         public var bitrate: Int?
+        /// Global grain+vignette pass. CLI --no-postfx sets this false.
+        public var postFX: Bool
 
         public init(
             fps: Int = 60,
             size: CGSize = CGSize(width: 1920, height: 1080),
             scale: CGFloat = 1.0,
             codec: AVVideoCodecType = .h264,
-            bitrate: Int? = nil
+            bitrate: Int? = nil,
+            postFX: Bool = true
         ) {
             self.fps = fps
             self.size = size
             self.scale = scale
             self.codec = codec
             self.bitrate = bitrate
+            self.postFX = postFX
         }
 
         public var defaultBitrate: Int {
@@ -54,8 +58,10 @@ public final class Recorder {
         duration: Double,
         startTime: Double = 0,
         audioURL: URL? = nil,
+        postFX: Bool = true,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) async throws {
+        let applyFX = config.postFX && postFX
         // Make sure parent dir exists, remove stale file
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
@@ -110,7 +116,7 @@ public final class Recorder {
                 content(t)
             }
             .frame(width: config.size.width, height: config.size.height)
-            .modifier(PostFX(time: t))
+            .modifier(PostFX(time: t, enabled: applyFX))
 
             let renderer = ImageRenderer(content: rootView)
             renderer.scale = scaleCG
@@ -149,6 +155,7 @@ public final class Recorder {
     public func renderPNG<V: View>(
         at t: Double,
         to url: URL,
+        postFX: Bool = true,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) throws {
         try FileManager.default.createDirectory(
@@ -157,7 +164,7 @@ public final class Recorder {
         )
         let rootView = ZStack { content(t) }
             .frame(width: config.size.width, height: config.size.height)
-            .modifier(PostFX(time: t))
+            .modifier(PostFX(time: t, enabled: config.postFX && postFX))
         let renderer = ImageRenderer(content: rootView)
         renderer.scale = config.scale
         guard let nsImage = renderer.nsImage,

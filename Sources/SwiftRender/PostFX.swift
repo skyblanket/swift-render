@@ -8,11 +8,20 @@ public struct PostFX: ViewModifier {
     var time: Double
     var grainAmount: Double = 0.10
     var vignetteAmount: Double = 0.40
+    var enabled: Bool = true
 
     public func body(content: Content) -> some View {
         ZStack {
             content
 
+            if enabled {
+                vignetteAndGrain
+            }
+        }
+    }
+
+    @ViewBuilder private var vignetteAndGrain: some View {
+        Group {
             // Vignette
             RadialGradient(
                 colors: [.clear, Color.black.opacity(vignetteAmount)],
