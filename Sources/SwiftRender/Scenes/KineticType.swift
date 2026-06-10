@@ -203,9 +203,10 @@ public struct KineticType: RenderScene {
         ZStack {
             Color.white.opacity(Ease.clip(t, 1.5, 1.7)).ignoresSafeArea()
             Text("THROUGH")
-                .font(.system(size: 120, weight: .black)).fontWidth(.condensed)
+                .font(.system(size: 150, weight: .black)).fontWidth(.condensed)
                 .foregroundStyle(.black)
-                .opacity(Ease.clip(t, 1.7, 1.9))
+                .scaleEffect(1.3 - 0.3 * Ease.easeOut(Ease.clip(t, 1.55, 1.75)))
+                .opacity(Ease.clip(t, 1.55, 1.65))
             Text("ZOOM")
                 .font(.system(size: 300, weight: .black)).fontWidth(.condensed)
                 .foregroundStyle(.white)
