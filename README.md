@@ -40,6 +40,7 @@ Remotion is great — and it's React rendered by **headless Chromium**, frame by
 | Audio-reactive | Built-in offline FFT → `audio.band(.bass, at: t)` | `useAudioData` + visualization utils |
 | Data-driven renders | `--props file.json` (Codable) | `inputProps` ✓ |
 | Sequencing | `Timeline { Clip }` result builder | `<Sequence>` / `<Series>` ✓ |
+| License | **MIT — free for everyone** | source-available; free ≤3-person companies, then $25/dev/mo ($100/mo min) |
 | Install weight | Swift package, **zero dependencies** | node_modules + a Chromium download |
 | Toolchain | `swift run`, done | npm, bundler, browser binaries |
 | Runs on | macOS 14+ | anywhere Node runs ✓ |
