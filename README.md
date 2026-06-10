@@ -143,11 +143,25 @@ https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.m
 
 (If a `.metal` file is newer than the compiled metallib, the CLI warns you loudly — no silently-stale shaders.)
 
+## Twelve aesthetics, one engine
+
+Swiss, neo-brutalist, Bauhaus, synthwave, glassmorphism, terminal, art deco,
+vaporwave, blueprint, stop-motion zine, fluid aurora, kinetic type — each one
+~40 lines of Swift, chained by a live card-zoom transition, closing on all
+twelve running at once:
+
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/style-reel.mp4
+
+```bash
+swift run swift-render render StyleReel --audio out/reel.wav
+```
+
 ## More demos
 
 | | |
 |---|---|
-| `LaunchFilm` — the 55s launch film: every feature, one file | `swift run swift-render render LaunchFilm --audio out/launch.wav` |
+| `LaunchFilm2` — the launch film: every feature, one file | `swift run swift-render render LaunchFilm2 --audio out/launch.wav` |
+| `StyleReel` — 12 aesthetics with card-zoom transitions | `swift run swift-render render StyleReel --audio out/reel.wav` |
 | `Kinetic` — 12s kinetic-typography reel: word slams, marquee, galaxy iris, odometer ring | `swift run swift-render render Kinetic` |
 | `JustRenderIt` — the hero ad, beat-synced soundtrack included | `swift run swift-render render JustRenderIt --audio audio/jri.m4a` |
 | `AudioBars` — audio-reactive + props reference scene | `swift run swift-render render AudioBars --audio audio/jri.m4a` |
