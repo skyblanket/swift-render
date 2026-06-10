@@ -16,7 +16,7 @@
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/launch-film.mp4
 
-> **The 55-second launch film above is one Swift file** ([`LaunchFilm.swift`](Sources/SwiftRender/Scenes/LaunchFilm.swift)) — Timeline sequencing, springs, four live Metal shaders, 3D, an audio-reactive segment, and a synthesized soundtrack. Written by an AI, **3,300 frames rendered in 26 seconds** on a MacBook. Click ▶. Sound on.
+> **The 55-second launch film above is one Swift file** ([`LaunchFilm.swift`](Sources/SwiftRender/Scenes/LaunchFilm.swift)) — Timeline sequencing, springs, four live Metal shaders, 3D, an audio-reactive segment, and a synthesized soundtrack. Written by an AI, **3,450 frames rendered in 29 seconds** on a MacBook. Click ▶. Sound on.
 
 ```bash
 git clone https://github.com/skyblanket/swift-render && cd swift-render
@@ -136,7 +136,7 @@ Rectangle().fill(.black).colorEffect(
 )
 ```
 
-Thirteen ship in two cookbooks — `rimGlow`, `foilHolographic`, `plasmaField`, `chromaticAberration`, `audioBars`, `caustics`, `liquidMetal`, `kaleidoscope`, `truchet`, `galaxy`, `neonGrid`, `smokeFlow`, `warpTunnel`:
+Eighteen ship in three packs — `rimGlow`, `foilHolographic`, `plasmaField`, `chromaticAberration`, `audioBars`, `caustics`, `liquidMetal`, `kaleidoscope`, `truchet`, `galaxy`, `neonGrid`, `smokeFlow`, `warpTunnel` — plus the studio pack from the launch film: `metaballs` (raymarched chrome), `inkFlow`, `interference`, `voronoiInk`, `monoTunnel`:
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/shader-gallery.mp4
 
