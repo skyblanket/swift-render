@@ -3,38 +3,44 @@
 The film: `swift run swift-render render LaunchFilm --audio out/launch.wav --out out/launch-film.mp4`
 (regenerate the soundtrack first if needed: `python3 tools/make_launch_audio.py out/launch.wav`)
 
-## Voiceover script (optional TTS pass)
+## Voiceover (generated — out/launch-film-vo.mp4)
 
-Timed to the chapters. Keep delivery dry and confident; let the drops at 4.2s
-and 43.2s breathe — no VO over them. Target ≈140 wpm.
+VO is synthesized on sushi via fish-speech s2-pro and mixed by `tools/mix_vo.py`
+(places each line at its timecode, ducks music to 40% under voice).
 
-| start | end | line |
-|---|---|---|
-| 0.5 | 2.8 | "Every video framework you know… renders a web browser." |
-| 3.1 | 4.0 | "Ours doesn't." |
-| 4.6 | 6.8 | *(beat — title drop, no VO)* |
-| 7.5 | 10.4 | "swift-render. A scene is one pure function of time. That's the entire API." |
-| 11.2 | 14.0 | "Springs solved in closed form — scrub any frame, same pixels, every run." |
-| 14.8 | 17.6 | "Sequence clips on a timeline. Local time, automatic transitions, zero math." |
-| 18.4 | 21.2 | "Real Metal shaders on the GPU. Thirteen ship in the box." |
-| 22.0 | 24.8 | "3D perspective, starfields, raymarched tunnels — no game engine required." |
-| 25.8 | 28.4 | "And it hears its own soundtrack. FFT-analyzed once. Still deterministic." |
-| 29.4 | 32.0 | "Nine hundred frames. Native render: six seconds. Chromium is still warming up." |
-| 33.0 | 35.6 | "Byte-identical re-renders — asserted in CI, not promised in a README." |
-| 36.6 | 39.2 | "This film is one Swift file. An AI wrote it — frames and soundtrack." |
-| 39.8 | 42.8 | "No Chromium. No node modules. No keyframes. Just Swift." |
-| 43.2 | 45.0 | *(drop — no VO)* |
-| 45.6 | 48.4 | "Just render it." |
-| 49.6 | 53.5 | "swift-render. MIT licensed. On GitHub today." |
-
-### Muxing your VO over the music
-
+Pipeline:
 ```bash
-# duck music ~6dB under the voice, keep the drops loud
-ffmpeg -i out/launch-film.mp4 -i vo.wav -filter_complex \
-  "[0:a]volume=0.75[m];[m][1:a]amix=inputs=2:duration=first:dropout_transition=2[a]" \
-  -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k out/launch-film-vo.mp4
+# on sushi: start the API, generate lines from a TSV (id <TAB> start <TAB> text)
+ssh sky@sushi 'cd ~/fish-speech && nohup .venv/bin/python tools/api_server.py \
+  --listen 0.0.0.0:8080 --llama-checkpoint-path checkpoints/s2-pro \
+  --decoder-checkpoint-path checkpoints/s2-pro/codec.pth \
+  --decoder-config-name modded_dac_vq &'
+ssh sky@sushi 'bash /tmp/vo_gen.sh'            # curls /v1/tts per line
+scp 'sky@sushi:/tmp/vo/*.wav' out/vo_raw/      # fetch
+# trim silence, 44.1k mono, then mix + mux:
+python3 tools/mix_vo.py out/launch.wav lines.tsv out/vo out/launch-vo-mix.wav
+ffmpeg -i out/launch-film.mp4 -i out/launch-vo-mix.wav -map 0:v -map 1:a \
+  -c:v copy -c:a aac -b:a 192k out/launch-film-vo.mp4
 ```
+
+Final lines (fish pace ≈ 2.9 words/sec — keep lines ≤ slot × 2.8 words):
+
+| start | line |
+|---|---|
+| 0.5 | "Your video framework runs a browser." |
+| 3.05 | "Ours doesn't." |
+| 7.6 | "Real Metal shaders… raymarched live, on the GPU. Ink. Interference. Voronoi. Every pixel computed fresh, every frame." |
+| 17.2 | "One pure function of time. The whole API." |
+| 20.8 | "Springs, solved in closed form." |
+| 23.6 | "Timeline clips. Local time. Zero math." |
+| 26.8 | "Real 3D. No game engine." |
+| 30.0 | "It hears its own soundtrack." |
+| 33.2 | "Nine hundred frames, in six seconds." |
+| 36.5 | "Byte identical. Asserted in CI." |
+| 39.6 | "One Swift file. Written by an AI." |
+| 42.8 | "No browser. No keyframes. Just Swift." |
+| 48.3 | "Just render it." |
+| 51.9 | "Swift render. MIT licensed. On GitHub, today." |
 
 ## Post copy
 
