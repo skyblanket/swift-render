@@ -49,31 +49,77 @@ Final lines (fish pace ≈ 2.9 words/sec — keep lines ≤ slot × 2.8 words):
 | 48.3 | "Just render it." |
 | 51.9 | "Swift render. MIT licensed. On GitHub, today." |
 
-## Post copy
+## Post copy — the "Fable 5 took it to prod" angle
 
-**X/Twitter (attach out/launch-film.mp4):**
+**X/Twitter — tweet 1 (attach out/launch-film-vo.mp4 natively, never a link):**
 
-> Remotion renders React in a headless browser at ~20fps.
-> I render SwiftUI + real Metal shaders natively at ~130fps.
+> I had a half-finished SwiftUI→MP4 rendering framework sitting in a repo.
 >
-> This launch film is ONE Swift file — cuts, 3D, soundtrack, all of it.
-> Written by an AI. Rendered in 26 seconds on a laptop.
+> Today, Fable 5 took it to full production. v0.5.0, tagged, CI green. Largely by itself.
 >
-> swift-render. MIT. Out today.
-> github.com/skyblanket/swift-render
-
-**HN (Show HN):**
-
-> Title: Show HN: Swift-render – programmatic motion graphics in Swift (a native Remotion alternative)
+> This launch film? ONE Swift file. Fable wrote the film, synthesized the
+> soundtrack from pure math, and cloned the voiceover on my own GPU box.
 >
-> Body: Every frame is a pure function of `t: Double` — no hooks, no state, no
+> Just render it. 🧵
+
+**Tweet 2 (reply, attach a screenshot of LaunchFilm.swift):**
+
+> Receipts — one day, 12 commits, +4,000 lines:
+>
+> · Timeline/sequencing API (Remotion's <Sequence>, but pure functions of t)
+> · analytic springs · FFT audio-reactive scenes · JSON props
+> · found a flickering edge glitch by *inspecting rendered frames*, traced it
+>   to the grain shader, fixed it
+> · 24 tests incl. byte-identical determinism — asserted in CI
+
+**Tweet 3 (reply):**
+
+> SwiftUI + real Metal shaders, rendered natively at ~130fps.
+> No headless Chromium. No node_modules. No keyframes.
+>
+> MIT. Open source. https://github.com/skyblanket/swift-render
+
+**HN (Show HN) — keep tool-first, AI as the concrete supporting fact:**
+
+> Title: Show HN: Swift-render — motion graphics in Swift; an AI took it from prototype to v0.5
+>
+> Body: Every scene is a pure function of `t: Double` — no hooks, no state, no
 > browser. SwiftUI + real Metal shaders render at ~100–140fps at 1080p on Apple
-> silicon, and determinism is enforced with a byte-identical re-render test in CI.
-> The launch video in the README is a single Swift file in the repo (LaunchFilm.swift),
-> soundtrack synthesized by a 200-line Python script, written end-to-end by an AI
-> agent against the API. Honest caveats: macOS-only by design, no web player, no
-> render farm — if you need those, Remotion is still the right tool. Feedback wanted
-> on the Timeline/spring APIs.
+> silicon, and determinism is enforced by a byte-identical re-render test in CI.
+>
+> The interesting part: the API shape was designed to be LLM-writable, and that
+> got tested for real — most of v0.5.0 (the Timeline API, springs, the
+> audio-reactive FFT pipeline, the test suite, and the launch film in the README
+> — including its synthesized soundtrack and TTS voiceover) was built by an AI
+> agent (Claude, Fable 5) working against that API in a day. `t: Double` in,
+> pixels out turns out to be something a model almost never gets wrong.
+>
+> Honest caveats: macOS-only by design, no web player, no render farm — if you
+> need those, Remotion is the right tool. Feedback wanted on the Timeline and
+> spring APIs.
+
+**LinkedIn:**
+
+> We open-sourced swift-render — the motion-graphics engine behind our product
+> videos. SwiftUI scenes + real Metal shaders → MP4, ~130fps, fully deterministic.
+>
+> The launch film attached was made by an AI agent in one Swift file: the cuts,
+> the 3D, the soundtrack (synthesized from math), the voiceover (cloned on our
+> own GPUs). One day from prototype to a tagged, CI-green release.
+>
+> MIT licensed. github.com/skyblanket/swift-render
+
+**Reddit r/swift / r/SwiftUI (less salesy, community-toned):**
+
+> Title: I open-sourced swift-render: SwiftUI scenes + Metal shaders → MP4
+> (scenes are pure functions of t — and an AI agent built most of v0.5)
+>
+> Body: been building this as the native answer to Remotion. Every scene is
+> `body(at t: Double)` — no @State, no timers, so renders are deterministic
+> (there's a byte-identical test in CI). Renders ~130fps at 1080p on M-series.
+> The launch video in the README is one Swift file in the repo, soundtrack and
+> all. Would love feedback on the Timeline/spring APIs from people who do
+> motion design in SwiftUI.
 
 ## Asset checklist
 
