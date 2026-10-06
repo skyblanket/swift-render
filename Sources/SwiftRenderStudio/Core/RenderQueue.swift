@@ -210,6 +210,31 @@ final class RenderQueue {
         return url
     }
 
+    /// `.<name>.<tag>.partial.<ext>` beside the destination (hidden; the extension stays
+    /// last so ffmpeg picks the right muxer).
+    static func partialURL(for output: URL, tag: String) -> URL {
+        let ext = output.pathExtension
+        let base = output.deletingPathExtension().lastPathComponent
+        return output.deletingLastPathComponent()
+            .appendingPathComponent(".\(base).\(tag).partial" + (ext.isEmpty ? "" : ".\(ext)"))
+    }
+
+    /// `url`, or `name-2.ext`, `name-3.ext`… — the first that isn't on disk or in `taken`.
+    static func unused(_ url: URL, taken: Set<String> = []) -> URL {
+        var candidate = url
+        var n = 2
+        let dir = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        while taken.contains(candidate.path) || FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = dir.appendingPathComponent("\(base)-\(n)" + (ext.isEmpty ? "" : ".\(ext)"))
+            n += 1
+        }
+        return candidate
+    }
+
+    /// Outputs of jobs not finished yet (a second job must not target the same file).
+    var pendingOutputs: Set<String> { Set(jobs.filter { !$0.isDone }.map(\.output.path)) }
+
     func defaultOutput(scene: String, preset: RenderPreset) -> URL {
         Self.defaultOutput(project: project, scene: scene, preset: preset,
                            taken: Set(jobs.filter { !$0.isDone }.map(\.output.path)))
@@ -261,14 +286,15 @@ final class RenderQueue {
     }
 
     /// Window closing / app quitting: stop the export (a render child would otherwise
-    /// outlive Studio and keep encoding) and delete its partial output.
+    /// outlive Studio and keep encoding) and wait for it to clean up its partial file.
+    /// The destination itself is never touched: a job only writes it on success.
     func shutdown() async {
         for i in jobs.indices where jobs[i].state == .queued { jobs[i].state = .cancelled }
         for (id, r) in running {
             r.cancelled = true
             r.task?.cancel()
             await r.child?.terminate()
-            if let out = job(id)?.output { try? FileManager.default.removeItem(at: out) }
+            await r.task?.value
             update(id) { $0.state = .cancelled }
         }
     }
@@ -309,15 +335,29 @@ final class RenderQueue {
         let scratch = project.cacheDir.appendingPathComponent("renders", isDirectory: true)
         let tag = id.uuidString.prefix(8)
         var temps: [URL] = []
+        // Everything is written to `partial` (next to the destination, so the final move is a
+        // rename on the same volume) and moved into place only on success: a failed or
+        // cancelled job — build error, missing ffmpeg, Stop — never touches an existing file
+        // the user chose to replace.
+        let partial = Self.partialURL(for: job.output, tag: String(tag))
+        temps.append(partial)
         func finish(_ state: RenderJob.State) {
-            temps.forEach { try? fm.removeItem(at: $0) }
-            if case .finished = state {
-                let size = (try? fm.attributesOfItem(atPath: job.output.path)[.size] as? NSNumber)?.int64Value
-                update(id) { $0.bytes = size }
-                outputsVersion += 1
-            } else {
-                try? fm.removeItem(at: job.output)       // partial file
+            var state = state
+            if case .finished = state, !r.cancelled {
+                do {
+                    if fm.fileExists(atPath: job.output.path) {
+                        _ = try fm.replaceItemAt(job.output, withItemAt: partial)
+                    } else {
+                        try fm.moveItem(at: partial, to: job.output)
+                    }
+                    let size = (try? fm.attributesOfItem(atPath: job.output.path)[.size] as? NSNumber)?.int64Value
+                    update(id) { $0.bytes = size }
+                    outputsVersion += 1
+                } catch {
+                    state = .failed("Couldn't save \(job.output.lastPathComponent): \(error.localizedDescription)")
+                }
             }
+            temps.forEach { try? fm.removeItem(at: $0) }
             update(id) { $0.state = r.cancelled ? .cancelled : state }
         }
 
@@ -370,8 +410,8 @@ final class RenderQueue {
 
         // 3. Render. GIFs and scored ranges render to scratch first.
         let muxAudio = job.range != nil && job.hasSoundtrack && !job.preset.isGIF && ffmpeg != nil
-        let videoOut = job.preset.isGIF || muxAudio ? scratch.appendingPathComponent("\(tag)-video.mp4") : job.output
-        if videoOut != job.output { temps.append(videoOut) }
+        let videoOut = job.preset.isGIF || muxAudio ? scratch.appendingPathComponent("\(tag)-video.mp4") : partial
+        if videoOut != partial { temps.append(videoOut) }
         var args = job.preset.args(scene: job.scene, out: videoOut)
         if let range = job.range {
             args += ["--range", String(format: "%.4f:%.4f", range.lowerBound, range.upperBound)]
@@ -388,7 +428,7 @@ final class RenderQueue {
         // 4. Finish.
         if let ffmpeg, job.preset.isGIF {
             update(id) { $0.state = .finishing("Encoding GIF…") }
-            let s = await runChild(id, r, ffmpeg, RenderPreset.gifArgs(input: videoOut, output: job.output))
+            let s = await runChild(id, r, ffmpeg, RenderPreset.gifArgs(input: videoOut, output: partial))
             if r.cancelled { finish(.cancelled); return }
             guard s == 0 else { finish(.failed(failureLine(id, fallback: "ffmpeg exited \(s)"))); return }
         } else if let ffmpeg, muxAudio, let range = job.range {
@@ -398,14 +438,14 @@ final class RenderQueue {
             var a = await runChild(id, r, exe, ["audio", job.scene, "--out", wav.path] + extra)
             if a == 0, !r.cancelled {
                 a = await runChild(id, r, ffmpeg, RenderPreset.muxArgs(video: videoOut, audio: wav, start: range.lowerBound,
-                                                                       end: range.upperBound, output: job.output))
+                                                                       end: range.upperBound, output: partial))
             }
             if r.cancelled { finish(.cancelled); return }
             if a != 0 {
                 // The picture is fine; ship it silent rather than lose the export.
                 appendLog(id, "audio mux failed; kept the silent render")
-                try? fm.removeItem(at: job.output)
-                try? fm.moveItem(at: videoOut, to: job.output)
+                try? fm.removeItem(at: partial)
+                try? fm.moveItem(at: videoOut, to: partial)
             }
         }
         finish(.finished(seconds: Date().timeIntervalSince(self.job(id)?.startedAt ?? Date())))
@@ -467,7 +507,7 @@ final class RenderQueue {
         _ = outputsVersion
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: project.rendersDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        return files.filter { ["mp4", "mov", "gif"].contains($0.pathExtension.lowercased()) }
+        return files.filter { ["mp4", "mov", "gif"].contains($0.pathExtension.lowercased()) && !$0.lastPathComponent.hasPrefix(".") }
             .sorted {
                 let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast

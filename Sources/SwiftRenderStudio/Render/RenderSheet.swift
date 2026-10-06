@@ -86,7 +86,9 @@ struct RenderSheet: View {
         .onChange(of: preset) { _, p in
             build = p.prefersRelease && !useRange ? .optimized : .currentDebug
             if let old = customOutput, old.pathExtension != p.fileExtension {
-                customOutput = old.deletingPathExtension().appendingPathExtension(p.fileExtension)
+                // The user agreed to replace `old`, not whatever already has the new extension.
+                customOutput = RenderQueue.unused(old.deletingPathExtension().appendingPathExtension(p.fileExtension),
+                                                  taken: model.renders.pendingOutputs)
             }
             // A too-long scene with In/Out set: App Store presets need the range.
             if p.durationLimit != nil, model.playback.inOut != nil,
