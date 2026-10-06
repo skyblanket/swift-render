@@ -1,165 +1,385 @@
+import AppKit
 import SwiftUI
 import SwiftRenderKit
 
 // MARK: - Timeline
 //
-// Header column + lane column. Every lane is one Canvas drawn from the viewport
-// ({start, pxPerSecond}); the playhead is a separate overlay; ScrollCatcher turns
-// scroll/pinch into pan/zoom. Ruler drag scrubs (coalesced by PlaybackEngine).
+// Header column + lanes column. The ruler is pinned on top, lanes scroll vertically
+// when they overflow, a thin scroller sits at the bottom. Every lane is its own view
+// and Canvas, reading only what it draws (a comment edit never redraws the
+// waveform); the playhead is the only 60 Hz view. One drag gesture and one hover
+// handler cover the whole column and resolve points through `TimelineLayout`.
 
 struct TimelineView: View {
     @Bindable var model: ProjectModel
-    static let headerWidth: CGFloat = 112
+    @State private var state = TimelineState()
+    static let headerWidth: CGFloat = 124
 
     var body: some View {
-        let info = model.info
-        let v = model.ui.viewport
-        let ruler = RulerLane(cached: model.playback.cachedRanges, inOut: model.playback.inOut,
-                              duration: model.playback.duration)
-        let clips = ClipsLane(clips: info?.clips ?? [], selectedID: model.ui.selectedClipID)
-        let captions = CaptionsLane(captions: info?.captions ?? [])
-        let score = ScoreLanes.renderers(info?.events ?? [])
-        let audio = WaveformLane(loudness: info?.loudness ?? [], rate: info?.loudnessRate ?? 50)
-        let notes = CommentsLane(comments: model.review.comments, selection: model.review.selection)
-
+        let layout = TimelineLayout(info: model.info)
         HStack(spacing: 0) {
-            // Headers.
-            VStack(alignment: .leading, spacing: 0) {
-                TimelineZoomControls(model: model)
-                    .frame(height: ruler.height)
-                Divider()
-                header(clips.title, height: clips.height, detail: clips.rows > 1 ? "\(clips.rows) rows" : nil)
-                if !(info?.captions.isEmpty ?? true) { header(captions.title, height: captions.height) }
-                ForEach(score, id: \.title) { header($0.title, height: $0.height, warn: $0.lanes.contains("fx")) }
-                header(audio.title, height: audio.height)
-                header(notes.title, height: notes.height, detail: model.review.openCount > 0 ? "\(model.review.openCount) open" : nil)
-                Spacer(minLength: 0)
-            }
-            .frame(width: Self.headerWidth)
-            .background(StudioStyle.laneAltBackground)
-
-            Divider()
-
-            // Lanes.
+            TimelineHeaderColumn(model: model, state: state, layout: layout)
+                .frame(width: Self.headerWidth)
+                .background(StudioStyle.laneAltBackground)
+            Rectangle().fill(Color.black.opacity(0.6)).frame(width: 1)
             GeometryReader { geo in
-                ZStack(alignment: .topLeading) {
-                    VStack(spacing: 0) {
-                        LaneCanvas(renderer: ruler, viewport: v)
-                            .background(Color.black.opacity(0.25))
-                            .gesture(scrubGesture)
-                        Divider()
-                        LaneCanvas(renderer: clips, viewport: v).laneBackground(0).gesture(laneTap(clips))
-                        if !(info?.captions.isEmpty ?? true) {
-                            LaneCanvas(renderer: captions, viewport: v).laneBackground(1).gesture(laneTap(captions))
-                        }
-                        ForEach(Array(score.enumerated()), id: \.element.title) { i, lane in
-                            LaneCanvas(renderer: lane, viewport: v).laneBackground(i).gesture(laneTap(lane))
-                        }
-                        LaneCanvas(renderer: audio, viewport: v).laneBackground(0).gesture(laneTap(audio))
-                        LaneCanvas(renderer: notes, viewport: v).laneBackground(1).gesture(laneTap(notes))
-                        Color.clear.frame(maxHeight: .infinity).contentShape(Rectangle()).gesture(laneTap(nil))
-                    }
-                    PlayheadOverlay(model: model)
-                    ScrollCatcher(
-                        onPan: { dx in model.ui.viewport.pan(by: dx) },
-                        onZoom: { f, x in model.ui.viewport.zoom(by: f, around: x) })
-                }
-                .onAppear { resize(geo.size.width) }
-                .onChange(of: geo.size.width) { _, w in resize(w) }
+                TimelineLanesColumn(model: model, state: state, layout: layout, size: geo.size)
             }
             .clipped()
         }
         .background(StudioStyle.laneBackground)
+        .overlay(ScrollCatcher(
+            lanesX: Self.headerWidth + 1,
+            onPan: { dx in model.ui.viewport.pan(by: dx) },
+            onZoom: { f, x in model.ui.viewport.zoom(by: f, around: x) },
+            onScrollY: { dy in
+                state.scrollY = min(layout.maxScroll(lanesHeight: state.lanesHeight), max(0, state.scrollY + dy))
+            },
+            canScrollY: { layout.maxScroll(lanesHeight: state.lanesHeight) > 0 }))
+        .onChange(of: model.info?.name) { _, _ in state.scrollY = 0 }
+        .onReceive(NotificationCenter.default.publisher(for: TimelineSnapshot.hoverNotification)) { n in
+            guard let p = n.object as? CGPoint else { return }
+            TimelineInput(model: model, state: state, layout: layout, lanesHeight: state.lanesHeight).hover(at: p)
+        }
+    }
+}
+
+/// Ruler, lanes, scroller and the overlays that span them.
+struct TimelineLanesColumn: View {
+    let model: ProjectModel
+    let state: TimelineState
+    let layout: TimelineLayout
+    let size: CGSize
+
+    var body: some View {
+        let lanesHeight = max(0, size.height - TimelineLayout.rulerHeight - TimelineLayout.scrollerHeight)
+        let input = TimelineInput(model: model, state: state, layout: layout, lanesHeight: lanesHeight)
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                LaneView(key: .ruler, model: model, state: state)
+                    .frame(height: TimelineLayout.rulerHeight)
+                    .background(Color.black.opacity(0.28))
+                    .overlay(alignment: .bottom) { Color.black.opacity(0.5).frame(height: 1) }
+                Color.clear
+                    .frame(height: lanesHeight)
+                    .overlay(alignment: .top) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(layout.slots.enumerated()), id: \.element.key) { i, slot in
+                                LaneView(key: slot.key, model: model, state: state)
+                                    .frame(height: slot.height)
+                                    .background(i % 2 == 0 ? StudioStyle.laneBackground : StudioStyle.laneAltBackground)
+                                    .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+                            }
+                        }
+                        .offset(y: -state.scrollY)
+                    }
+                    .overlay(alignment: .bottom) {
+                        // More lanes below: scroll vertically to reach them.
+                        if state.scrollY < layout.maxScroll(lanesHeight: lanesHeight) - 0.5 {
+                            LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+                                .frame(height: 12)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .clipped()
+                TimelineScroller(model: model)
+                    .frame(height: TimelineLayout.scrollerHeight)
+            }
+            InOutShade(model: model)
+                .frame(height: lanesHeight)
+                .offset(y: TimelineLayout.rulerHeight)
+            TimelineHoverOverlay(model: model, state: state, layout: layout, lanesHeight: lanesHeight)
+                .frame(height: TimelineLayout.rulerHeight + lanesHeight)
+            PlayheadOverlay(model: model)
+                .frame(height: TimelineLayout.rulerHeight + lanesHeight)
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { input.changed(start: $0.startLocation, location: $0.location) }
+            .onEnded { input.ended(start: $0.startLocation, location: $0.location) })
+        .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { input.doubleClick(at: $0.location) })
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let p): input.hover(at: p)
+            case .ended: input.hoverEnded()
+            }
+        }
+        .contextMenu { TimelineContextMenu(model: model, state: state) }
+        .onAppear { resize(lanesHeight) }
+        .onChange(of: size) { _, _ in resize(lanesHeight) }
+        .onChange(of: layout.contentHeight) { _, _ in resize(lanesHeight) }
     }
 
-    private func resize(_ w: CGFloat) {
+    private func resize(_ lanesHeight: CGFloat) {
+        state.lanesHeight = lanesHeight
+        let maxY = layout.maxScroll(lanesHeight: lanesHeight)
+        if state.scrollY > maxY { state.scrollY = maxY }
         var nv = model.ui.viewport
-        nv.resize(width: w)
+        nv.resize(width: size.width)
         if nv != model.ui.viewport { model.ui.viewport = nv }
     }
+}
 
-    private func header(_ title: String, height: CGFloat, detail: String? = nil, warn: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Text(title)
-                .font(StudioStyle.laneLabel)
-                .foregroundStyle(warn ? StudioStyle.warn.opacity(0.9) : .secondary)
-            Spacer(minLength: 2)
-            if let detail { Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary) }
+// MARK: - Lane views
+
+/// Builds each lane's renderer from the model. Called from lane bodies (so each
+/// lane observes only what it draws) and from input handlers (not observed).
+@MainActor
+enum TimelineLanes {
+    static func renderer(_ key: LaneKey, _ m: ProjectModel, _ s: TimelineState) -> any LaneRenderer {
+        switch key {
+        case .ruler: return ruler(m)
+        case .clips: return clips(m)
+        case .captions: return CaptionsLane(captions: m.info?.captions ?? [])
+        case .score(let title): return ScoreLanes.renderer(title: title, events: m.info?.events ?? [])
+        case .audio: return waveform(m)
+        case .notes: return CommentsLane(comments: m.review.comments, selection: m.review.selection, preview: s.retime)
         }
-        .padding(.horizontal, 10)
-        .frame(height: height)
-        .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
     }
 
-    private var scrubGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { g in
+    static func ruler(_ m: ProjectModel) -> RulerLane {
+        RulerLane(cached: m.playback.cachedRanges, inOut: m.playback.inOut, duration: m.playback.duration)
+    }
+
+    static func clips(_ m: ProjectModel) -> ClipsLane {
+        let clips = m.info?.clips ?? []
+        return ClipsLane(clips: clips, selectedID: m.ui.selectedClipID,
+                         names: ClipLabels.shared.labels(for: clips, generation: m.build.generation))
+    }
+
+    static func waveform(_ m: ProjectModel) -> WaveformLane {
+        let info = m.info
+        let summary = m.scenes.first { $0.name == info?.name }
+        let overview = info?.audioPath.flatMap { AudioOverviewCache.shared.overview($0) }
+        let pending = (summary?.hasSoundtrack ?? false) && (info?.loudness.isEmpty ?? true) && overview == nil
+        return WaveformLane(loudness: info?.loudness ?? [], rate: info?.loudnessRate ?? 50,
+                            overview: overview, pending: pending)
+    }
+}
+
+struct LaneView: View {
+    let key: LaneKey
+    let model: ProjectModel
+    let state: TimelineState
+
+    var body: some View {
+        let r = TimelineLanes.renderer(key, model, state)
+        let v = model.ui.viewport
+        Canvas(opaque: false, rendersAsynchronously: key == .audio) { ctx, size in
+            r.draw(in: &ctx, size: size, viewport: v)
+        }
+    }
+}
+
+// MARK: - Input
+
+/// Pointer handling for the lanes column: scrub, in/out flags, comment retiming,
+/// click to select or seek, double-click to open source, hover cards.
+@MainActor
+struct TimelineInput {
+    let model: ProjectModel
+    let state: TimelineState
+    let layout: TimelineLayout
+    let lanesHeight: CGFloat
+
+    static let clickSlop: CGFloat = 3
+
+    private var viewport: TimelineViewport { model.ui.viewport }
+
+    func zone(_ p: CGPoint) -> TimelineLayout.Zone {
+        layout.zone(at: p, lanesHeight: lanesHeight, scrollY: state.scrollY)
+    }
+
+    /// The lane and item under a lanes-column point.
+    func hit(_ p: CGPoint) -> (key: LaneKey?, hit: LaneHit?) {
+        switch zone(p) {
+        case .ruler(let q): return (.ruler, TimelineLanes.ruler(model).hit(q, viewport: viewport))
+        case .lane(let k, let q): return (k, TimelineLanes.renderer(k, model, state).hit(q, viewport: viewport))
+        case .empty, .scroller: return (nil, nil)
+        }
+    }
+
+    func changed(start: CGPoint, location: CGPoint) {
+        if state.drag == nil { begin(start) }
+        if !state.dragMoved, hypot(location.x - start.x, location.y - start.y) > Self.clickSlop { state.dragMoved = true }
+        let v = viewport
+        switch state.drag {
+        case .scrub?:
+            scrub(location.x, precise: false)
+        case .inOut(let isIn)?:
+            guard let io = model.playback.inOut else { return }
+            let t = v.snap(v.t(min(max(0, location.x), v.width)))
+            model.playback.setInOut(isIn ? min(t, io.upperBound)...io.upperBound : io.lowerBound...max(t, io.lowerBound))
+        case .retime(let h, let t0, let end0)?:
+            guard state.dragMoved else { return }
+            let r = RetimeMath.apply(h.part, t: t0, end: end0, delta: v.t(location.x) - v.t(start.x),
+                                     duration: model.playback.duration, fps: v.fps)
+            let p = RetimePreview(id: h.id, t: r.t, end: r.end)
+            if state.retime != p { state.retime = p }
+        case .press?:
+            // Clips aren't movable (their times are code): dragging off one scrubs.
+            if state.dragMoved {
+                state.drag = .scrub
                 model.playback.pause()
-                model.playback.seek(model.ui.viewport.t(g.location.x), precise: false)
+                scrub(location.x, precise: false)
             }
-            .onEnded { g in model.playback.seek(model.ui.viewport.t(g.location.x), precise: true) }
-    }
-
-    /// Click: select what was hit (clip/comment) else seek. Double-click a clip: open its source.
-    private func laneTap(_ lane: (any LaneRenderer)?) -> some Gesture {
-        SpatialTapGesture(count: 2)
-            .onEnded { e in
-                guard let hit = lane?.hit(e.location, viewport: model.ui.viewport), hit.kind == .clip,
-                      let src = model.info?.clips.first(where: { $0.id == hit.id })?.source else { return }
-                SourceOpener.open(src)
-            }
-            .exclusively(before: SpatialTapGesture(count: 1).onEnded { e in
-                let v = model.ui.viewport
-                if let hit = lane?.hit(e.location, viewport: v) {
-                    switch hit.kind {
-                    case .clip: model.ui.selectedClipID = hit.id
-                    case .comment:
-                        model.review.selection = hit.id
-                        model.ui.inspectorTab = .comments
-                        model.playback.seek(hit.start, precise: true)
-                        return
-                    default: break
-                    }
-                }
-                model.playback.seek(v.t(e.location.x), precise: true)
-            })
-    }
-}
-
-struct LaneCanvas<R: LaneRenderer>: View {
-    var renderer: R
-    var viewport: TimelineViewport
-
-    var body: some View {
-        Canvas { ctx, size in renderer.draw(in: &ctx, size: size, viewport: viewport) }
-            .frame(height: renderer.height)
-            .contentShape(Rectangle())
-    }
-}
-
-private extension View {
-    func laneBackground(_ i: Int) -> some View {
-        background(i % 2 == 0 ? StudioStyle.laneBackground : StudioStyle.laneAltBackground)
-            .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
-    }
-}
-
-struct TimelineZoomControls: View {
-    @Bindable var model: ProjectModel
-    var body: some View {
-        HStack(spacing: 2) {
-            Button { model.perform(.timelineZoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
-                .help("Zoom out (⌘−)")
-            Button { model.perform(.timelineZoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
-                .help("Zoom in (⌘=)")
-            Button { model.perform(.timelineZoomFit) } label: {
-                Text("FIT").font(.system(size: 9, weight: .bold))
-            }
-            .help("Zoom to fit (⇧Z)")
+        case nil:
+            break
         }
-        .buttonStyle(.borderless)
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
+    }
+
+    private func begin(_ p: CGPoint) {
+        state.dragMoved = false
+        state.hover = nil
+        switch zone(p) {
+        case .ruler(let q):
+            if let h = TimelineLanes.ruler(model).hit(q, viewport: viewport), h.kind == .inOut {
+                state.drag = .inOut(isIn: h.id == "in")
+            } else {
+                state.drag = .scrub
+                model.playback.pause()
+                scrub(p.x, precise: false)
+            }
+        case .lane(.notes, let q):
+            if let h = TimelineLanes.renderer(.notes, model, state).hit(q, viewport: viewport),
+               let c = model.review.comments.first(where: { $0.id == h.id }) {
+                state.drag = .retime(h, t: c.t, end: c.end)
+            } else {
+                state.drag = .press(.notes, nil)
+            }
+        case .lane(let k, let q):
+            state.drag = .press(k, TimelineLanes.renderer(k, model, state).hit(q, viewport: viewport))
+        case .empty:
+            state.drag = .press(nil, nil)
+        case .scroller:
+            state.drag = nil
+        }
+    }
+
+    func ended(start: CGPoint, location: CGPoint) {
+        defer { state.drag = nil; state.retime = nil; state.dragMoved = false }
+        switch state.drag {
+        case .scrub?:
+            scrub(location.x, precise: true)
+        case .retime(let h, _, _)?:
+            if state.dragMoved, let r = state.retime {
+                do {
+                    try model.review.retimeComment(h.id, t: r.t, end: r.end)
+                    model.review.selection = h.id
+                } catch {
+                    model.ui.toast = "Couldn't retime comment: \(error)"
+                }
+            } else {
+                selectComment(h.id, at: h.start)
+            }
+        case .press(let key, let h)?:
+            click(key, h, x: location.x)
+        case .inOut?, nil:
+            break
+        }
+    }
+
+    private func click(_ key: LaneKey?, _ h: LaneHit?, x: CGFloat) {
+        switch h?.kind {
+        case .clip?:
+            model.ui.selectedClipID = model.ui.selectedClipID == h!.id ? nil : h!.id
+        case .event?, .caption?, .silence?:
+            model.playback.seek(h!.start, precise: true)
+        default:
+            model.playback.seek(viewport.snap(viewport.t(x)), precise: true)
+        }
+    }
+
+    func doubleClick(at p: CGPoint) {
+        let (_, h) = hit(p)
+        guard let h else { return }
+        switch h.kind {
+        case .clip:
+            guard let c = model.info?.clips.first(where: { $0.id == h.id }) else { return }
+            model.ui.selectedClipID = c.id
+            if let src = c.source { SourceOpener.open(src) } else { model.ui.toast = "No source location for this clip" }
+        case .comment:
+            selectComment(h.id, at: h.start)
+        default:
+            break
+        }
+    }
+
+    func selectComment(_ id: String, at t: Double) {
+        model.review.selection = id
+        model.ui.inspectorTab = .comments
+        model.ui.showInspector = true
+        model.playback.seek(t, precise: true)
+    }
+
+    /// Seek to the pointer, kept inside the visible range (no runaway auto-scroll).
+    private func scrub(_ x: CGFloat, precise: Bool) {
+        let v = viewport
+        let t = v.t(min(max(0, x), v.width))
+        model.playback.seek(precise ? v.snap(t) : t, precise: precise)
+    }
+
+    func hover(at p: CGPoint) {
+        guard state.drag == nil else { return }
+        if case .scroller = zone(p) { hoverEnded(); return }
+        let (key, h) = hit(p)
+        let next = TimelineState.Hover(point: p, key: key, hit: h)
+        if state.hover != next { state.hover = next }
+        let resize = h?.kind == .inOut || (h?.kind == .comment && h?.part != .body)
+        if resize { NSCursor.resizeLeftRight.set(); state.cursorSet = true }
+        else if state.cursorSet { NSCursor.arrow.set(); state.cursorSet = false }
+    }
+
+    func hoverEnded() {
+        if state.hover != nil { state.hover = nil }
+        if state.cursorSet { NSCursor.arrow.set(); state.cursorSet = false }
+    }
+}
+
+// MARK: - Context menu
+
+struct TimelineContextMenu: View {
+    let model: ProjectModel
+    let state: TimelineState
+    @AppStorage(TimelinePrefs.follow) private var follow = true
+
+    var body: some View {
+        let h = state.hover?.hit
+        if let h, h.kind == .clip, let c = model.info?.clips.first(where: { $0.id == h.id }) {
+            Button("Comment on This Clip") {
+                model.playback.pause()
+                model.review.beginComment(t: c.start, end: c.end)
+                model.ui.inspectorTab = .comments
+                model.ui.showInspector = true
+            }
+            Button("Set In/Out to Clip") { model.playback.setInOut(c.start...c.end) }
+            Button("Go to Clip Start") { model.playback.seek(c.start, precise: true) }
+            if let src = c.source {
+                Button("Open Source (\((src.file as NSString).lastPathComponent):\(src.line))") {
+                    model.ui.selectedClipID = c.id
+                    SourceOpener.open(src)
+                }
+            }
+            Divider()
+        } else if let h, h.kind == .comment {
+            Button("Show Comment") {
+                TimelineInput(model: model, state: state, layout: TimelineLayout(slots: []), lanesHeight: 0)
+                    .selectComment(h.id, at: h.start)
+            }
+            Divider()
+        } else if let h, [.event, .caption, .silence].contains(h.kind) {
+            Button("Comment on This Range") {
+                model.playback.pause()
+                model.review.beginComment(t: h.start, end: h.end > h.start ? h.end : nil)
+                model.ui.inspectorTab = .comments
+                model.ui.showInspector = true
+            }
+            Button("Set In/Out to Range") { model.playback.setInOut(h.start...max(h.start, h.end)) }
+            Divider()
+        }
+        Button("New Comment at Playhead") { model.perform(.newComment) }
+        Button("Zoom to Fit") { model.perform(.timelineZoomFit) }
+        Toggle("Follow Playhead", isOn: $follow)
     }
 }
