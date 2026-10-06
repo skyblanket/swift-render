@@ -17,7 +17,7 @@ open out/test.mp4
 
 ## Adding a scene
 
-1. Create `Sources/SwiftRender/Scenes/YourScene.swift` implementing `RenderScene`:
+1. Create `Sources/SwiftRenderScenes/YourScene.swift` implementing `RenderScene`:
    ```swift
    public struct YourScene: RenderScene {
        public static let defaultDuration: Double = 3.0
@@ -40,7 +40,7 @@ open out/test.mp4
    to `Shaders/prebuilt.metallib` and renders warn that your edit isn't live.
 3. After a successful compile, refresh the fallback so toolchain-less machines get it:
    `cp .build/release/SwiftRender_SwiftRender.bundle/default.metallib Sources/SwiftRender/Shaders/prebuilt.metallib`
-4. Use it in a scene via `ShaderLibrary.bundle(.module).yourShader(...)`.
+4. Use it in a scene via `ShaderLibrary.swiftRender.yourShader(...)` (scenes live in another target, so `.module` would be the wrong bundle).
 
 ## Style
 

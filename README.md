@@ -16,7 +16,7 @@
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/launch-film.mp4
 
-> **The 55-second launch film above is one Swift file** ([`LaunchFilm.swift`](Sources/SwiftRender/Scenes/LaunchFilm.swift)) — Timeline sequencing, springs, four live Metal shaders, 3D, an audio-reactive segment, and a synthesized soundtrack. Written by an AI, **3,450 frames rendered in 29 seconds** on a MacBook. Click ▶. Sound on.
+> **The 55-second launch film above is one Swift file** ([`LaunchFilm.swift`](Sources/SwiftRenderScenes/LaunchFilm.swift)) — Timeline sequencing, springs, four live Metal shaders, 3D, an audio-reactive segment, and a synthesized soundtrack. Written by an AI, **3,450 frames rendered in 29 seconds** on a MacBook. Click ▶. Sound on.
 
 ```bash
 git clone https://github.com/skyblanket/swift-render && cd swift-render
@@ -73,10 +73,10 @@ public struct Hello: RenderScene {
 }
 ```
 
-Save it anywhere in `Sources/SwiftRender/Scenes/` — scenes are **auto-registered** at build time (no dictionary to edit). Or let the CLI scaffold one with a timeline and a score already wired:
+Save it anywhere in `Sources/SwiftRenderScenes/` — scenes are **auto-registered** at build time (no dictionary to edit). Or let the CLI scaffold one with a timeline and a score already wired:
 
 ```bash
-swift run swift-render new Hello                       # scaffold Sources/SwiftRender/Scenes/Hello.swift
+swift run swift-render new Hello                       # scaffold Sources/SwiftRenderScenes/Hello.swift
 swift run swift-render check Hello                     # contact sheet + blank-frame scan + audio report
 swift run swift-render render Hello --preview --open   # half-res 30fps, opens when done
 swift run swift-render render Hello --out out/hello.mp4
@@ -176,7 +176,7 @@ Drop a `.metal` file in `Sources/SwiftRender/Shaders/` and `swift build` — sha
 
 ```swift
 Rectangle().fill(.black).colorEffect(
-    ShaderLibrary.bundle(.module).galaxy(.float2(1920, 1080), .float(Float(t)))
+    ShaderLibrary.swiftRender.galaxy(.float2(1920, 1080), .float(Float(t)))
 )
 ```
 
@@ -231,6 +231,30 @@ swift run swift-render render StyleReel --audio out/reel.wav
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/kinetic.mp4
 
+## Vision — live action in, pose and cut-out out
+
+`VisionTrack.load("clip.mov")` runs Apple Vision over a clip **once** — body pose (19 joints),
+both hands (21 joints each) and a person segmentation mask per frame — caches it on disk, and
+reads it back as a pure function of time, like `AudioTrack`:
+
+```swift
+let track = VisionTrack.load(props.clip)          // analyzed once, cached
+PoseOverlay(track.frame(at: t))                   // skeleton + hands
+track.joint("rightWrist", at: t)                  // interpolated, confidence-filtered
+track.mask(at: t)                                 // CGImage, white = person
+```
+
+`Rotoscope` cuts the person out, re-renders them through any `Stylize` look, and traces the
+skeleton with wrist trails — point it at a clip of yourself:
+
+```bash
+echo '{"clip": "me.mov", "style": "ascii"}' > roto.json
+swift run swift-render render Rotoscope --props roto.json --jobs auto --out out/roto.mp4
+```
+
+The browser-based tools would need JavaScript models in headless Chrome for this; here it's
+the Mac's own on-device Vision framework.
+
 ## Media — video, images, voiceover, captions
 
 ```swift
@@ -261,19 +285,27 @@ swift-render check  <Scene>                              contact sheet + frame s
 swift-render preview <Scene>                             live window: scrub, play/pause, frame-step, synced audio
 swift-render render <Scene> [--duration s] [--fps n] [--aspect 16:9|9:16|1:1]
                             [--audio file] [--props file.json] [--range a:b]
-                            [--preview] [--open] [--no-postfx] [--out path]
+                            [--jobs n|auto] [--preview] [--open] [--no-postfx] [--out path]
 swift-render frame  <Scene> --at <t>[,t2,…] [--out path.png]   one or several frames
 swift-render contact <Scene> [--cols n] [--rows n]       grid contact sheet
 swift-render audio  <Scene> --out score.wav              export the scene's Score
 swift-render captions <Scene> --out film.srt|.vtt        export voiceover captions
 swift-render props  <Scene>                              print default props JSON
+swift-render smoke                                       one frame of every scene + no-swish check (CI)
 swift-render list                                        all registered scenes
 ```
+
+**`--jobs n|auto`** renders in parallel processes and stitches the chunks without re-encoding
+(frame-exact against a single-process render). StyleLab, 41 s of 1080p60: 65 s → 19 s at 5 jobs.
+
+**`check`** also measures the mix you can't hear: *voice vs music* reports how many dB the
+voiceover sits above the ducked music while someone is speaking, and the exact time spans where
+it's buried.
 
 ## How it works
 
 1. Your scene is `(t, duration) → some View` — pure, deterministic, `@MainActor`.
-2. `Recorder` walks frames `0..<duration*fps`, renders each via `ImageRenderer`, pipes BGRA pixel buffers into `AVAssetWriter` (H.264), muxes audio with `AVMutableComposition`.
+2. `Recorder` walks frames `0..<duration*fps`, renders each via `ImageRenderer`, pipes BGRA pixel buffers into `AVAssetWriter` (H.264, no B-frames), then `MP4Assembler` muxes the audio — the video stream is copied, never re-encoded. `--jobs` splits the frames across processes and the same assembler stitches them.
 3. A global `PostFX` pass (film grain + vignette, seeded and deterministic) makes raw SwiftUI feel cinema-grade. Opt out with `--no-postfx` or own it per-scene with `ownsPostFX`.
 4. There is no step 4. No browser, no server, no project file.
 
@@ -282,7 +314,7 @@ Determinism isn't a vibe — `swift test` includes a render-twice-byte-identical
 ## Use it as a library
 
 ```swift
-.package(url: "https://github.com/skyblanket/swift-render", from: "0.8.1")
+.package(url: "https://github.com/skyblanket/swift-render", from: "0.9.0")
 ```
 
 ```swift
@@ -291,6 +323,11 @@ import SwiftRender
 let recorder = Recorder(config: .init(fps: 60, size: .init(width: 1920, height: 1080)))
 try await recorder.render(to: url, duration: 5) { t in MyView(t: t) }
 ```
+
+The library is just the engine. The 40-odd demo scenes live in a separate `SwiftRenderScenes`
+product (`Sources/SwiftRenderScenes`) — depend on it only if you want them. Code outside the
+library reaches the bundled shaders and resources through `ShaderLibrary.swiftRender` and
+`Bundle.swiftRender`.
 
 ## For AI agents
 
@@ -306,6 +343,7 @@ try await recorder.render(to: url, duration: 5) { t in MyView(t: t) }
 ## Roadmap
 
 - Transparent ProRes 4444 · 10-bit masters
+- Vision-driven effects library (particles from hands, mask-aware Stylize looks)
 - GPU dither/halftone post pass (the CPU `Dither` is the toolchain-free fallback)
 - Audio-reactive FFT improvements (configurable bands, onset detection)
 - Linux? No — this is proudly the native-Apple lane.

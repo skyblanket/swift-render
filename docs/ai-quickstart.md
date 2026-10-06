@@ -87,7 +87,7 @@ HStack(spacing: 2) {
 Rectangle()
     .fill(.black)
     .colorEffect(
-        ShaderLibrary.bundle(.module).plasmaField(
+        ShaderLibrary.swiftRender.plasmaField(
             .float2(1920, 1080),
             .float(Float(t)),
             .float(1.4)
@@ -329,11 +329,33 @@ ImageClip("art/cover.png")
 
 Frames are decoded with zero time tolerance (the same frame every render). Add the clip's sound with `sample(path, at: clipStart)`.
 
+## Rendering long pieces
+
+`swift run swift-render render MyFilm --jobs auto --out out/myfilm.mp4` — parallel processes,
+stitched without re-encoding, frame-exact. Use it for anything over ~20 s.
+
+## Voiceover levels (you can't hear them — read the number)
+
+`check` prints `voice vs music: voice sits +X dB above the music`. Aim for a median of +12 dB or
+more and a 10th percentile above +6 dB. When it warns, it lists the buried spans — lower the
+pads/arps/kicks/samples that overlap those seconds, or raise `speak(…, amp:)`.
+
+## Vision (live action)
+
+```swift
+let track = VisionTrack.load("clip.mov")              // pose + hands + person mask, cached
+PoseOverlay(track.frame(at: t), color: .green)
+track.joint("leftWrist", at: t)                       // VisionPoint, normalized 0…1, top-left origin
+track.mask(at: t)                                     // CGImage — use .luminanceToAlpha() as a SwiftUI mask
+```
+Worked example: `Rotoscope.swift` (PropsScene: `{"clip": "...", "style": "ascii"}`).
+
 ## Gotchas learned the hard way
 
 - **Thin strokes vanish** when anything renders below 1:1 (dither at 1/3, contact thumbs): use ≥5 px lines for webs, rain, outlines.
 - **Fading by `.opacity` on the whole scene** fades to black only because PostFX lays an opaque base; with `--no-postfx` put your own `Color.black` underneath.
 - **Text inside a dithered/pixelated layer gets crunchy** — put subtitles in a crisp overlay above `Dither.render`.
 - **Timeline transitions overlap**: the timeline ends earlier than the sum of clip lengths. Give the last clip `duration` and let it be trimmed.
+- **Scenes live in `Sources/SwiftRenderScenes`**, a separate target: use `ShaderLibrary.swiftRender` / `Bundle.swiftRender`, not `.module`.
 - **Contact sheets sample shot midpoints**; if a frame you care about sits exactly on a cut, use `frame --at`.
 - **Big SwiftUI expressions time out on CI's older compiler.** Give intermediate values explicit types, pull per-row views into their own functions, and run `scripts/typecheck-budget.sh` before pushing.

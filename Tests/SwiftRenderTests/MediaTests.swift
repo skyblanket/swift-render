@@ -148,3 +148,30 @@ final class AssemblerTests: XCTestCase {
         XCTAssertEqual(pts.sorted().first ?? -1, 0, accuracy: 1e-6)
     }
 }
+
+final class VisionTrackTests: XCTestCase {
+    func testJointLookupInterpolatesAndRespectsConfidence() {
+        let frames = [
+            VisionFrame(time: 0, body: ["leftWrist": VisionPoint(x: 0.0, y: 0.5, confidence: 0.9)]),
+            VisionFrame(time: 0.1, body: ["leftWrist": VisionPoint(x: 1.0, y: 0.5, confidence: 0.9)]),
+            VisionFrame(time: 0.2, body: ["leftWrist": VisionPoint(x: 1.0, y: 0.5, confidence: 0.05)]),
+        ]
+        let track = VisionTrack(fps: 10, frames: frames)
+        XCTAssertEqual(track.joint("leftWrist", at: 0.05)?.x ?? -1, 0.5, accuracy: 1e-9)
+        XCTAssertNil(track.joint("leftWrist", at: 0.2), "low-confidence joints are dropped")
+        XCTAssertNil(track.joint("nose", at: 0.05))
+        XCTAssertEqual(track.frame(at: 99)?.time, 0.2, "clamps past the end")
+        XCTAssertTrue(track.frames[0].hasPerson)
+    }
+
+    func testOrientationFromTransform() {
+        XCTAssertEqual(VisionTrack.orientation(.identity), .up)
+        XCTAssertEqual(VisionTrack.orientation(CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 0, ty: 0)), .right)
+    }
+
+    func testDemoClipAnalyzesWithoutAPerson() {
+        let track = VisionTrack.load("demo/clip.mp4", fps: 10, masks: false)
+        XCTAssertGreaterThan(track.frames.count, 30)
+        XCTAssertFalse(track.frames.contains { $0.hasPerson }, "the demo clip is typography only")
+    }
+}
