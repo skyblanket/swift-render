@@ -126,6 +126,7 @@ final class SceneSwitchTests: XCTestCase {
         XCTAssertEqual(opened.first, "NeverHeard", "the first pick was already in flight")
         XCTAssertEqual(opened.last, "RepoPromo")
         XCTAssertLessThanOrEqual(opened.count, 2, "picks made meanwhile replaced each other: \(opened)")
+        XCTAssertGreaterThanOrEqual(host.stats.superseded, 3, "queued opens were answered superseded, never run")
         XCTAssertEqual(Set(presented), ["RepoPromo"], "no intermediate scene ever reached the screen: \(presented)")
 
         // The deferred probe lands as an info event for the scene that is open.
@@ -150,6 +151,101 @@ final class SceneSwitchTests: XCTestCase {
         await model.select(scene: "RepoPromo")
         XCTAssertNil(model.openFailure)
         await waitUntil(5, "RepoPromo") { model.playback.sceneName == "RepoPromo" && model.playback.opening == nil }
+        await model.shutdown()
+    }
+
+    func testTransportIsIgnoredAndTheOldSoundtrackUnloadedWhileOpening() async throws {
+        let host = try await fakeHost()
+        let engine = PlaybackEngine()
+        engine.displayWidth = 320
+        try await attached(engine, host, scene: "LaunchFilm")
+        engine.seek(3, precise: true)
+        engine.beginOpening(scene: "RepoPromo", key: key("RepoPromo"))
+        XCTAssertFalse(engine.audio.hasAudio, "LaunchFilm's soundtrack can't play under RepoPromo's name")
+        XCTAssertTrue(engine.pictureIsStale)
+        let t = engine.t
+        engine.play()
+        XCTAssertFalse(engine.isPlaying, "nothing to play until RepoPromo's first frame lands")
+        engine.shuttle(.l)
+        XCTAssertFalse(engine.isPlaying)
+        engine.seek(7, precise: true)
+        engine.step(frames: 5)
+        XCTAssertEqual(engine.t, t, "the playhead holds until the scene attaches")
+        try await attached(engine, host, scene: "RepoPromo")
+        XCTAssertFalse(engine.pictureIsStale)
+        engine.play()
+        XCTAssertTrue(engine.isPlaying)
+        engine.pause()
+    }
+
+    func testSafeFrameStepsOffCrashedFrames() {
+        XCTAssertEqual(safeFrame(10, avoiding: []), 10)
+        XCTAssertEqual(safeFrame(120, avoiding: [119, 120, 121]), 122, "later first")
+        XCTAssertEqual(safeFrame(120, last: 121, avoiding: [119, 120, 121]), 118, "earlier at the end")
+        XCTAssertEqual(safeFrame(0, avoiding: [0, 1]), 2)
+        XCTAssertNil(safeFrame(1, last: 2, avoiding: [0, 1, 2]))
+    }
+
+    /// A crash poisons frames of the scene that crashed only; and a switch whose target frame
+    /// crashed (here, inside `open` itself) ends on the nearest safe frame instead of
+    /// waiting forever under "Opening …".
+    func testSwitchOntoACrashedFrameEndsOnTheNearestSafeFrame() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("switch-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        var o = LaunchOptions()
+        o.fakeHost = true
+        o.scene = "LaunchFilm"
+        o.fakeCrashAt = 2
+        o.fakeCrashScene = "RepoPromo"
+        let model = ProjectModel(root: root, options: o)
+        model.playback.displayWidth = 320
+        model.host.backoff = [0.05, 0.05, 0.05]
+        await model.start()
+        await waitUntil(10, "first scene") { model.playback.hasFrame && model.playback.opening == nil }
+        model.playback.seek(2, precise: true)
+        await waitUntil(5, "LaunchFilm at 2 s") { model.playback.currentFrame?.index == 120 && model.playback.isRequestIdle }
+
+        // RepoPromo opens at the same playhead and its first frame kills the host.
+        let pick = Task { await model.select(scene: "RepoPromo") }
+        await waitUntil(10, "crash") { model.host.crash != nil }
+        XCTAssertEqual(model.host.poisoned(scene: "RepoPromo"), [119, 120, 121])
+        XCTAssertTrue(model.host.poisoned(scene: "LaunchFilm").isEmpty, "a crash in RepoPromo says nothing about LaunchFilm")
+        await waitUntil(10, "RepoPromo shows a frame") { model.playback.opening == nil && model.playback.sceneName == "RepoPromo" }
+        await pick.value
+        XCTAssertFalse(model.isSceneLoading || model.playback.pictureIsStale, "the switch ended")
+        XCTAssertEqual(frameIndex(model.playback.t, fps: 60), 122, "stepped past the frames that crashed")
+        XCTAssertEqual(model.playback.currentFrame?.index, 122)
+        XCTAssertEqual(model.info?.name, "RepoPromo")
+
+        // Back to LaunchFilm: frame 120 there never crashed, so it is asked for and shown.
+        model.playback.seek(2, precise: true)
+        await model.select(scene: "LaunchFilm")
+        await waitUntil(5, "LaunchFilm frame 120") { model.playback.opening == nil && model.playback.currentFrame?.index == 120 }
+        XCTAssertEqual(model.playback.sceneName, "LaunchFilm")
+        await model.shutdown()
+    }
+
+    func testPanelsHideTheOldScenesDataAtOnceAndAfterAFailedOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("switch-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        var o = LaunchOptions()
+        o.fakeHost = true
+        o.scene = "LaunchFilm"
+        o.fakeOpenMs = 60
+        let model = ProjectModel(root: root, options: o)
+        await model.start()
+        await waitUntil(10, "first scene") { model.playback.hasFrame && model.playback.opening == nil }
+        XCTAssertFalse(model.sceneDataIsStale)
+        let pick = Task { await model.select(scene: "RepoPromo") }
+        await waitUntil(2, "pick registered") { model.selectedScene == "RepoPromo" }
+        XCTAssertTrue(model.sceneDataIsStale, "LaunchFilm's lanes and knobs are hidden from the first moment")
+        await pick.value
+        XCTAssertFalse(model.sceneDataIsStale)
+        await model.select(scene: "NoSuchScene")
+        XCTAssertTrue(model.sceneDataIsStale, "a failed open leaves RepoPromo's data hidden, not shown under its name")
+        XCTAssertFalse(model.isSceneLoading)
         await model.shutdown()
     }
 

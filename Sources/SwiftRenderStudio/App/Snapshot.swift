@@ -82,6 +82,12 @@ enum SnapshotRunner {
         // `--switch-to X`: a scene switch after the first scene showed; `--switch-hold` captures
         // its loading state (the open is never sent), otherwise the settled result.
         if let target = options.switchTo {
+            // The first scene's playhead frame is on screen (not its t=0 first frame): that
+            // is the picture a switch covers.
+            let p = model.playback
+            while !(p.isRequestIdle && p.currentFrame?.index == frameIndex(p.t, fps: p.fps)), !stuck(), Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
             if options.switchHold {
                 model.previewOpening(target)
                 try? await Task.sleep(for: .milliseconds(300))
@@ -252,6 +258,9 @@ enum SnapshotRunner {
         func walk(_ l: CALayer) {
             guard !l.isHidden, l.opacity > 0 else { return }
             if hide.contains(String(describing: type(of: l))) { l.isHidden = true; hidden.append(l); return }
+            // A scroll-edge effect (the sidebar under the filter field and traffic lights) is a
+            // live gaussian blur; rendered without its filter it is an opaque black slab.
+            if let fs = l.filters, fs.contains(where: { "\($0)".contains("gaussianBlur") }) { l.isHidden = true; hidden.append(l); return }
             if let m = vibrantMatrix(l) {
                 l.isHidden = true; hidden.append(l)
                 if m[18] > 0.001 { vibrant.append((l, m)) }       // alpha row ~0: an invisible tint

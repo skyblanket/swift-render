@@ -104,6 +104,10 @@ final class PlaybackEngine {
     private(set) var lastError: String?
     /// Non-nil from `beginOpening` until the new scene's first frame is on screen.
     private(set) var opening: Opening?
+    /// The picture on screen is a poster or cover, not a frame of the attached scene (set by
+    /// `beginOpening`, cleared by the first real frame). Outlives `opening` when the open
+    /// failed or every frame of the scene crashed the host.
+    private(set) var pictureIsStale = false
 
     // Unobserved plumbing.
     @ObservationIgnored let cache: FrameCache
@@ -132,7 +136,8 @@ final class PlaybackEngine {
     @ObservationIgnored var commentMarks: [(id: String, t: Double, end: Double?)] = [] { didSet { updateVisibleComments() } }
     /// Clip boundaries etc. for ↑/↓.
     @ObservationIgnored var editPoints: [Double] = []
-    /// Frames that crashed the host in this generation (skipped until the next build).
+    /// Frames of the attached (or opening) scene that crashed the host this build (skipped
+    /// until the next build; `ProjectModel` swaps in the target scene's set on a switch).
     @ObservationIgnored var poisoned: Set<Int> = []
     @ObservationIgnored private(set) var host: RenderHost?
 
@@ -228,6 +233,16 @@ final class PlaybackEngine {
         }
         bumpGeneration()
         setT(min(t, duration))
+        if !wasPlaying, pictureIsStale, info != nil, host != nil {
+            // Never park on a frame that crashed the host (nothing would ever be shown):
+            // step to the nearest safe one, as `HostSupervisor.reopen` did for the warm frame.
+            let here = frameIndex(t, fps: fps)
+            if let safe = safeFrame(here, last: frameIndex(duration, fps: fps), avoiding: poisoned) {
+                if safe != here { setT(Double(safe) / Double(fps)) }
+            } else {
+                opening = nil                         // every frame crashed: the viewer says so
+            }
+        }
         if let warmFrame, warmFrame.index == frameIndex(t, fps: fps) {
             cache.put(warmFrame, generation: generation)
             noteRender(ms: warmFrame.ms)
@@ -293,6 +308,7 @@ final class PlaybackEngine {
         stopStream()
         sharpenTask?.cancel()
         scrubPending = nil
+        audio.load(nil, at: 0)           // the old soundtrack never plays under the new name
         host = nil                       // nothing renders until the new scene attaches
         sceneKey = ""                    // the next attach always enters a scene
         bumpGeneration()                 // answers in flight for the old scene are dropped
@@ -300,6 +316,7 @@ final class PlaybackEngine {
         if let mt = m?.t { setT(mt) }
         let poster = m?.poster
         opening = Opening(scene: scene, hasPoster: poster != nil)
+        pictureIsStale = true
         if let poster { show(poster, isPoster: true) } else { onCover?() }
     }
 
@@ -307,6 +324,10 @@ final class PlaybackEngine {
     func openingFailed() {
         opening = nil
     }
+
+    /// Transport input (play, seek, step, shuttle) while a scene opens is ignored: there is
+    /// nothing of the new scene to move through yet, and the old one is gone.
+    var acceptsTransport: Bool { opening == nil }
 
     /// Score audio arrived while playing: hand the clock to the audio device from here.
     func resyncAudio() {
@@ -346,7 +367,7 @@ final class PlaybackEngine {
     func toggle() { isPlaying ? pause() : play() }
 
     func play() {
-        guard duration > 0 else { return }
+        guard duration > 0, acceptsTransport else { return }
         let (lo, hi) = playRange
         if rate > 0 && t >= hi - 0.5 / Double(fps) { t = lo }
         if rate < 0 && t <= lo + 0.5 / Double(fps) { t = hi }
@@ -372,6 +393,7 @@ final class PlaybackEngine {
 
     /// Move the playhead. `precise` (clicks, steps) asks at display width; drags at 50%.
     func seek(_ newT: Double, precise: Bool = false) {
+        guard acceptsTransport else { return }
         let nt = max(0, min(duration, newT))
         setT(nt)
         if isPlaying { reanchor(); return }
@@ -384,12 +406,14 @@ final class PlaybackEngine {
     }
 
     func step(frames n: Int) {
+        guard acceptsTransport else { return }
         if isPlaying { pause() }
         let idx = max(0, min(frameIndex(duration, fps: fps), frameIndex(t, fps: fps) + n))
         seek(Double(idx) / Double(fps), precise: true)
     }
 
     func shuttle(_ k: ShuttleKey) {
+        guard acceptsTransport else { return }
         switch k {
         case .k:
             pause(); rate = 1
@@ -409,6 +433,7 @@ final class PlaybackEngine {
 
     /// ↑/↓: previous/next clip boundary, comment, or in/out point.
     func jumpToEdit(next: Bool) {
+        guard acceptsTransport else { return }
         var points = editPoints + commentMarks.flatMap { [$0.t] + ($0.end.map { [$0] } ?? []) } + [0, duration]
         if let io = inOut { points += [io.lowerBound, io.upperBound] }
         let eps = 0.5 / Double(fps)
@@ -676,6 +701,7 @@ final class PlaybackEngine {
     private func show(_ f: DecodedFrame, isPoster: Bool = false) {
         // Any real frame shown is the attached scene's (generations guarantee it): the switch is done.
         if !isPoster, opening != nil { opening = nil }
+        if !isPoster, pictureIsStale { pictureIsStale = false }
         if let c = currentFrame, c.index == f.index, c.width == f.width, c.image === f.image { return }
         currentFrame = f
         if !hasFrame { hasFrame = true }

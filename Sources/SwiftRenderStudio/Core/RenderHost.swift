@@ -156,3 +156,15 @@ extension RenderHost {
 @inline(__always) func frameIndex(_ t: Double, fps: Int) -> Int {
     Int((t * Double(fps) + 1e-6).rounded(.down))
 }
+
+/// `index` itself when it is safe, else the nearest frame in 0...`last` that never crashed
+/// the host (later frames first on a tie); nil when every frame did.
+func safeFrame(_ index: Int, last: Int = .max, avoiding poisoned: Set<Int>) -> Int? {
+    let index = max(0, min(index, last))
+    guard poisoned.contains(index) else { return index }
+    for d in 1...max(1, poisoned.count + 1) {
+        if index + d <= last, !poisoned.contains(index + d) { return index + d }
+        if index - d >= 0, !poisoned.contains(index - d) { return index - d }
+    }
+    return nil
+}

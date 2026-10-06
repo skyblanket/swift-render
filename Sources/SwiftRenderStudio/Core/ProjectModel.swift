@@ -49,6 +49,8 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// `--fake-crash-scene X`: only X crashes at `fakeCrashAt` (fake host).
+    var fakeCrashScene: String?
     /// FakeHost only: minimum milliseconds per frame (`--fake-render-ms`), so tests can
     /// queue requests behind an in-flight render without racing the machine's load.
     var fakeRenderMs: Double?
@@ -121,6 +123,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--props": o.propsFile = v; i += 2
             case "--check": o.runCheck = true; i += 1
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
+            case "--fake-crash-scene": o.fakeCrashScene = v; i += 2
             case "--fake-render-ms": o.fakeRenderMs = v.flatMap(Double.init); i += 2
             case "--fake-open-ms": o.fakeOpenMs = v.flatMap(Double.init); i += 2
             case "--comment": o.commentSelection = v; i += 2
@@ -208,7 +211,19 @@ final class ProjectModel {
 
     /// A scene is being opened, or its clips/knobs are still being read: timeline and
     /// inspector show placeholders, not the previous scene's data.
-    var isSceneLoading: Bool { playback.opening != nil || host.probing }
+    var isSceneLoading: Bool {
+        if case .failed = host.state { return false }          // the viewer says the preview stopped
+        if openFailure != nil { return false }                 // nothing is coming; panels say so
+        return playback.opening != nil || host.probing
+    }
+
+    /// Timeline lanes, knobs and info on screen would be another scene's: the scene being
+    /// left (until the new one's reply lands) or the one whose open failed. Panels hide them
+    /// at once rather than after the loading veil's delay.
+    var sceneDataIsStale: Bool {
+        guard let scene = selectedScene else { return false }
+        return info.map { $0.name != scene } ?? false
+    }
 
     let build: BuildController
     let host: HostSupervisor
@@ -222,7 +237,6 @@ final class ProjectModel {
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
     /// The single open loop (see `select`).
-    @ObservationIgnored private var openLoop: Task<Void, Never>?
 
     var isFake: Bool { options.fakeHost || options.fakeProcessHost }
     var title: String { project.root.lastPathComponent }
@@ -248,6 +262,7 @@ final class ProjectModel {
                 var o = FakeHostClient.Options()
                 o.generation = gen
                 o.crashAt = options.fakeCrashAt
+                o.crashScene = options.fakeCrashScene
                 if let ms = options.fakeOpenMs { o.openMs = ms }
                 o.projectRoot = project.root
                 return FakeHostClient(options: o)
@@ -294,9 +309,11 @@ final class ProjectModel {
             switch msg.event {
             case "info": if let i = msg.info { self.adopt(i) }
             case "audio":
+                // A soundtrack finished for a scene the person already left (it raced the switch).
+                if let scene = msg.scene, scene != self.selectedScene { return }
                 // The real host opens before the score is synthesized; the envelope and
                 // WAV arrive here, not in a follow-up `info`.
-                if var i = self.info {
+                if var i = self.info, msg.scene == nil || i.name == msg.scene {
                     if let p = msg.audioPath { i.audioPath = p }
                     if let l = msg.loudness { i.loudness = l }
                     self.adopt(i)
@@ -432,36 +449,28 @@ final class ProjectModel {
     }
 
     /// Pick a scene. The viewer switches to its loading state at once (poster or cover; the
-    /// old scene's pixels are never shown as this one), then one open loop opens the newest
-    /// pick: picks made while an open is in flight replace each other, and a reply for a
-    /// scene the person already left is dropped (never attached, never drawn). Returns once
-    /// the newest pick is open (or failed). `retry`: open again even if already selected.
+    /// old scene's pixels are never shown as this one) and the `open` goes out at once, even
+    /// while an older one is in flight: the host runs opens in order and answers an older one
+    /// still queued behind a newer one `superseded`, and a newer open cancels the older
+    /// scene's deferred probe — so clicking through scenes costs at most the open already
+    /// rendering plus the newest. A reply for a scene the person already left is dropped
+    /// (never attached, never drawn). Returns once this pick is open, failed or replaced.
+    /// `retry`: open again even if already selected.
     func select(scene: String, retry: Bool = false) async {
         guard retry || scene != selectedScene || info == nil else { return }
         openFailure = nil
         let size = aspect.size
         playback.beginOpening(scene: scene, key: PlaybackEngine.sceneKey(scene, width: Int(size.width), height: Int(size.height)))
+        playback.poisoned = host.poisoned(scene: scene)
         loadSceneState(scene)
-        if let loop = openLoop { await loop.value; return }
-        let loop = Task { @MainActor [weak self] in _ = await self?.openNewest() }
-        openLoop = loop
-        await loop.value
-    }
-
-    /// Opens `selectedScene` until the scene that opened is still the one selected.
-    private func openNewest() async {
-        defer { openLoop = nil }
-        while let target = selectedScene {
-            do {
-                let opened = try await host.reopen(openParams(), isCurrent: { [weak self] in self?.selectedScene == target })
-                guard selectedScene == target else { continue }      // picked another meanwhile: open that one
-                if let opened { ui.viewport.fit(opened.duration) }
-            } catch {
-                guard selectedScene == target else { continue }
-                openFailure = OpenFailure(scene: target, message: HostSupervisor.describe(error))
-                playback.openingFailed()
-            }
-            return
+        do {
+            let opened = try await host.reopen(openParams(), isCurrent: { [weak self] in self?.selectedScene == scene })
+            guard selectedScene == scene else { return }              // picked another meanwhile
+            if let opened { ui.viewport.fit(opened.duration) }
+        } catch {
+            guard selectedScene == scene else { return }
+            openFailure = OpenFailure(scene: scene, message: HostSupervisor.describe(error))
+            playback.openingFailed()
         }
     }
 
@@ -469,6 +478,7 @@ final class ProjectModel {
     func previewOpening(_ scene: String) {
         let size = aspect.size
         playback.beginOpening(scene: scene, key: PlaybackEngine.sceneKey(scene, width: Int(size.width), height: Int(size.height)))
+        playback.poisoned = host.poisoned(scene: scene)
         loadSceneState(scene)
     }
 

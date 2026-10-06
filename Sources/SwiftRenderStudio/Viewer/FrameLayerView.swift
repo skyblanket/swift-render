@@ -1,5 +1,5 @@
+import Accelerate
 import AppKit
-import CoreImage
 import QuartzCore
 import SwiftUI
 
@@ -80,15 +80,39 @@ final class FrameLayerView: NSView {
         show(cover)
     }
 
-    private static let ciContext = CIContext(options: [.cacheIntermediates: false])
+    /// Longest edge of the cover bitmap: the layer scales it up (linear), which is most of the blur.
+    static let coverEdge = 96
 
+    /// The cover, on the CPU and synchronously (a GPU Core Image pass came back black in some
+    /// contexts): downscale into a small premultiplied BGRA bitmap, two tent passes, half the
+    /// saturation. ~0.1 ms; the result never shares memory with `img`.
     static func cover(_ img: CGImage) -> CGImage? {
-        let s = min(1, 320 / CGFloat(max(img.width, img.height)))
-        let small = CIImage(cgImage: img).transformed(by: CGAffineTransform(scaleX: s, y: s))
-        let blurred = small.clampedToExtent().applyingGaussianBlur(sigma: 10)
-            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.5])
-            .cropped(to: small.extent)
-        return ciContext.createCGImage(blurred, from: small.extent)
+        let s = CGFloat(coverEdge) / CGFloat(max(img.width, img.height, 1))
+        let w = max(1, Int((CGFloat(img.width) * s).rounded())), h = max(1, Int((CGFloat(img.height) * s).rounded()))
+        let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: FrameDecoder.sRGB, bitmapInfo: info),
+              let base = ctx.data else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var scratch = [UInt8](repeating: 0, count: w * h * 4)
+        var src = vImage_Buffer(data: base, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w * 4)
+        let kernel = UInt32(max(3, (min(w, h) / 6) | 1))
+        scratch.withUnsafeMutableBytes { raw in
+            var tmp = vImage_Buffer(data: raw.baseAddress, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w * 4)
+            for _ in 0..<2 {
+                vImageTentConvolve_ARGB8888(&src, &tmp, nil, 0, 0, kernel, kernel, nil, vImage_Flags(kvImageEdgeExtend))
+                vImageTentConvolve_ARGB8888(&tmp, &src, nil, 0, 0, kernel, kernel, nil, vImage_Flags(kvImageEdgeExtend))
+            }
+        }
+        // Half saturation: mix each channel halfway to the pixel's luma (BGRA in memory).
+        let px = base.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        for i in stride(from: 0, to: w * h * 4, by: 4) {
+            let b = Int(px[i]), g = Int(px[i + 1]), r = Int(px[i + 2])
+            let y = (r * 54 + g * 183 + b * 19) >> 8
+            px[i] = UInt8((b + y) >> 1); px[i + 1] = UInt8((g + y) >> 1); px[i + 2] = UInt8((r + y) >> 1)
+        }
+        return ctx.makeImage()
     }
 
     private func attachEngine() {

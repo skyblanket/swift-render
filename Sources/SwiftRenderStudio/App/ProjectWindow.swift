@@ -139,7 +139,11 @@ struct DetailSplit: View {
                 SplitHandle(height: Binding(get: { timeline }, set: { timelineHeight = $0 }),
                             range: Self.timelineRange, onReset: { timelineHeight = 0 })
                 TimelineView(model: model)
-                    .overlay { LoadingVeil(active: model.isSceneLoading, rows: 3) }
+                    .opacity(model.sceneDataIsStale ? 0 : 1)      // never the old scene's lanes
+                    .overlay {
+                        LoadingVeil(active: model.isSceneLoading, rows: 3, stale: model.sceneDataIsStale,
+                                    message: model.openFailure.map { "\($0.scene) didn't open, so there's no timeline to show." })
+                    }
                     .frame(height: timeline)
                 if model.ui.showAgentPanel {
                     SplitHandle(height: $agentHeight, range: 120...420)

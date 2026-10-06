@@ -23,8 +23,15 @@ struct InspectorView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Another scene's knobs/props/info are never shown under this scene's name.
+            .opacity(model.ui.inspectorTab != .comments && model.sceneDataIsStale ? 0 : 1)
             // Knobs, props and info come with the scene being opened; comments are already its own.
-            .overlay { LoadingVeil(active: model.isSceneLoading && model.ui.inspectorTab != .comments, rows: 4) }
+            .overlay {
+                if model.ui.inspectorTab != .comments {
+                    LoadingVeil(active: model.isSceneLoading, rows: 4, stale: model.sceneDataIsStale,
+                                message: model.openFailure.map { "Nothing to show until \($0.scene) opens." })
+                }
+            }
         }
         .task(id: model.info?.name) { await model.inspector.sceneOpened() }
     }

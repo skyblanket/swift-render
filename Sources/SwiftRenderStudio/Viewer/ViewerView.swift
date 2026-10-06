@@ -32,6 +32,11 @@ struct ViewerView: View {
                     if !model.playback.hasFrame { placeholder }
                     else if let failure = model.openFailure, failure.scene == model.selectedScene {
                         openFailed(failure, canvas: canvas)
+                    } else if case .failed = model.host.state, model.playback.opening != nil {
+                        // The host gave up while a scene was opening: the picture underneath isn't it.
+                        overCanvas(canvas) { placeholder }
+                    } else if playheadCrashed, model.playback.pictureIsStale {
+                        overCanvas(canvas) { crashedFrame }
                     } else if let opening = model.playback.opening {
                         SceneLoadingCover(opening: opening, canvas: canvas)
                             .transition(.opacity.animation(StudioStyle.isSnapshot ? nil : .easeOut(duration: 0.18)))
@@ -84,15 +89,37 @@ struct ViewerView: View {
                 StudioEmptyState(title: "The preview stopped", symbol: StudioStyle.Symbol.build,
                                  message: "Studio couldn't open \(scene). Save a change to try again.")
                     .help(why)
-            case .ready where model.playback.poisoned.contains(frameIndex(model.playback.t, fps: model.playback.fps)):
-                StudioEmptyState(title: "This frame crashed", symbol: "exclamationmark.triangle",
-                                 message: "Studio skipped it. It'll try again after your next save.")
+            case .ready where playheadCrashed:
+                crashedFrame
             default:
                 VStack(spacing: StudioStyle.Space.s) {
                     ProgressView().controlSize(.small)
                     Text(placeholderText).font(StudioStyle.Fonts.callout).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    /// The playhead sits on a frame that crashed the host this build (it is never asked for).
+    private var playheadCrashed: Bool {
+        guard case .ready = model.host.state else { return false }
+        return model.playback.poisoned.contains(frameIndex(model.playback.t, fps: model.playback.fps))
+    }
+
+    private var crashedFrame: some View {
+        StudioEmptyState(title: "This frame crashed", symbol: "exclamationmark.triangle",
+                         message: "Studio skipped it. It'll try again after your next save.")
+    }
+
+    /// A state that replaces the picture: the canvas, filled, with `content` centred on it.
+    private func overCanvas<Content: View>(_ canvas: CGRect, @ViewBuilder _ content: () -> Content) -> some View {
+        ZStack {
+            Rectangle().fill(StudioStyle.canvas)
+                .frame(width: canvas.width, height: canvas.height)
+                .position(x: canvas.midX, y: canvas.midY)
+            content()
+                .frame(maxWidth: min(420, canvas.width))
+                .position(x: canvas.midX, y: canvas.midY)
         }
     }
 
@@ -270,7 +297,10 @@ struct SceneLoadingCover: View {
                     }
                 }
                 .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 7)
-                .studioGlass(cornerRadius: 16)
+                // Solid, not glass: it sits on a blurred picture of any colour and must read in both appearances.
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(StudioStyle.raised))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(StudioStyle.keyline, lineWidth: 1))
+                .shadow(color: StudioStyle.shadow.opacity(0.18), radius: 8, y: 2)
                 .position(x: canvas.midX, y: canvas.midY)
                 .transition(.opacity)
             }
@@ -296,12 +326,23 @@ struct SceneLoadingCover: View {
 struct LoadingVeil: View {
     var active: Bool
     var rows = 3
+    /// The panel's content is another scene's: cover it at once (no fade-in delay).
+    var stale = false
+    /// Nothing is coming (the open failed): a quiet line instead of the skeleton.
+    var message: String? = nil
     @State private var shown = false
 
     var body: some View {
+        let covered = shown || stale || message != nil
         ZStack(alignment: .topLeading) {
-            if shown {
-                StudioStyle.chrome
+            if covered { StudioStyle.chrome }
+            if let message {
+                Text(message)
+                    .font(StudioStyle.Fonts.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(StudioStyle.Space.l)
+            } else if shown {
                 VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
                     ForEach(0..<rows, id: \.self) { i in
                         RoundedRectangle(cornerRadius: 4)
@@ -314,7 +355,7 @@ struct LoadingVeil: View {
                 .transition(.opacity)
             }
         }
-        .allowsHitTesting(shown)
+        .allowsHitTesting(covered)
         .task(id: active) {
             guard active else {
                 withAnimation(StudioStyle.isSnapshot ? nil : .easeOut(duration: 0.15)) { shown = false }

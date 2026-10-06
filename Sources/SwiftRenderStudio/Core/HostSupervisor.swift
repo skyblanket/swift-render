@@ -64,9 +64,13 @@ final class HostSupervisor {
     @ObservationIgnored var makeHost: Factory
     @ObservationIgnored private var executable: URL?
     @ObservationIgnored private var crashAttempts = 0
-    /// Frames that crashed a host of the current build: never asked for again (warm
-    /// frames included) until a new build swaps in.
-    @ObservationIgnored private(set) var poisoned: Set<Int> = []
+    /// Frames that crashed a host of the current build, per scene: never asked for again
+    /// (warm frames included) until a new build swaps in. A crash in one scene says nothing
+    /// about the same frame index in another.
+    @ObservationIgnored private(set) var poisonedByScene: [String: Set<Int>] = [:]
+    /// The open scene's poisoned frames.
+    var poisoned: Set<Int> { poisoned(scene: openParams.scene) }
+    func poisoned(scene: String?) -> Set<Int> { scene.flatMap { poisonedByScene[$0] } ?? [] }
     /// Playback position, for warm frames and crash locations.
     @ObservationIgnored var currentTime: () -> Double = { 0 }
     @ObservationIgnored var warmWidth: () -> Int = { 960 }
@@ -74,7 +78,7 @@ final class HostSupervisor {
     @ObservationIgnored var onActiveHost: ((RenderHost?, SceneInfo?, DecodedFrame?) -> Void)?
     /// Unsolicited `info` / `audio` events from the active host.
     @ObservationIgnored var onEvent: ((HostMessage) -> Void)?
-    /// A crash poisoned this frame index.
+    /// A crash poisoned this frame index of the open scene.
     @ObservationIgnored var onPoison: ((Int) -> Void)?
     /// A new build went live: its poison set starts empty.
     @ObservationIgnored var onPoisonCleared: (() -> Void)?
@@ -194,10 +198,13 @@ final class HostSupervisor {
         var wire = p
         wire.deferProbe = true
         // On the frame grid, so the reply's frame index is exactly the playhead's.
-        let gridFPS = Double(p.fps ?? 60)
-        let t = Double(frameIndex(max(0, currentTime()), fps: Int(gridFPS))) / gridFPS, width = warmWidth()
+        // A frame that crashed the host is never asked for: the nearest safe one is (the
+        // engine steps its playhead the same way on attach, so the reply's frame is used).
+        let gridFPS = p.fps ?? 60
+        let safe = safeFrame(frameIndex(max(0, currentTime()), fps: gridFPS), avoiding: poisoned(scene: p.scene))
+        let t = safe.map { Double($0) / Double(gridFPS) } ?? 0, width = warmWidth()
         let format: FrameFormat = host.supportsBinaryFrames ? .bgra8 : .jpeg
-        let wantsFrame = !poisoned.contains(frameIndex(t, fps: p.fps ?? 60))
+        let wantsFrame = safe != nil
         if wantsFrame { wire.t = t; wire.maxWidth = width; wire.format = format.rawValue }
         do {
             let opened = try await host.openScene(wire)
@@ -218,6 +225,9 @@ final class HostSupervisor {
         } catch {
             if host !== active, active != nil { return self.info }
             if let e = error as? HostClientError, e.isSuperseded { return nil }
+            // The host died under this open (its first frame crashed, say): not a failed open.
+            // The crash card shows, and the restart replays `openParams` and attaches.
+            if let e = error as? HostClientError, case .exited = e { return nil }
             if !wanted() { return nil }
             throw error
         }
@@ -295,8 +305,11 @@ final class HostSupervisor {
             if used.scene != nil {
                 info = try await host.open(used)
                 if closed { throw Closed() }
-                let t = min(currentTime(), info?.duration ?? 0)
-                if !poisoned.contains(frameIndex(t, fps: info?.fps ?? 60)) {
+                let fps = info?.fps ?? 60
+                let last = frameIndex(info?.duration ?? 0, fps: fps)
+                let want = min(frameIndex(max(0, currentTime()), fps: fps), last)
+                if let f = safeFrame(want, last: last, avoiding: poisoned(scene: used.scene)) {
+                    let t = Double(f) / Double(fps)
                     warm = try? await withTimeout(5, "warm frame") { [w = warmWidth()] in
                         try await host.frame(t: t, maxWidth: w, format: .jpeg)
                     }
@@ -327,7 +340,7 @@ final class HostSupervisor {
             crash = nil
             swapError = nil
             crashAttempts = 0
-            poisoned = []
+            poisonedByScene = [:]
             onPoisonCleared?()
         }
         restartTask?.cancel()
@@ -384,9 +397,13 @@ final class HostSupervisor {
         c.t = t
         crash = c
         state = .crashed(c)
-        let fps = info?.fps ?? openParams.fps ?? 60
+        // The scene being rendered when it died: the open one (an `open` in flight counts —
+        // `openParams` names it before the request is sent).
+        let fps = info?.name == openParams.scene ? info?.fps ?? 60 : openParams.fps ?? 60
         let f = frameIndex(t, fps: fps)
-        for p in (f - 1)...(f + 1) { poisoned.insert(p); onPoison?(p) }
+        if let scene = openParams.scene {
+            for p in (f - 1)...(f + 1) { poisonedByScene[scene, default: []].insert(p); onPoison?(p) }
+        }
         active = nil
         onActiveHost?(nil, info, nil)
 

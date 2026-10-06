@@ -20,6 +20,8 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         var generation: Int = 1
         /// Crash (like a scene `fatalError`) when asked to render within half a frame of this time.
         var crashAt: Double? = nil
+        /// Only this scene crashes at `crashAt` (nil: every scene).
+        var crashScene: String? = nil
         /// Called with the crash report instead of a simulated exit (`--fake-serve` aborts).
         var onCrash: (@Sendable (String) -> Void)? = nil
         /// `open` fails with this message (renamed scene, props decode error…).
@@ -67,6 +69,9 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
     private var exitWaiters: [CheckedContinuation<HostTermination, Never>] = []
     private var _stats = Stats()
     private var knobOverrides: [String: KnobValue] = [:]
+    /// Opens run one at a time, like the real host's request loop.
+    private var openArrivals = 0
+    private var openRunning = false
 
     private struct Session {
         var scene: String
@@ -215,6 +220,24 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
             guard let scene = p.scene, Self.scenes.contains(where: { $0.name == scene }) else {
                 throw HostClientError.host(HostError(code: "unknownScene", message: "no scene \(p.scene ?? "nil")"))
             }
+            // In order, one at a time; a deferred-probe open still queued when a newer one
+            // arrived is answered `superseded` without running (the real host's batch rule).
+            let ticket = lock.withLock { openArrivals += 1; return openArrivals }
+            while true {
+                let (go, superseded) = lock.withLock { () -> (Bool, Bool) in
+                    if p.deferProbe == true, ticket < openArrivals { return (false, true) }
+                    if openRunning { return (false, false) }
+                    openRunning = true
+                    return (true, false)
+                }
+                if superseded {
+                    lock.withLock { _stats.superseded += 1 }
+                    throw HostClientError.host(HostError(code: "superseded", message: "a newer open replaced this one"))
+                }
+                if go { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            defer { lock.withLock { openRunning = false } }
             if options.openMs > 0 { try await Task.sleep(for: .milliseconds(Int(options.openMs))) }
             let d = p.duration ?? Self.scenes.first { $0.name == scene }!.defaultDuration
             let sess = Session(scene: scene, width: p.width ?? 1920, height: p.height ?? 1080, fps: p.fps ?? 60,
@@ -240,6 +263,10 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
             // `t` on open: the first frame rides on the reply.
             var frame: HostFrame?, payload: Data?
             if let t = p.t {
+                if crashes(at: t, fps: sess.fps, scene: scene) {
+                    crash(t: t, scene: scene)
+                    throw HostClientError.exited("signal 5")
+                }
                 let fmt = FrameFormat(rawValue: p.format ?? "jpeg") ?? .jpeg
                 (frame, payload) = render(t: max(0, min(d, t)), maxWidth: p.maxWidth ?? 1920, format: fmt, session: sess)
                 lock.withLock { _stats.rendered += 1 }
@@ -400,14 +427,14 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
             switch work {
             case .frame(let p, let c):
                 let t = p.t ?? 0
-                if crashes(at: t, fps: sess?.fps ?? 60) { crash(t: t, scene: sess?.scene ?? "Scene"); c.resume(throwing: HostClientError.exited("signal 5")); return }
+                if crashes(at: t, fps: sess?.fps ?? 60, scene: sess?.scene) { crash(t: t, scene: sess?.scene ?? "Scene"); c.resume(throwing: HostClientError.exited("signal 5")); return }
                 let fmt = FrameFormat(rawValue: p.format ?? "jpeg") ?? .jpeg
                 let (frame, payload) = render(t: t, maxWidth: p.maxWidth ?? 960, format: fmt, session: sess)
                 lock.lock(); _stats.rendered += 1; lock.unlock()
                 c.resume(returning: HostReply(result: HostResult(frame: frame), payload: payload))
             case .stream(let id, let s):
                 let t = s.next
-                if crashes(at: t, fps: sess?.fps ?? 60) { crash(t: t, scene: sess?.scene ?? "Scene"); return }
+                if crashes(at: t, fps: sess?.fps ?? 60, scene: sess?.scene) { crash(t: t, scene: sess?.scene ?? "Scene"); return }
                 let (frame, payload) = render(t: t, maxWidth: s.maxWidth, format: s.format, session: sess)
                 lock.lock()
                 _stats.rendered += 1; _stats.streamFrames += 1
@@ -420,8 +447,9 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         }
     }
 
-    private func crashes(at t: Double, fps: Int) -> Bool {
+    private func crashes(at t: Double, fps: Int, scene: String?) -> Bool {
         guard let c = options.crashAt else { return false }
+        if let only = options.crashScene, only != scene { return false }
         return abs(t - c) <= 0.5 / Double(fps)
     }
 

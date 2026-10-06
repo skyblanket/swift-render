@@ -55,7 +55,10 @@ your project.
 - **Crashes.** If a host crashes, Studio shows a crash card with the stderr tail and restarts it.
   The card's time and the frames playback skips come from the host's own crash message (the
   frame that actually crashed), not the playhead, and a playback stream stops just before that
-  frame. The next build that goes live clears the card, the skipped frames and the restart budget.
+  frame. Skipped frames belong to the scene that crashed: the same frame of another scene still
+  renders. A scene opened onto a skipped frame shows the nearest frame that didn't crash instead
+  of waiting for one that never comes. The next build that goes live clears the card, the skipped
+  frames and the restart budget.
 
 ## The window
 
@@ -173,7 +176,7 @@ swift-render-studio [project] [--scene X] [--at t] [--tab comments|knobs|props|i
                     [--snapshot out.png [--play-for s]
                                         [--in-out a:b] [--render <preset> [--render-wait done]]
                                         [--show render-sheet|renders]]
-                    [--fake-host | --fake-process-host] [--fake-crash-at t] [--fake-build-fail]
+                    [--fake-host | --fake-process-host] [--fake-crash-at t [--fake-crash-scene X]] [--fake-build-fail]
 ```
 
 `--snapshot` lays the project window out offscreen, at 1600×1000 with the dark appearance. It
@@ -198,7 +201,7 @@ The other panels have snapshot options too:
 
 | Area | Options |
 |---|---|
-| Timeline | `--wait-audio` (wait for the waveform), `--timeline-zoom <px/s>`, `--timeline-start <s>`, `--inout a,b`, `--select-clip <n\|id>`, `--hover x,y`; `-layout.timelineHeight N` sets the timeline height |
+| Timeline | `--wait-audio` (wait for the waveform), `--timeline-zoom <px/s>`, `--timeline-start <s>`, `--inout a,b`, `--select-clip <n\|id>`, `--hover x,y`; `-layout.timelineHeightManual N` sets the timeline height (`0` = fit the lanes, capped at 35% of the column) |
 | Review | `--comment <id\|first\|N>` selects a thread, `--compare split\|toggle\|sideBySide\|difference` opens A/B compare, `--draft x,y,w,h\|point:x,y` and `--draft-text "…"` show the composer |
 | Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
 | Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
@@ -222,10 +225,14 @@ opens.
 **Switching scenes.** Picking a scene stops playback and covers the picture at once: a scene
 you've visited shows its last frame under a light veil, a new one a blurred version of the old
 picture, and after 150 ms a small "Opening StyleLab…" label. The timeline and the Knobs, Props
-and Info tabs show placeholders until the scene's clips and knobs arrive. The host answers `open`
+and Info tabs hide the old scene's lanes and knobs at once and show placeholders until the new
+scene's clips and knobs arrive (or say so, if it didn't open). Play, seek and step wait until the
+new scene's first frame is up, and the old soundtrack is unloaded. The host answers `open`
 with the first frame (full display size, lossless) before it probes the scene, so picture,
 transport and timeline length change together; clips, knobs and score events follow a moment
-later. Clicking through several scenes quickly opens only the last one. Each scene remembers its
+later. Each pick sends its `open` at once; clicking through several scenes quickly runs at most
+the open already rendering plus the newest pick — picks in between are answered `superseded`
+without rendering, and the newest open cancels the earlier scene's deferred probe. Each scene remembers its
 playhead and playback quality, and the host keeps its probe and analyzed soundtrack in memory,
 so going back is quick. Paused frames are always rendered at the canvas's pixel size (Retina,
 portrait included) and re-sharpen when the canvas grows; Auto playback quality drops to 50% size,
