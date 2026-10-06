@@ -59,7 +59,7 @@ enum SelfTest {
         print("[studio selftest] windows: \(titles.joined(separator: ", "))")
         for m in models {
             print("[studio selftest] project \(m.project.root.lastPathComponent): scene \(m.selectedScene ?? "-"), "
-                  + "host \(m.host.state), build \(m.build.phase), frame \(m.playback.hasFrame)")
+                  + "host \(m.host.state) gen \(m.host.generation) restarts \(m.host.restarts), build \(m.build.phase), frame \(m.playback.hasFrame)")
         }
         let ok = models.contains { $0.playback.hasFrame }
         Task {
