@@ -287,7 +287,7 @@ final class LaunchTests: XCTestCase {
         XCTAssertEqual(swiftString("a \"b\"\n\\"), "\"a \\\"b\\\"\\n\\\\\"")
         let lit = propsLiteral(.sample, indent: 4)
         XCTAssertTrue(lit.hasPrefix("LaunchProps(\n"))
-        XCTAssertTrue(lit.contains("source: #\"\"\""), "multi-line code becomes a raw string")
+        XCTAssertTrue(lit.contains("source: \"\"\""), "multi-line code becomes a multi-line string")
         XCTAssertTrue(lit.contains(".init(.downloadForMac)"))
     }
 

@@ -601,11 +601,15 @@ func propsLiteral(_ p: LaunchProps, indent: Int) -> String {
 
 private func snippetLiteral(_ c: LaunchProps.CodeSnippet, pad: String) -> String {
     var a: [String] = []
-    if c.source.contains("\n") && !c.source.contains("\"\"\"#") {
-        let body = c.source.components(separatedBy: "\n").map { $0.isEmpty ? "" : pad + "    " + $0 }.joined(separator: "\n")
-        a.append("source: #\"\"\"\n\(body)\n\(pad)    \"\"\"#")
+    // SceneRegistryPlugin scans source text, so a snippet's `public struct X: …Scene`
+    // would register X. `public\u{20}` keeps the value and hides it from the scan.
+    func hide(_ s: String) -> String { s.replacingOccurrences(of: "public ", with: "public\\u{20}") }
+    if c.source.contains("\n") {
+        let escaped = c.source.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"\"\"", with: "\\\"\"\"")
+        let body = hide(escaped).components(separatedBy: "\n").map { $0.isEmpty ? "" : pad + "    " + $0 }.joined(separator: "\n")
+        a.append("source: \"\"\"\n\(body)\n\(pad)    \"\"\"")
     } else {
-        a.append("source: \(swiftString(c.source))")
+        a.append("source: \(hide(swiftString(c.source)))")
     }
     if c.language != .swift { a.append("language: .\(c.language.rawValue)") }
     if let t = c.title { a.append("title: \(swiftString(t))") }
