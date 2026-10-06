@@ -1,6 +1,5 @@
 import AVFoundation
 import AppKit
-import CoreImage
 import SwiftUI
 
 /// Custom recorder built on AVAssetWriter + ImageRenderer.
@@ -290,33 +289,5 @@ public final class Recorder {
         } else {
             try? FileManager.default.removeItem(at: tempURL)
         }
-    }
-
-    /// The pre-0.9 conversion (fresh buffer + CIContext), kept only until
-    /// RecorderTests proves `draw(_:into:)` byte-identical to it.
-    nonisolated static func legacyPixelBuffer(from cgImage: CGImage, size: CGSize, ciContext: CIContext) -> CVPixelBuffer? {
-        let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-        ] as CFDictionary
-
-        var pb: CVPixelBuffer?
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            Int(size.width), Int(size.height),
-            kCVPixelFormatType_32BGRA,
-            attrs,
-            &pb
-        )
-        guard status == kCVReturnSuccess, let buffer = pb else { return nil }
-
-        let ci = CIImage(cgImage: cgImage)
-        // Scale CIImage to match pixel-buffer size (handles displayScale != 1).
-        let scaledCI = ci.transformed(by: CGAffineTransform(
-            scaleX: size.width / ci.extent.width,
-            y: size.height / ci.extent.height
-        ))
-        ciContext.render(scaledCI, to: buffer)
-        return buffer
     }
 }

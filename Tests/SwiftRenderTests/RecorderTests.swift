@@ -75,7 +75,7 @@ final class RecorderTests: XCTestCase {
                     XCTAssertEqual(CGSize(width: image.width, height: image.height), recorder.config.outputSize)
 
                     var start = Date()
-                    let legacy = try XCTUnwrap(Recorder.legacyPixelBuffer(
+                    let legacy = try XCTUnwrap(legacyPixelBuffer(
                         from: image, size: CGSize(width: image.width, height: image.height), ciContext: ci))
                     legacyMS.append(Date().timeIntervalSince(start) * 1000)
 
@@ -181,4 +181,32 @@ final class RecorderTests: XCTestCase {
             XCTAssertEqual(c.blueComponent, 0, accuracy: 0.06)
         }
     }
+}
+
+/// The pre-0.9 Recorder conversion (fresh buffer per frame + CIContext), verbatim,
+/// kept as the reference the pooled `Recorder.draw(_:into:)` must match byte for byte.
+private func legacyPixelBuffer(from cgImage: CGImage, size: CGSize, ciContext: CIContext) -> CVPixelBuffer? {
+    let attrs = [
+        kCVPixelBufferCGImageCompatibilityKey: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+    ] as CFDictionary
+
+    var pb: CVPixelBuffer?
+    let status = CVPixelBufferCreate(
+        kCFAllocatorDefault,
+        Int(size.width), Int(size.height),
+        kCVPixelFormatType_32BGRA,
+        attrs,
+        &pb
+    )
+    guard status == kCVReturnSuccess, let buffer = pb else { return nil }
+
+    let ci = CIImage(cgImage: cgImage)
+    // Scale CIImage to match pixel-buffer size (handles displayScale != 1).
+    let scaledCI = ci.transformed(by: CGAffineTransform(
+        scaleX: size.width / ci.extent.width,
+        y: size.height / ci.extent.height
+    ))
+    ciContext.render(scaledCI, to: buffer)
+    return buffer
 }
