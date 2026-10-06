@@ -258,7 +258,7 @@ final class ProjectModel {
         host = HostSupervisor(project: project, makeHost: factory)
         // Settings › Playback.
         let defaults = UserDefaults.standard
-        let budgetMB = defaults.object(forKey: "cacheBudgetMB") == nil ? 1024 : max(256, defaults.integer(forKey: "cacheBudgetMB"))
+        let budgetMB = defaults.object(forKey: "cacheBudgetMB") == nil ? FrameCache.defaultBudgetMB : max(256, defaults.integer(forKey: "cacheBudgetMB"))
         playback = PlaybackEngine(cache: FrameCache(budgetBytes: budgetMB << 20))
         playback.quality = defaults.string(forKey: "playbackQuality").flatMap(PlaybackQuality.init(rawValue:)) ?? .auto
         review = ReviewController(project: project)

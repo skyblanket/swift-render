@@ -84,17 +84,38 @@ final class PlaybackTests: XCTestCase {
         var clock = 0.0
         engine.now = { clock }
         engine.play()
-        for _ in 0..<90 {
+        XCTAssertEqual(engine.sampleFPS, 60, "plays at the scene's fps")
+        var steppedAt: Double?
+        for _ in 0..<180 {
             clock += 1.0 / 60
             engine.tick()
+            if engine.rung > 0 { steppedAt = clock; break }
             try await Task.sleep(for: .milliseconds(10))
         }
         let live = engine.liveStats
+        XCTAssertGreaterThan(engine.rung, 0, "sustained drops step the ladder down")
+        XCTAssertGreaterThanOrEqual(steppedAt ?? 0, 1, "not in the first second after play")
+        XCTAssertEqual(engine.sampleFPS, 30, "fps goes first")
+        XCTAssertEqual(engine.playWidth, 320, "width is kept on the first step")
         engine.pause()
         XCTAssertGreaterThan(live.dropped, 0)
         XCTAssertGreaterThan(live.msPerFrame, 100)
-        XCTAssertTrue(engine.playWidth < 320 || engine.sampleFPS < 30, "ladder reduced width or fps")
         XCTAssertNotNil(live.note)
+    }
+
+    func testLightSceneStaysAtFullQuality() async throws {
+        let (engine, _) = try await makeEngine(renderMs: 2)
+        var clock = 0.0
+        engine.now = { clock }
+        engine.play()
+        // A light scene keeps 60 fps at full width.
+        for _ in 0..<120 {
+            clock += 1.0 / 60
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        XCTAssertEqual(engine.rung, 0, "a light scene stays at full quality")
+        engine.pause()
     }
 
     func testJumpToEditAndInOut() async throws {
