@@ -57,6 +57,10 @@ struct LaunchOptions: Equatable, Sendable {
     var compareMode: CompareMode?
     var draftRegion: String?
     var draftText: String?
+    /// Snapshot mode: replay this recorded `claude` stream-json into the agent panel first.
+    var agentReplay: String?
+    /// Snapshot mode: capture with the Ask Claude sheet open.
+    var askSheet = false
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -83,6 +87,8 @@ struct LaunchOptions: Equatable, Sendable {
             case "--compare": o.compareMode = v.flatMap(CompareMode.init(rawValue:)); i += 2
             case "--draft": o.draftRegion = v; i += 2
             case "--draft-text": o.draftText = v; i += 2
+            case "--agent-replay": o.agentReplay = v; i += 2
+            case "--ask-sheet": o.askSheet = true; i += 1
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
             default:
                 // macOS passes -NSDocumentRevisionsDebugMode etc.; positional = project.
@@ -232,6 +238,13 @@ final class ProjectModel {
                                       aspect: self.aspect == .landscape ? nil : self.aspect.rawValue,
                                       generation: self.host.generation)
         }
+        // S8: while an agent edits, its half-done states don't shout, and a multi-file edit is one build.
+        agent.onRunningChanged = { [weak self] running in
+            guard let self else { return }
+            self.build.agentEditing = running
+            self.watcher?.debounce = .milliseconds(running ? 600 : 150)
+        }
+        agent.onReviewsChanged = { [weak self] in self?.review.reload() }
     }
 
     // MARK: Lifecycle
