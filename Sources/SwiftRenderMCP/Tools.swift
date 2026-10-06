@@ -360,6 +360,10 @@ final class ToolBox {
         guard e.comment.status.isActive else {
             throw ToolError("\(e.comment.id) is \(e.comment.status.rawValue) — only open or inProgress comments can be claimed")
         }
+        // Studio pre-claims for the agent run (assignee = agent); a person's claim is theirs.
+        if e.comment.status == .inProgress, let who = e.comment.assignee, who.kind == .human {
+            throw ToolError("\(e.comment.id) is being worked on by \(who.name) — leave it")
+        }
         let claimed = try store.setStatus(scene: e.scene, id: e.comment.id, .inProgress, by: .agent(agentName))
         var lines = ["claimed \(claimed.id) (\(e.scene) \(claimed.timecode)) → inProgress, assignee \(agentName)"]
         let existing = claimed.beforeAttachment.map { store.url(forAttachment: $0.path) }

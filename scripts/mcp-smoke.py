@@ -5,8 +5,13 @@
     python3 scripts/mcp-smoke.py --full             # + a review round trip, check_scene, build, knobs
     python3 scripts/mcp-smoke.py --bin .build/debug/swift-render-mcp --save /tmp/frames
 
+    python3 scripts/mcp-smoke.py --claude           # one real headless Claude Code run (needs `claude` logged in)
+
 --full adds a throwaway comment with `swift-render review add`, walks it through
 get/claim/reply/resolve over MCP, then deletes it (and its attachments) again.
+--claude adds a throwaway comment, runs the exact `claude -p … --agent swift-render-director`
+command Studio uses, asks it to reply "ack", checks the reply landed in the review file,
+prints the stream-json events it saw, and deletes the comment again.
 Exit status 0 = every check passed. Server stderr goes to ours.
 """
 import argparse
@@ -94,6 +99,17 @@ def server_argv(args):
     return [cfg["command"]] + cfg.get("args", [])
 
 
+def review_file(scene):
+    return os.path.join(ROOT, ".swift-render/reviews", f"{scene}.json")
+
+
+def drop_if_empty(scene, existed):
+    """Don't leave an empty review file behind that wasn't there before the run."""
+    path = review_file(scene)
+    if not existed and os.path.exists(path) and not json.load(open(path))["comments"]:
+        os.remove(path)
+
+
 def cli(*argv):
     """The project's own CLI (built by the server's first render if needed)."""
     bin_path = subprocess.run(["swift", "build", "--show-bin-path"], cwd=ROOT, capture_output=True,
@@ -101,14 +117,73 @@ def cli(*argv):
     return subprocess.run([os.path.join(bin_path, "swift-render"), *argv], cwd=ROOT, capture_output=True, text=True)
 
 
+def claude_command(prompt, budget):
+    """Exactly what Studio runs (cwd = project root); see docs/review-loop.md."""
+    return ["claude", "-p", prompt, "--agent", "swift-render-director", "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "acceptEdits", "--allowedTools", "mcp__swift-render", "--mcp-config", ".mcp.json",
+            "--max-budget-usd", str(budget)]
+
+
+def claude_e2e(scene, budget):
+    print("headless Claude Code")
+    existed = os.path.exists(review_file(scene))
+    add = cli("review", "add", scene, "--at", "2.6", "--region", "0.3,0.12,0.4,0.15", "--author", "e2e", "--json",
+              "e2e test: is the ANALYTIC SPRINGS heading too small?")
+    if not check(add.returncode == 0, "review add (CLI) creates the test comment"):
+        print(add.stderr)
+        return
+    cid = json.loads(add.stdout)["comment"]["id"]
+    prompt = f"List the open swift-render review comments and reply to {cid} with the word ack. Do not edit any files."
+    try:
+        t0 = time.time()
+        proc = subprocess.run(claude_command(prompt, budget), cwd=ROOT, capture_output=True, text=True, timeout=900)
+        events = []
+        for line in proc.stdout.splitlines():
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                print("  !    non-JSON stdout line:", line[:160])
+        print(f"  ·    claude exited {proc.returncode} after {time.time() - t0:.0f}s with {len(events)} events")
+        for e in events:
+            kind = e.get("type"), e.get("subtype")
+            content = (e.get("message") or {}).get("content") or []
+            parts = [c.get("type") + (":" + c["name"] if c.get("name") else "") for c in content if isinstance(c, dict)]
+            print(f"  ·      {kind[0]}{'/' + kind[1] if kind[1] else ''} {' '.join(parts)}"
+                  + (f" → {str(e.get('result'))[:120]!r} cost=${e.get('total_cost_usd')}" if kind[0] == "result" else ""))
+        init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
+        servers = {s["name"]: s["status"] for s in init.get("mcp_servers", [])}
+        check(servers.get("swift-render") == "connected", f"system/init: swift-render MCP connected ({servers.get('swift-render')})")
+        check("mcp__swift-render__reply_comment" in init.get("tools", []), "system/init: director has the MCP tools")
+        result = next((e for e in events if e.get("type") == "result"), {})
+        if not check(result and not result.get("is_error"), "result event without is_error"):
+            print("       result:", result.get("result"), "| stderr:", proc.stderr.strip()[-400:])
+        stored = json.load(open(review_file(scene)))
+        cm = next((x for x in stored["comments"] if x["id"] == cid), {})
+        replies = [r for r in cm.get("replies", []) if r["author"]["kind"] == "agent"]
+        check(any("ack" in r["body"].lower() for r in replies),
+              f"agent reply 'ack' landed in .swift-render/reviews/{scene}.json")
+        check(cm.get("status") == "open", "comment left open (reply only)")
+    finally:
+        rm = cli("review", "delete", cid)
+        check(rm.returncode == 0, "cleanup: review delete")
+        drop_if_empty(scene, existed)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", help="server binary (default: the command in .mcp.json)")
     ap.add_argument("--scene", default="TimelineDemo")
     ap.add_argument("--full", action="store_true", help="also run the review round trip, check, build, knobs")
+    ap.add_argument("--claude", action="store_true", help="only the headless Claude Code end-to-end run")
+    ap.add_argument("--budget", default="1", help="--max-budget-usd for --claude (default 1)")
     ap.add_argument("--save", help="write every returned image here")
     args = ap.parse_args()
     scene = args.scene
+
+    if args.claude:
+        claude_e2e(scene, args.budget)
+        print("\n" + ("PASS" if not failures else f"FAIL ({len(failures)}): " + "; ".join(failures)))
+        sys.exit(1 if failures else 0)
 
     print("protocol")
     c = Client(server_argv(args))
@@ -149,6 +224,7 @@ def main():
 
     if args.full:
         print("review round trip")
+        existed = os.path.exists(review_file(scene))
         add = cli("review", "add", scene, "--at", "1.2", "--region", "0.08,0.3,0.5,0.4",
                   "--author", "mcp-smoke", "--json", "smoke test: title block feels heavy")
         if not check(add.returncode == 0, "review add (CLI) creates a comment"):
@@ -169,7 +245,7 @@ def main():
                 _, res, text, imgs = c.call("resolve_comment", {"id": cid, "summary": "smoke: nothing changed"},
                                             args.save)
                 check(not res.get("isError") and "resolved" in text and len(imgs) == 1, "resolve_comment")
-                stored = json.load(open(os.path.join(ROOT, ".swift-render/reviews", f"{scene}.json")))
+                stored = json.load(open(review_file(scene)))
                 cm = next(x for x in stored["comments"] if x["id"] == cid)
                 check(cm["status"] == "resolved" and cm["resolution"] == "smoke: nothing changed",
                       "review file: status resolved + resolution")
@@ -183,6 +259,7 @@ def main():
             finally:
                 rm = cli("review", "delete", cid)
                 check(rm.returncode == 0, "cleanup: review delete")
+                drop_if_empty(scene, existed)
 
         print("check, build, knobs")
         _, res, text, imgs = c.call("check_scene", {"scene": scene}, args.save)
