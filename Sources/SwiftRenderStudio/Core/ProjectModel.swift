@@ -49,6 +49,14 @@ struct LaunchOptions: Equatable, Sendable {
     var runCheck = false
     /// Run as a protocol-speaking fake host on stdio (`FakeServe`), not as an app.
     var fakeServe = false
+    /// Snapshot mode: export with this preset first (`--render preview`), captured mid-progress
+    /// or, with `--render-wait done`, once finished.
+    var renderPreset: RenderPreset?
+    var renderWaitDone = false
+    /// Snapshot mode: In/Out set before rendering (`--in-out 2:8`).
+    var inOut: ClosedRange<Double>?
+    /// Snapshot mode: draw a sheet/popover over the window (`--show render-sheet|renders`).
+    var show: String?
     /// Fake host in a child process through the real `HostClient` (implies simulated builds).
     var fakeProcessHost = false
     /// Review UI snapshots: `--comment <id|first|N>`, `--compare <split|toggle|sideBySide|difference>`,
@@ -89,6 +97,13 @@ struct LaunchOptions: Equatable, Sendable {
             case "--draft-text": o.draftText = v; i += 2
             case "--agent-replay": o.agentReplay = v; i += 2
             case "--ask-sheet": o.askSheet = true; i += 1
+            case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
+            case "--render-wait": o.renderWaitDone = v == "done"; i += 2
+            case "--show": o.show = v; i += 2
+            case "--in-out":
+                let p = (v ?? "").split(separator: ":").compactMap { Double($0) }
+                if p.count == 2, p[0] < p[1] { o.inOut = p[0]...p[1] }
+                i += 2
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
             default:
                 // macOS passes -NSDocumentRevisionsDebugMode etc.; positional = project.
@@ -225,6 +240,16 @@ final class ProjectModel {
             }
         }
         playback.onHang = { [weak self] t in self?.host.reportHang(at: t) }
+        renders.inputs = { [weak self] scene in
+            guard let self else { return RenderInputs() }
+            let current = scene == self.selectedScene
+            let summary = self.scenes.first { $0.name == scene }
+            return RenderInputs(knobs: current ? self.knobValues : [:],
+                                propsJSON: current && summary?.hasProps == true ? self.propsJSON : nil,
+                                debugExecutable: self.isFake ? nil : self.build.lastGoodExecutable,
+                                hasSoundtrack: summary?.hasSoundtrack ?? false,
+                                duration: current ? self.info?.duration : summary?.defaultDuration)
+        }
         review.onChange = { [weak self] comments in
             self?.playback.commentMarks = comments.map { (id: $0.id, t: $0.t, end: $0.end) }
         }
@@ -273,6 +298,7 @@ final class ProjectModel {
         watcher = nil
         build.cancel()
         agent.stop()
+        await renders.shutdown()
         await host.shutdown()
     }
 

@@ -70,6 +70,7 @@ enum SnapshotRunner {
         await TimelineSnapshot.prepare(model)
         if let path = options.agentReplay { await replayAgent(model, path: path, deadline: deadline) }
         if options.askSheet { model.ui.showAskSheet = true }
+        await RenderSnapshot.prepare(model: model, options: options)
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
@@ -82,6 +83,7 @@ enum SnapshotRunner {
         if let sheet = window.attachedSheet, let sheetPNG = render(sheet), let merged = compositeSheet(sheetPNG, over: png, in: window) {
             png = merged
         }
+        png = RenderSnapshot.decorate(png, window: window, model: model, options: options)
         let url = URL(fileURLWithPath: out)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
