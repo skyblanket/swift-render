@@ -19,7 +19,8 @@ func buildSceneInfo(name: String, runner: SceneRunner, duration: Double, size: C
                     loudnessRate: Double = 50, analyzeAudio: Bool = true, captions withCaptions: Bool = true,
                     make: ((Double) -> AnyView)? = nil) throws -> SceneInfo {
     let make = try make ?? runner.makeViewWithTrack(duration, .silent, propsURL)
-    let structure = SceneProbe.probe(duration: duration, size: size, fps: fps, make: make)
+    let structure = probeStructure(runner: runner, duration: duration, size: size, fps: fps,
+                                   propsURL: propsURL, make: make)
 
     var events: [ScoreEventInfo] = []
     var captions: [CaptionInfo] = []
@@ -57,6 +58,21 @@ func buildSceneInfo(name: String, runner: SceneRunner, duration: Double, size: C
                      clips: structure.clips, events: events, knobs: structure.knobs, captions: captions,
                      propsJSON: propsJSON, audioPath: audioPath,
                      loudness: loudness, loudnessRate: loudnessRate, sourcePath: runner.sourcePath)
+}
+
+/// SceneProbe.probe plus knobs read only while building the soundtrack (the probe
+/// only sees `make`). Building a Score is cheap; synthesis happens elsewhere.
+@MainActor
+func probeStructure(runner: SceneRunner, duration: Double, size: CGSize, fps: Int, propsURL: URL?,
+                    make: @escaping (Double) -> AnyView) -> SceneStructure {
+    var structure = SceneProbe.probe(duration: duration, size: size, fps: fps, make: make)
+    KnobStore.shared.beginRecording()
+    _ = runner.soundtrack(duration, propsURL)
+    let scoreKnobs = KnobStore.shared.endRecording()
+    let seen = Set(structure.knobs.map(\.key))
+    let extra = scoreKnobs.filter { !seen.contains($0.key) }
+    if !extra.isEmpty { structure.knobs = (structure.knobs + extra).sorted { $0.key < $1.key } }
+    return structure
 }
 
 /// `track.level` sampled at `rate` per second over `duration` (SceneInfo.loudness).

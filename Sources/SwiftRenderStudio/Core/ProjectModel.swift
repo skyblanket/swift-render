@@ -182,7 +182,16 @@ final class ProjectModel {
             switch msg.event {
             case "info": if let i = msg.info { self.adopt(i) }
             case "audio":
+                // The real host opens before the score is synthesized; the envelope and
+                // WAV arrive here, not in a follow-up `info`.
+                if var i = self.info {
+                    if let p = msg.audioPath { i.audioPath = p }
+                    if let l = msg.loudness { i.loudness = l }
+                    self.adopt(i)
+                }
                 if let p = msg.audioPath { self.playback.audio.load(URL(fileURLWithPath: p), at: self.playback.t) }
+                // Audio-reactive frames rendered so far used a silent track.
+                if let k = self.info?.kind, k == .audio || k == .propsAudio { self.playback.invalidate() }
             default: break
             }
         }

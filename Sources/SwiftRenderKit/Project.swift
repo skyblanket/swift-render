@@ -105,7 +105,8 @@ public struct Project: Sendable, Equatable {
         return NSUserName()
     }
 
-    /// Creates `.swift-render/` and a `.gitignore` for its cache on first use.
+    /// Creates `.swift-render/` and a `.gitignore` for its cache (and ReviewStore's
+    /// flock files) on first use.
     public func ensureDotDir() throws {
         let fm = FileManager.default
         for d in [reviewsDir, knobsDir, attachmentsDir, cacheDir] {
@@ -113,7 +114,7 @@ public struct Project: Sendable, Equatable {
         }
         let ignore = dotDir.appendingPathComponent(".gitignore")
         if !fm.fileExists(atPath: ignore.path) {
-            try "cache/\n".write(to: ignore, atomically: true, encoding: .utf8)
+            try "cache/\nreviews/.*.lock\n".write(to: ignore, atomically: true, encoding: .utf8)
         }
     }
 }

@@ -151,6 +151,9 @@ final class PlaybackEngine {
         var head: Double?
         var lastFrameWall: Double
         var owed = 0
+        /// The host closed it (`streamEnd`: reached `to`, replaced, or a render error).
+        /// Silence after that is not a hang; falling behind restarts it as usual.
+        var ended = false
         var task: Task<Void, Never>?
         init(handle: HostFrameStream, generation: Int, sampleFPS: Int, width: Int, from: Double, wall: Double) {
             self.handle = handle; self.generation = generation; self.sampleFPS = sampleFPS
@@ -392,7 +395,7 @@ final class PlaybackEngine {
                 s.handle.credit(s.owed)
                 s.owed = 0
             }
-            if wall - s.lastFrameWall > hangTimeout, head < duration - 1 / Double(fps) {
+            if !s.ended, wall - s.lastFrameWall > hangTimeout, head < duration - 1 / Double(fps) {
                 stopStream()
                 onHang?(nt)
             }
@@ -437,6 +440,7 @@ final class PlaybackEngine {
                     guard !Task.isCancelled else { break }
                     self.receivedStreamFrame(f, stream: s)
                 }
+                s.ended = true
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 if case HostClientError.exited = error {} else { self.lastError = "\(error)" }

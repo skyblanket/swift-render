@@ -389,7 +389,8 @@ final class HostSession {
     private func reprobe(_ o: inout Opened) {
         HostCrashLog.note("probe \(o.scene.name)")
         let s = o.scene
-        let structure = SceneProbe.probe(duration: s.duration, size: s.size, fps: s.fps, make: s.make)
+        let structure = probeStructure(runner: s.runner, duration: s.duration, size: s.size, fps: s.fps,
+                                       propsURL: s.propsURL, make: s.make)
         o.info.clips = structure.clips
         o.info.knobs = structure.knobs
     }

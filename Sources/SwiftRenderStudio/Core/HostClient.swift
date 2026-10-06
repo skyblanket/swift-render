@@ -89,6 +89,11 @@ final class HostRouter: @unchecked Sendable {
             guard let c else { return }
             do { c.yield(try FrameDecoder.decode(f, payload: payload, fps: fps())) }
             catch { eventsCont.yield(.init(event: "warning", message: "undecodable stream frame: \(error)")) }
+        case "streamEnd":
+            // Natural end, replaced by a newer stream/open, or a render error (`message`).
+            // Finishing normally lets playback start a fresh stream on its next tick.
+            if let sid = msg.streamID { endStream(sid) }
+            eventsCont.yield(msg)
         default:
             eventsCont.yield(msg)
         }
