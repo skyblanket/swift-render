@@ -115,7 +115,7 @@ struct RenderSheet: View {
 
     private var sceneLine: String {
         guard let info = model.info else { return "No scene loaded" }
-        var parts = [String(format: "%.2f s", info.duration), "authored \(info.width)×\(info.height)"]
+        var parts = [String(format: "%.2f s", info.duration), "\(String(info.width))×\(String(info.height)) canvas"]
         parts.append(hasSoundtrack ? "scored" : "silent")
         if !info.knobs.isEmpty { parts.append("\(info.knobs.count) knob\(info.knobs.count == 1 ? "" : "s")") }
         return parts.joined(separator: " · ")
@@ -133,16 +133,21 @@ struct RenderSheet: View {
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 2)
                     ForEach(RenderPreset.allCases.filter { $0.group == g }) { p in
-                        PresetTile(preset: p, selected: p == preset,
-                                   disabled: RenderQueue.problem(preset: p, duration: sceneDuration,
-                                                                 range: p.durationLimit != nil ? model.playback.inOut : nil,
-                                                                 ffmpegAvailable: !model.renders.ffmpegResolved || model.renders.ffmpeg != nil) != nil)
+                        PresetTile(preset: p, selected: p == preset, disabled: !usable(p))
                             .onTapGesture { preset = p }
                     }
                 }
                 .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    /// Renderable for the whole scene or for the In→Out range.
+    private func usable(_ p: RenderPreset) -> Bool {
+        let ffmpeg = !model.renders.ffmpegResolved || model.renders.ffmpeg != nil
+        if RenderQueue.problem(preset: p, duration: sceneDuration, range: nil, ffmpegAvailable: ffmpeg) == nil { return true }
+        guard let io = model.playback.inOut else { return false }
+        return RenderQueue.problem(preset: p, duration: sceneDuration, range: io, ffmpegAvailable: ffmpeg) == nil
     }
 
     private var presetDetail: some View {

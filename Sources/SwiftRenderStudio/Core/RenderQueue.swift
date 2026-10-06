@@ -260,6 +260,19 @@ final class RenderQueue {
         }
     }
 
+    /// Window closing / app quitting: stop the export (a render child would otherwise
+    /// outlive Studio and keep encoding) and delete its partial output.
+    func shutdown() async {
+        for i in jobs.indices where jobs[i].state == .queued { jobs[i].state = .cancelled }
+        for (id, r) in running {
+            r.cancelled = true
+            r.task?.cancel()
+            await r.child?.terminate()
+            if let out = job(id)?.output { try? FileManager.default.removeItem(at: out) }
+            update(id) { $0.state = .cancelled }
+        }
+    }
+
     /// Drops finished, failed and cancelled rows from the activity list.
     func clearDone() { jobs.removeAll { $0.isDone } }
 

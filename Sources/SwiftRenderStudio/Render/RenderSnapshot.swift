@@ -13,6 +13,7 @@ import SwiftUI
 enum RenderSnapshot {
     /// Starts `--render` and waits until it is ~40% through (or done with `--render-wait done`).
     static func prepare(model: ProjectModel, options: LaunchOptions) async {
+        if let io = options.inOut { model.playback.setInOut(io) }
         guard let preset = options.renderPreset, let scene = model.selectedScene else { return }
         let id = model.renders.enqueue(scene: scene, preset: preset, range: model.playback.inOut,
                                        build: .currentDebug, knobs: .useLive)
@@ -51,7 +52,8 @@ enum RenderSnapshot {
         let size = window.frame.size
         let pw = CGFloat(overlay.width) / scale, ph = CGFloat(overlay.height) / scale
         let top: CGFloat = isSheet ? 52 : 60
-        let x = isSheet ? (size.width - pw) / 2 : size.width - pw - 64
+        // The popover's arrow points at the Renders toolbar button (third from the right).
+        let x = isSheet ? (size.width - pw) / 2 : size.width - pw - 50
         let rect = CGRect(x: x, y: size.height - top - ph, width: pw, height: ph)   // CG: bottom-left origin
         let radius: CGFloat = isSheet ? 11 : 12
 
@@ -68,7 +70,7 @@ enum RenderSnapshot {
         }
         let shape = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
         ctx.addPath(shape)
-        if !isSheet { ctx.addPath(arrow(at: CGPoint(x: rect.maxX - 34, y: rect.maxY))) }
+        if !isSheet { ctx.addPath(arrow(at: CGPoint(x: rect.maxX - 18, y: rect.maxY))) }
         ctx.setFillColor(CGColor(gray: 0.165, alpha: 1))
         ctx.fillPath()
         ctx.setShadow(offset: .zero, blur: 0)
