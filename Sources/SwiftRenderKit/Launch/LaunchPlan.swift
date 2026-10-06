@@ -64,10 +64,13 @@ public struct LaunchPlan: Sendable, Equatable {
             if let b = o.bars { list[i].bars = min(8, max(list[i].kind == .end ? 2 : 1, (b * 2).rounded() / 2)) }
         }
         shots = list
-        var t = 0.0, s: [Double] = []
-        for shot in list { s.append(t); t += shot.bars * bar }
+        // Accumulate in bars and snap to the 60 fps grid, so 21 × 2.4 s is 50.4 s, not 50.399….
+        let framesPerBar = 4 * 60 / bpm * 60
+        let snap = { (bars: Double) -> Double in (bars * framesPerBar).rounded() / 60 }
+        var b = 0.0, s: [Double] = []
+        for shot in list { s.append(snap(b)); b += shot.bars }
         starts = s
-        duration = t
+        duration = snap(b)
     }
 
     /// The default shot list: everything the props can fill, nothing they can't.
