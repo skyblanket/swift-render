@@ -56,8 +56,8 @@ public enum LaunchScore {
             case .hero: line = custom ?? "Introducing \(p.name)."
             case .title: line = custom ?? p.tagline
             case .triad:
-                let f = p.features.prefix(3).map(\.title)
-                line = custom ?? (f.count == 3 ? "\(f[0]). \(f[1]). And \(f[2].lowercased())." : nil)
+                let f = p.features.prefix(FeatureTriad.shown(p.features.count)).map(\.title)
+                line = custom ?? (f.count >= 3 ? f.dropLast().map { "\($0)." }.joined(separator: " ") + " And \(f.last!.lowercased())." : nil)
             case .end: line = custom ?? "\(p.name). Available now."
             default: line = custom
             }

@@ -154,7 +154,7 @@ public struct AppleLaunchShot: View {
         let caption = shot?.caption.map { Self.balance($0) } ?? (f.map { [$0.title + "."] } ?? [props.name])
         let sub = shot?.caption == nil ? f?.detail : nil
         let phone = kind == .iPhone
-        let devWidth: CGFloat = phone ? (L.isVertical ? 540 : 460) : (L.isVertical ? 940 : 1040)
+        let devWidth: CGFloat = phone ? (L.isVertical ? 540 : 410) : (L.isVertical ? 940 : 1040)
         let title = KeynoteTitle(caption, eyebrow: shot?.caption == nil ? "Meet \(props.name)" : nil, sub: sub, at: l,
                                  start: 0.35, size: L.isVertical ? 100 : 92,
                                  alignment: L.isVertical ? .center : .leading, accentLine: caption.count > 1 ? 1 : nil,
