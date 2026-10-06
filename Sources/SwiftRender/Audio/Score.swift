@@ -99,6 +99,7 @@ public func bass(_ note: Note, at t: Double, duration: Double = 0.5,
                  amp: Double = 0.32) -> [ScoreEvent] {
     [ScoreEvent(t, .bass(note), amp: amp, duration: duration)]
 }
+@available(*, deprecated, message: "House rule: no swish transitions. Use swell(chord, into:), thump, rim, tick or blip — or let the music mark the cut.")
 public func riser(at t: Double, duration: Double = 3.4, amp: Double = 0.55) -> [ScoreEvent] {
     [ScoreEvent(t, .riser, amp: amp, duration: duration)]
 }
@@ -170,6 +171,7 @@ public func speak(_ text: String, at t: Double, engine: TTSEngine = .say(), amp:
 public func crackle(from: Double, to: Double, amp: Double = 0.04) -> [ScoreEvent] {
     [ScoreEvent(from, .crackle, amp: amp, duration: max(0, to - from))]
 }
+@available(*, deprecated, message: "House rule: no swish transitions. Use swell(chord, into:), thump, rim, tick or blip — or let the music mark the cut.")
 public func whoosh(at t: Double, rising: Bool = true, amp: Double = 0.5,
                    duration: Double = 0.7) -> [ScoreEvent] {
     [ScoreEvent(t, .whoosh(rising: rising), amp: amp, duration: duration)]

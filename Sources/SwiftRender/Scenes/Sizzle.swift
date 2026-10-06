@@ -16,7 +16,7 @@ import SwiftUI
 ///   bar 3   5.63  ANALYTIC SPRINGS — code card + four easings race
 ///   bar 4   7.50  3D — rotation3DEffect cards over the `monoTunnel` shader
 ///   bar 5   9.38  IT HEARS ITS OWN BEAT — FFT bars + bass ring
-///   bar 6  11.25  900 frames in 7s — this reel's own render, odometer under a riser
+///   bar 6  11.25  900 frames in 7s — this reel's own render, odometer under a swell
 ///   bar 7  13.13  lockup + URL, fade to black
 public struct Sizzle: AudioReactiveScene {
     public static let defaultDuration: Double = 15.0
@@ -32,10 +32,9 @@ public struct Sizzle: AudioReactiveScene {
 
     public static func soundtrack(duration: Double) -> Score? {
         Score(duration: duration) {
-            // bar 0: ticking hats under the typewriter, a whoosh into the drop
+            // bar 0: ticking hats under the typewriter
             every(beat, from: 0, to: chapters[1]) { hat(at: $0, amp: 0.13) }
             every(beat, from: beat / 2, to: chapters[1]) { hat(at: $0, amp: 0.06, pan: 0.5) }
-            whoosh(at: chapters[1] - 0.5, rising: true, amp: 0.6, duration: 0.5)
 
             // bars 1–6: the groove
             boom(at: chapters[1], amp: 0.9, duration: 1.6)
@@ -44,8 +43,8 @@ public struct Sizzle: AudioReactiveScene {
             bassline([.a1, .a1, .c2, .g1], from: chapters[1], to: chapters[7], bpm: bpm)
             crashes(at: Array(chapters[1...6]))
 
-            // bar 6 → 7: riser + kick fill into the lockup
-            riser(at: chapters[6], duration: bar, amp: 0.6)
+            // bar 6 → 7: a chord swell + kick fill into the lockup
+            swell(.minor7(.a3), into: chapters[7], duration: bar, amp: 0.05)
             kicks(at: [chapters[7] - beat * 0.75, chapters[7] - beat * 0.5, chapters[7] - beat * 0.25], amp: 0.8)
 
             // bar 7: the 808 hit and a drone to fade on

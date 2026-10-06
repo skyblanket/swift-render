@@ -60,9 +60,7 @@ public struct PixelSonnet: RenderScene {
 
         // boot: twinkles, hero drop, start jingle
         for (t, n) in [(0.4, 81), (1.15, 76), (2.3, 84), (2.9, 79)] { ev += bell(m(n), at: t, amp: 0.10, pan: n > 80 ? 0.4 : -0.4) }
-        ev += whoosh(at: 0.8, rising: false, amp: 0.22, duration: 0.7)
         ev += chip(m(83), at: 1.55, amp: 0.08); ev += chip(m(88), at: 1.64, amp: 0.08)
-        ev += whoosh(at: cuts[0] - 0.55, rising: true, amp: 0.3, duration: 0.55)
         for (i, n) in [72, 76, 79].enumerated() { ev += bell(m(n), at: cuts[0] - 0.4 + Double(i) * 0.1, amp: 0.09) }
 
         // bass lines: (beat, semitones above root, length in beats)
@@ -142,7 +140,7 @@ public struct PixelSonnet: RenderScene {
         for (i, n) in [72, 76, 79, 84].enumerated() { ev += bell(m(n), at: at(7, 0) + 0.5 + beat * Double(i), amp: 0.11) }
         ev += pluck(m(55), at: at(7, 0) + 0.5 + beat * 4, amp: 0.15)
         for i in 0..<4 { ev += hat(at: at(7, Double(i)), amp: 0.05) }
-        ev += riser(at: at(8, 0), duration: bar, amp: 0.4)
+        ev += swell(Chord.major(.g3), into: at(9, 0), duration: bar, amp: 0.05)
 
         // credits
         ev += boom(at: at(9, 0), amp: 0.55, duration: 1.6); ev += crash(at: at(9, 0), amp: 0.15)

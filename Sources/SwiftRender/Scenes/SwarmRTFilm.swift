@@ -124,14 +124,12 @@ public struct SwarmRTFilm: RenderScene {
             // ─── PUNCTUATION: cuts, stamps, exactly two booms ────────────
             kick(at: 3.2, amp: 0.4); clap(at: 3.2, amp: 0.3, pan: 0)
             kick(at: 7.2, amp: 0.4); clap(at: 7.2, amp: 0.3, pan: 0)
-            whoosh(at: 7.2, rising: true, amp: 0.3, duration: 0.5)
             every(0.05, from: 7.3, to: 10.6) { t in
                 h(t * 4.3) < 0.5 ? hat(at: t, amp: 0.02, pan: 0.25) : []
             }
-            riser(at: 8.0, duration: 3.0, amp: 0.35)
-            whoosh(at: 4.7, rising: false, amp: 0.25, duration: 0.3); clap(at: 4.72, amp: 0.25, pan: -0.1)
-            whoosh(at: 5.3, rising: false, amp: 0.25, duration: 0.3); clap(at: 5.32, amp: 0.25, pan: 0.1)
-            whoosh(at: 5.9, rising: false, amp: 0.25, duration: 0.3); clap(at: 5.92, amp: 0.25, pan: -0.1)
+            clap(at: 4.72, amp: 0.25, pan: -0.1)
+            clap(at: 5.32, amp: 0.25, pan: 0.1)
+            clap(at: 5.92, amp: 0.25, pan: -0.1)
             kick(at: 6.5, amp: 0.5); clap(at: 6.5, amp: 0.35, pan: 0)
             boom(at: 11.0, amp: 0.85, duration: 2.4)                 // BOOM #1: wordmark
             kick(at: 11.0, amp: 0.6); clap(at: 11.0, amp: 0.35, pan: 0)
@@ -140,7 +138,6 @@ public struct SwarmRTFilm: RenderScene {
             clap(at: 20.9, amp: 0.5, pan: 0)                         // the death snap
             boom(at: 20.9, amp: 0.35, duration: 1.2)
             kick(at: 21.4, amp: 0.35)
-            whoosh(at: 21.4, rising: true, amp: 0.25, duration: 0.5)
             kick(at: 24.2, amp: 0.55); clap(at: 24.2, amp: 0.3, pan: 0)
             bass(.a1, at: 24.2, duration: 0.8, amp: 0.3)
             kick(at: 25.6, amp: 0.55); clap(at: 25.6, amp: 0.3, pan: 0)
@@ -149,15 +146,13 @@ public struct SwarmRTFilm: RenderScene {
             bass(.e2, at: 27.0, duration: 0.8, amp: 0.3)
             kick(at: 28.4, amp: 0.4); clap(at: 28.4, amp: 0.3, pan: 0)
             kick(at: 32.6, amp: 0.4); clap(at: 32.6, amp: 0.3, pan: 0)
-            whoosh(at: 33.0, rising: true, amp: 0.3, duration: 0.35); bass(.a2, at: 33.05, duration: 0.4, amp: 0.25)
-            whoosh(at: 33.5, rising: true, amp: 0.3, duration: 0.35); bass(.g2, at: 33.55, duration: 0.4, amp: 0.25)
-            whoosh(at: 34.0, rising: true, amp: 0.3, duration: 0.35); bass(.g2, at: 34.05, duration: 0.4, amp: 0.25)
-            whoosh(at: 34.5, rising: true, amp: 0.3, duration: 0.35); bass(.e1, at: 34.55, duration: 0.4, amp: 0.22)
+            bass(.a2, at: 33.05, duration: 0.4, amp: 0.25)
+            bass(.g2, at: 33.55, duration: 0.4, amp: 0.25)
+            bass(.g2, at: 34.05, duration: 0.4, amp: 0.25)
+            bass(.e1, at: 34.55, duration: 0.4, amp: 0.22)
             kick(at: 36.8, amp: 0.4); clap(at: 36.8, amp: 0.3, pan: 0)
-            riser(at: 38.4, duration: 1.6, amp: 0.22)
             boom(at: 40.0, amp: 0.95, duration: 2.8)                 // BOOM #2: lockup
             kick(at: 40.0, amp: 0.6); clap(at: 40.0, amp: 0.4, pan: 0)
-            whoosh(at: 43.4, rising: false, amp: 0.3, duration: 0.8)
         }
     }
 

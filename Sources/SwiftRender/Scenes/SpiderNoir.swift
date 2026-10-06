@@ -106,10 +106,8 @@ public struct SpiderNoir: RenderScene {
         }
 
         // moments: descent, landing, the catch, the title
-        ev += whoosh(at: at(1, 0.4), rising: false, amp: 0.14, duration: 1.4)
         ev += pluck(m(45), at: at(2, 0), amp: 0.14)
         ev += pluck(m(40), at: at(4, 0.8), amp: 0.2); ev += boom(at: at(4, 0.8), amp: 0.35, duration: 0.9)
-        ev += whoosh(at: at(4, 1.0), rising: true, amp: 0.22, duration: 0.55)
         ev += crash(at: at(4, 1.6), amp: 0.1); ev += bell(m(86), at: at(4, 1.6), amp: 0.09)
         ev += boom(at: at(6, 0), amp: 0.5, duration: 2.0); ev += crash(at: at(6, 0), amp: 0.15)
 

@@ -67,19 +67,15 @@ public struct AutonomousWar: RenderScene {
             drone(.g1, from: a[8], for: duration - a[8], amp: 0.038)
             cutHits(Array(a.dropFirst()))
             every(1.2, from: a[3], to: a[7]) { kick(at: $0, amp: 0.15) }
-            riser(at: a[4] - 1.7, duration: 1.7, amp: 0.32)
             boom(at: a[4], amp: 0.45, duration: 2.0)
-            riser(at: a[8] - 1.8, duration: 1.8, amp: 0.42)
             boom(at: a[8], amp: 0.55, duration: 2.5)
-            riser(at: a[11] - 2.0, duration: 2.0, amp: 0.48)
             boom(at: a[11], amp: 0.8, duration: 3.2)
         }
     }
 
     static func cutHits(_ times: [Double]) -> [ScoreEvent] {
         times.flatMap {
-            whoosh(at: max(0, $0 - 0.08), rising: true, amp: 0.16, duration: 0.8)
-                + crash(at: $0, amp: 0.065)
+            crash(at: $0, amp: 0.065)
         }
     }
 

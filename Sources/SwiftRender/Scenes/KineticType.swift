@@ -23,7 +23,6 @@ public struct KineticType: RenderScene {
         Score(duration: duration) {
             hat(at: 0.3, pan: -0.4); hat(at: 0.9, pan: 0.4); hat(at: 1.5, pan: -0.4)
             kick(at: 1.8, amp: 0.6)
-            whoosh(at: 1.95, rising: true)
 
             boom(at: chapters[0], amp: 0.8, duration: 1.5)
             fourOnFloor(from: chapters[0], to: chapters[13])
@@ -31,7 +30,6 @@ public struct KineticType: RenderScene {
             bassline([.a1, .a1, .c2, .g1], from: chapters[0], to: chapters[13])
             crashes(at: Array(chapters.prefix(14)))
 
-            riser(at: chapters[13], duration: 2.4)
             kicks(at: [33.6, 33.9, 34.2, 34.5, 34.8, 35.1, 35.35, 35.6, 35.8], amp: 0.85)
             boom(at: 36.0); crash(at: 36.0, amp: 0.36)
             kicks(at: [36.6, 37.2], amp: 0.9)

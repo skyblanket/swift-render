@@ -64,7 +64,6 @@ public struct OpenEarLaunch: RenderScene {
         chord(fm9, 0, 4.9, 0.026)
         for (t, n) in [(1.15, 77), (1.75, 72), (2.6, 75), (3.4, 70)] { ev += bell(m(n), at: t, amp: 0.08, pan: n > 73 ? 0.3 : -0.3) }
         ev += boom(at: 1.15, amp: 0.4, duration: 1.6)
-        ev += riser(at: 3.7, duration: 1.1, amp: 0.28)
 
         // B · the problem: heartbeat + building eighths, then a held breath before the logo
         chord(db, at(2, 0), 4.9, 0.02)
@@ -120,7 +119,6 @@ public struct OpenEarLaunch: RenderScene {
         ev += triBass(m(36), at: at(14, 0), amp: 0.2, duration: bar * 2)
         for i in 0..<8 { ev += pluck(m(cm[i % 4] + 12), at: at(14, Double(i)), amp: 0.04, duration: 0.8) }
         ev += boom(at: at(14, 0) + 3.2, amp: 0.32, duration: 1.0)
-        ev += riser(at: at(15, 0), duration: bar, amp: 0.3)
 
         // J · dictation
         chord(db, at(16, 0), bar + 0.3, 0.022)

@@ -70,17 +70,14 @@ public struct OriginsOfWokeness: RenderScene {
             boom(at: 0.15, amp: 0.42, duration: 2.5)
             transitionHits(Array(a.dropFirst()))
             every(1.5, from: a[5], to: a[8]) { kick(at: $0, amp: 0.16) }
-            riser(at: a[5] - 1.8, duration: 1.8, amp: 0.32)
             boom(at: a[5], amp: 0.45, duration: 2.0)
-            riser(at: a[9] - 2.0, duration: 2.0, amp: 0.42)
             boom(at: a[9], amp: 0.72, duration: 3.0)
         }
     }
 
     static func transitionHits(_ times: [Double]) -> [ScoreEvent] {
         times.flatMap {
-            whoosh(at: max(0, $0 - 0.08), rising: true, amp: 0.17, duration: 0.75)
-                + crash(at: $0, amp: 0.075)
+            crash(at: $0, amp: 0.075)
         }
     }
 

@@ -106,8 +106,7 @@ public struct FutureOfTheFirm: RenderScene {
             chordPad([f2, c3, .a2],       from: a[10] - 0.8, until: a[12], amp: 0.052) // F — turn
             chordPad([.c2, .g2, e3, c4],  from: a[12] - 0.8, until: duration, amp: 0.058) // C — finale
 
-            // ── Cut accents: a soft whoosh + faint crash on every transition.
-            whooshesAt(cuts)
+            // ── Cut accents: a faint crash on every transition.
             crashes(at: cuts, amp: 0.11)
 
             // ── Opening downbeat, very soft.
@@ -115,14 +114,11 @@ public struct FutureOfTheFirm: RenderScene {
 
             // ── Momentum into the hill-climbing-machine climax (anchors[8]).
             every(1.2, from: a[6], to: a[9] - 0.5) { kick(at: $0, amp: 0.24) }
-            riser(at: a[8] - 2.2, duration: 2.2)
             boom(at: a[8], amp: 0.58, duration: 2.2)            // "a hill-climbing machine"
 
             // ── Ecosystem turn (anchors[11]).
-            riser(at: a[11] - 1.9, duration: 1.9)
 
             // ── Resolved finale (anchors[13]).
-            riser(at: a[13] - 1.7, duration: 1.7)
             boom(at: a[13], amp: 0.82, duration: 3.0)
         }
     }
@@ -153,9 +149,6 @@ public struct FutureOfTheFirm: RenderScene {
         return out
     }
 
-    static func whooshesAt(_ times: [Double]) -> [ScoreEvent] {
-        times.flatMap { whoosh(at: max(0, $0 - 0.05), rising: true, amp: 0.2, duration: 0.8) }
-    }
 
     // MARK: - Shared building blocks
 

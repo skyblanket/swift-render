@@ -19,7 +19,6 @@ public struct RepoPromo: RenderScene {
         Score(duration: duration) {
             hat(at: 0.3, pan: -0.4); hat(at: 0.9, pan: 0.4); hat(at: 1.5, pan: -0.4)
             kick(at: 1.8, amp: 0.6)
-            whoosh(at: 1.95, rising: true)
 
             boom(at: chapters[0], amp: 0.8, duration: 1.5)
             fourOnFloor(from: chapters[0], to: chapters[7])
@@ -27,7 +26,6 @@ public struct RepoPromo: RenderScene {
             bassline([.a1, .a1, .c2, .g1], from: chapters[0], to: chapters[7])
             crashes(at: chapters)
 
-            riser(at: chapters[6], duration: 2.4)
             boom(at: chapters[7])
             kicks(at: [19.8, 20.4], amp: 0.7)
             crash(at: 21.4, amp: 0.3)

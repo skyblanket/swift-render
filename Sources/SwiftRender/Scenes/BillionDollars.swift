@@ -73,23 +73,16 @@ public struct BillionDollars: RenderScene {
             drone(.a1, from: 0, for: duration, amp: 0.075)
             drone(.e2, from: anchors[6], for: 95, amp: 0.03)
             boom(at: 0.2, amp: 0.45, duration: 2.4)
-            whooshesAt(cuts)
             crashes(at: cuts, amp: 0.11)
             // calc reveals — a hit lands when the number lands
-            riser(at: anchors[4] + 9.0,  duration: 1.6)
             boom(at: anchors[4] + 10.6,  amp: 0.4, duration: 2.0)     // log(500,1.93) ≈ 9.45
-            riser(at: anchors[5] + 8.2,  duration: 1.5)
             boom(at: anchors[5] + 9.8,   amp: 0.4, duration: 2.0)     // ×4384
             // momentum into the thesis slide
             every(1.0, from: anchors[7], to: anchors[7] + 6) { kick(at: $0, amp: 0.2) }
-            riser(at: anchors[13] - 1.8, duration: 1.8)
             boom(at: anchors[13], amp: 0.7, duration: 3.0)            // lockup finale
         }
     }
 
-    static func whooshesAt(_ times: [Double]) -> [ScoreEvent] {
-        times.flatMap { whoosh(at: max(0, $0 - 0.05), rising: true, amp: 0.18, duration: 0.8) }
-    }
 
     // MARK: - Shared building blocks
 

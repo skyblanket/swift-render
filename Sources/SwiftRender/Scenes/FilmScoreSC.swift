@@ -72,14 +72,14 @@ public struct FilmScoreSC: RenderScene {
 
             // ─── STRUCTURE ───────────────────────────────────────────────────
             kick(at: 4.0, amp: 0.4)
-            whoosh(at: 5.55, rising: false, amp: 0.28, duration: 0.35)          // strike
+                      // strike
             kick(at: 6.2, amp: 0.5); bass(.e1, at: 6.2, duration: 0.9, amp: 0.22) // "3 MB"
             kick(at: 10.0, amp: 0.4)
             kick(at: 17.0, amp: 0.4)
-            whoosh(at: 18.35, rising: true, amp: 0.45, duration: 0.55)          // THE SPLIT
+                      // THE SPLIT
             kick(at: 18.5, amp: 0.4); kick(at: 18.62, amp: 0.34); kick(at: 18.74, amp: 0.34)
             kick(at: 24.0, amp: 0.4)
-            riser(at: 24.6, duration: 1.1, amp: 0.16)                            // tension INTO the cut-out
+                                        // tension INTO the cut-out
             // 25.7–26.2 total silence …then:
             clap(at: 26.2, amp: 0.5, pan: 0)                                     // THE REFUSAL
             boom(at: 26.2, amp: 0.75, duration: 1.8)
@@ -91,7 +91,6 @@ public struct FilmScoreSC: RenderScene {
             kick(at: 45.5, amp: 0.55); bass(.c2, at: 45.5, duration: 0.8, amp: 0.3)
             kick(at: 47.5, amp: 0.55); bass(.e2, at: 47.5, duration: 0.8, amp: 0.3)
             kick(at: 49.5, amp: 0.4)
-            riser(at: 54.4, duration: 1.4, amp: 0.24)
             boom(at: 55.9, amp: 0.9, duration: 2.6)                              // lockup
             kick(at: 55.9, amp: 0.55)
 

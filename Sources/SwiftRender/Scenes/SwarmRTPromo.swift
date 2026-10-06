@@ -66,17 +66,11 @@ public struct SwarmRTPromo: RenderScene {
             }
 
             // punctuation
-            whoosh(at: 5.6, rising: true, amp: 0.5, duration: 0.8)
             boom(at: 6.0, amp: 0.85)
-            whoosh(at: 9.4, rising: false, amp: 0.32)
-            whoosh(at: 13.6, rising: true, amp: 0.3)
             clap(at: 14.7, amp: 0.5)                      // the kill
             boom(at: 14.7, amp: 0.42, duration: 1.2)
-            whoosh(at: 17.4, rising: true, amp: 0.45)
             kick(at: 17.6, amp: 0.5); kick(at: 18.8, amp: 0.5); kick(at: 20.0, amp: 0.5)
-            whoosh(at: 24.2, rising: true, amp: 0.5)
             boom(at: 24.4, amp: 0.9)
-            whoosh(at: 28.7, rising: false, amp: 0.4, duration: 1.1)
             hat(at: 29.15, amp: 0.05); hat(at: 29.4, amp: 0.03)
         }
     }

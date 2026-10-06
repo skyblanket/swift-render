@@ -32,7 +32,6 @@ public struct StyleReel: RenderScene {
         return Score(duration: duration) {
             hat(at: 0.6, pan: -0.4); hat(at: 1.2, pan: 0.4); hat(at: 1.8, pan: -0.4)
             kicks(at: [1.2, 1.8, 2.4, 3.0], amp: 0.7)
-            whoosh(at: 3.0, rising: true, duration: 0.7)
 
             boom(at: segStart, amp: 0.8, duration: 1.6); crash(at: segStart, amp: 0.34)
             fourOnFloor(from: segStart, to: outroStart)
@@ -40,7 +39,6 @@ public struct StyleReel: RenderScene {
             bassline([.a1, .a1, .c2, .g1], from: segStart, to: outroStart)
             crashes(at: switches)
 
-            riser(at: 30.0, duration: 2.4, amp: 0.55)
             boom(at: outroStart); crash(at: outroStart, amp: 0.36)
             drone(.a1, from: 32.5, for: 5.6, amp: 0.15)
             hat(at: 33.6, pan: 0.3); hat(at: 34.8, pan: -0.3); hat(at: 36.0, pan: 0.3)
