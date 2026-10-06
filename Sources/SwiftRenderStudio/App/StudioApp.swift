@@ -5,7 +5,7 @@ import SwiftRenderKit
 // MARK: - Entry point
 //
 //   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host | --fake-process-host]
-//                       [--fake-crash-at t] [--snapshot out.png]
+//                       [--fake-crash-at t] [--snapshot out.png [--play-for seconds]]
 //   swift-render-studio --fake-serve        (a fake render host on stdio; see FakeServe)
 //
 // `--snapshot` lays out a project window offscreen (no activation, no Dock icon),

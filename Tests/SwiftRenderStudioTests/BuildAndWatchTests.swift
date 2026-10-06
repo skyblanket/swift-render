@@ -31,7 +31,9 @@ final class BuildControllerTests: XCTestCase {
 
     func testScratchPathAndProgress() {
         let b = BuildController(project: project, runner: ScriptedBuilds().runner)
-        XCTAssertEqual(b.scratchPath.path, "/tmp/Proj/.build/studio")
+        XCTAssertEqual(b.scratchPath.path, "/tmp/Proj/.build/studio")      // nonexistent: left as is
+        let real = BuildController(project: Project(root: URL(fileURLWithPath: "/tmp")), runner: ScriptedBuilds().runner)
+        XCTAssertEqual(real.scratchPath.path, "/private/tmp/.build/studio", "same spelling as getcwd() in a terminal")
         XCTAssertEqual(b.product, "swift-render")
         XCTAssertTrue(BuildController.parseProgress("[12/40] Compiling SwiftRender NeverHeard.swift")! == (12, 40))
         XCTAssertNil(BuildController.parseProgress("Building for debugging..."))

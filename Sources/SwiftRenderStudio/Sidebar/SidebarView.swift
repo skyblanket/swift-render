@@ -10,6 +10,22 @@ struct SidebarView: View {
     @Bindable var model: ProjectModel
 
     var body: some View {
+        // The footer sits below the list (not in a safe-area inset) so rows never scroll under it.
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                list
+                    .onChange(of: model.selectedScene) { _, name in
+                        if let name { withAnimation { proxy.scrollTo(name) } }
+                    }
+                    .onChange(of: model.scenes.count) {
+                        if let name = model.selectedScene { proxy.scrollTo(name) }
+                    }
+            }
+            footer
+        }
+    }
+
+    private var list: some View {
         List(selection: Binding(get: { model.selectedScene }, set: { name in
             if let name { Task { await model.select(scene: name) } }
         })) {
@@ -23,6 +39,7 @@ struct SidebarView: View {
                 ForEach(model.scenes, id: \.name) { s in
                     SceneRow(scene: s, openCount: model.review.openCounts[s.name] ?? 0)
                         .tag(s.name)
+                        .id(s.name)
                 }
             }
             Section("Review") {
@@ -47,21 +64,35 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                Divider()
-                Button { model.ui.toast = "New scene — coming with the launch kit" } label: {
-                    Label("New scene", systemImage: "plus")
-                }
-                Button { model.ui.toast = "New launch film — runs `\(model.project.config.product) launch`" } label: {
-                    Label("Launch film from codebase…", systemImage: "sparkles.tv")
-                }
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider().padding(.bottom, 2)
+            footerButton("New Scene", symbol: "plus") {
+                model.ui.toast = "New scene — coming with the launch kit"
             }
-            .buttonStyle(.borderless)
-            .font(.system(size: 12))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
+            footerButton("New Launch Film…", symbol: "sparkles") {
+                model.ui.toast = "New launch film — runs `\(model.project.config.product) launch`"
+            }
         }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private func footerButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol).frame(width: 16)
+                Text(title).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
     }
 
     private func reviewRow(_ title: String, count: Int, symbol: String, color: Color, action: @escaping () -> Void) -> some View {

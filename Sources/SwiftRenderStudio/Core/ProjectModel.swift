@@ -35,6 +35,8 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// Snapshot mode: play this many seconds before capturing (prints playback stats).
+    var playFor: Double?
     /// Run as a protocol-speaking fake host on stdio (`FakeServe`), not as an app.
     var fakeServe = false
     /// Fake host in a child process through the real `HostClient` (implies simulated builds).
@@ -52,6 +54,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--fake-serve": o.fakeServe = true; i += 1
             case "--fake-process-host": o.fakeProcessHost = true; i += 1
             case "--snapshot": o.snapshot = v; i += 2
+            case "--play-for": o.playFor = v.flatMap(Double.init); i += 2
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
             default:

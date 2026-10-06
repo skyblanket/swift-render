@@ -24,7 +24,7 @@ struct ClipsLane: LaneRenderer {
 
     func draw(in ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         guard !clips.isEmpty else {
-            ctx.draw(Text("No Timeline in this scene — cuts estimated (S5)").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35)),
+            ctx.draw(Text("No Timeline in this scene").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35)),
                      at: CGPoint(x: 8, y: size.height / 2), anchor: .leading)
             return
         }

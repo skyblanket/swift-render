@@ -49,9 +49,21 @@ enum SnapshotRunner {
     private static func capture(model: ProjectModel, window: NSWindow, options: LaunchOptions, out: String) async -> Int32 {
         // ProjectWindowContent's .task starts the model; wait for a scene and a frame.
         let deadline = Date().addingTimeInterval(options.fakeHost || options.fakeProcessHost ? 20 : 240)
-        while model.info == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        // A failed first build or a dead host won't produce a frame: capture that state now.
+        func stuck() -> Bool {
+            if case .failed = model.host.state { return true }
+            if case .failed = model.build.phase, model.host.active == nil { return true }
+            return false
+        }
+        while model.info == nil, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
         if let at = options.at { model.playback.seek(at, precise: true) }
-        while !model.playback.hasFrame, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        while !model.playback.hasFrame, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        if case .failed(let diags, let log) = model.build.phase {
+            let rows = diags.map { "\($0.file):\($0.line):\($0.column): \($0.severity.rawValue): \($0.message)" }
+            let tail = log.split(separator: "\n").suffix(15).joined(separator: "\n")
+            FileHandle.standardError.write(Data("[studio] build failed:\n\(rows.joined(separator: "\n"))\n\(tail)\n".utf8))
+        }
+        if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
@@ -72,6 +84,24 @@ enum SnapshotRunner {
         let state = model.playback.hasFrame ? "frame f\(frameIndex(model.playback.t, fps: model.playback.fps))" : "NO FRAME"
         print("[studio] snapshot → \(out) (\(model.selectedScene ?? "no scene"), \(state), host \(model.host.state))")
         return model.playback.hasFrame ? 0 : 2
+    }
+
+    /// `--play-for s`: real-time playback through the active host, then a stats line.
+    /// An offscreen window gets no display-link callbacks, so ticks come from here.
+    private static func play(_ model: ProjectModel, seconds: Double) async {
+        let p = model.playback
+        let startT = p.t, streams = p.streamsStarted
+        p.play()
+        let end = Date().addingTimeInterval(seconds)
+        while p.isPlaying, Date() < end {
+            p.tick()
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        let s = p.liveStats
+        p.pause()
+        print(String(format: "[studio] played %.2f→%.2f s: shown %d, dropped %d, %.1f ms/frame, target %d fps, width %.0f%%, streams %d%@",
+                     startT, p.t, s.shown, s.dropped, s.msPerFrame, s.targetFPS, s.widthScale * 100,
+                     p.streamsStarted - streams, s.note.map { " · \($0)" } ?? ""))
     }
 
     static func render(_ window: NSWindow) -> Data? {

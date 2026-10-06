@@ -88,7 +88,7 @@ final class BuildController {
     init(project: Project, product: String? = nil, runner: Runner? = nil) {
         self.project = project
         self.product = product ?? project.config.product
-        self.scratchPath = project.root.appendingPathComponent(".build/studio", isDirectory: true)
+        self.scratchPath = Self.canonical(project.root).appendingPathComponent(".build/studio", isDirectory: true)
         self.runner = runner ?? BuildController.swiftPM
     }
 
@@ -102,6 +102,17 @@ final class BuildController {
             cont.onTermination = { _ in task.cancel() }
         }
         return (mapped, { cancel.cancel() })
+    }
+
+    /// The real path (symlinks and /tmp → /private/tmp resolved, like getcwd()). SwiftPM
+    /// bakes the scratch path into its module cache, so a build whose scratch path is
+    /// spelled differently from the terminal's or the agent's (`--scratch-path
+    /// .build/studio` from a cwd) fails with "module … is defined in both …".
+    /// `URL.standardized` and `resolvingSymlinksInPath()` both strip /private, hence realpath.
+    static func canonical(_ url: URL) -> URL {
+        guard let p = realpath(url.path, nil) else { return url }
+        defer { free(p) }
+        return URL(fileURLWithPath: String(cString: p), isDirectory: true)
     }
 
     var isBuilding: Bool {
