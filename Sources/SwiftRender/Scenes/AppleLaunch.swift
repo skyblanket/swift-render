@@ -136,7 +136,7 @@ public struct AppleLaunchShot: View {
             ChangelogList(version: props.version ?? "this release", items: props.changelog, at: l,
                           start: 0.25, stagger: LaunchScore.Cue.rowStagger(plan))
         case .platforms:
-            PlatformBadges(props.platforms, swift: props.swiftVersion, facts: Array(props.facts.dropFirst()),
+            PlatformBadges(props.platforms, swift: props.kind == .app ? nil : props.swiftVersion, facts: Array(props.facts.dropFirst()),
                            headline: props.facts.first.map { $0.hasSuffix(".") ? $0 : $0 + "." }, at: l, start: 0.1)
         case .end:
             EndCard(name: props.name, icon: LaunchAssets.image(props.icon?.path), iconShape: props.icon?.shape ?? .iOS,
@@ -154,7 +154,7 @@ public struct AppleLaunchShot: View {
         let caption = shot?.caption.map { Self.balance($0) } ?? (f.map { [$0.title + "."] } ?? [props.name])
         let sub = shot?.caption == nil ? f?.detail : nil
         let phone = kind == .iPhone
-        let devWidth: CGFloat = phone ? (L.isVertical ? 520 : 400) : (L.isVertical ? 940 : 1040)
+        let devWidth: CGFloat = phone ? (L.isVertical ? 540 : 460) : (L.isVertical ? 940 : 1040)
         let title = KeynoteTitle(caption, eyebrow: shot?.caption == nil ? "Meet \(props.name)" : nil, sub: sub, at: l,
                                  start: 0.35, size: L.isVertical ? 100 : 92,
                                  alignment: L.isVertical ? .center : .leading, accentLine: caption.count > 1 ? 1 : nil,

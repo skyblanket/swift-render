@@ -53,6 +53,11 @@ public struct LaunchScanner {
         self.options = options
     }
 
+    /// An SSH or HTTPS GitHub remote → ("https://github.com/o/r", "o/r"); nil for non-URL remotes.
+    public static func githubURL(_ remote: String) -> (url: String, repo: String)? {
+        State.githubURL(remote).map { ($0.0, $0.1) }
+    }
+
     /// Scan the codebase. Never throws: missing pieces land in `report.missing`.
     public func scan() -> (props: LaunchProps, report: LaunchScanReport) {
         var s = State(root: root, options: options)
@@ -841,7 +846,7 @@ private struct State {
         // Facts for the platforms shot.
         if let deps = packageDependencies { props.stats.dependencies = deps }
         if props.kind != .app, packageDependencies == 0 { props.facts.append("Zero dependencies") }
-        if let l = props.license { props.facts.append("\(l) licensed") }
+        if let l = props.license, props.kind != .app { props.facts.append("\(l) licensed") }
 
         // Call to action
         switch props.kind {

@@ -652,6 +652,10 @@ public enum LaunchText {
     public static func symbol(for text: String) -> String {
         let s = text.lowercased()
         let map: [([String], String)] = [
+            (["focus", "timer", "pomodoro", "clock", "time"], "timer"),
+            (["ring", "progress", "goal"], "circle.circle"),
+            (["lock screen", "live activit", "dynamic island", "notification"], "bell.badge.fill"),
+            (["siri", "shortcut", "automation", "action button"], "wand.and.rays"),
             (["fast", "speed", "perform", "quick", "instant", "faster"], "bolt.fill"),
             (["private", "privacy", "on-device", "secure", "security", "encrypt", "local"], "lock.fill"),
             (["audio", "sound", "music", "voice", "speech"], "waveform"),

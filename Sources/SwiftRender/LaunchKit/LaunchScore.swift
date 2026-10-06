@@ -15,8 +15,8 @@ public enum LaunchScore {
     public enum Cue {
         /// Card i of the triad starts on beat i (+0.1 s so the spring peaks just after).
         public static func triadStart(_ plan: LaunchPlan) -> Double { 0.1 }
-        public static func codeMode(_ plan: LaunchPlan) -> CodeReveal.Mode { .lines(step: plan.beat / 4) }
-        public static let codeStart = 0.5
+        public static func codeMode(_ plan: LaunchPlan) -> CodeReveal.Mode { .lines(step: plan.beat / 6) }
+        public static let codeStart = 0.35
         public static let terminalStart = 0.4
         public static let terminalCPS = 26.0
         public static func statStagger(_ plan: LaunchPlan) -> Double { plan.beat }

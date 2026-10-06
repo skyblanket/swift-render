@@ -96,7 +96,9 @@ public struct LaunchPlan: Sendable, Equatable {
 
         if !p.highlights.isEmpty { out.append(LaunchShot(.stats, bars: 2)) }
         if !p.changelog.isEmpty { out.append(LaunchShot(.changelog, bars: 2)) }
-        if !p.platforms.isEmpty || p.swiftVersion != nil || !p.facts.isEmpty { out.append(LaunchShot(.platforms, bars: 1)) }
+        // A lone platform badge is a thin shot; the end card's footnote carries it instead.
+        let platformsWorthAShot = !p.facts.isEmpty || p.platforms.count >= 2 || (p.kind != .app && p.swiftVersion != nil)
+        if platformsWorthAShot { out.append(LaunchShot(.platforms, bars: 1)) }
         out.append(LaunchShot(.end, bars: 3))
         return out
     }
