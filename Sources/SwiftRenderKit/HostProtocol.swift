@@ -28,7 +28,7 @@ import Foundation
 //
 // Unsolicited events: "ready", "log", "warning", "frame" (stream), "info" (a
 // SceneInfo with newly discovered clips/knobs), "audio" (score audio ready after
-// background synthesis: `audioPath` + `loudness`).
+// background synthesis: `audioPath` + `loudness`, and `scene` from newer hosts).
 //
 // Host behaviour clients can rely on (`swift-render serve`):
 // - Requests are handled in arrival order, except that only the newest pending
@@ -45,6 +45,9 @@ import Foundation
 //   cached per scene/size/props/knobs for the host's lifetime, so a revisit replies
 //   complete. Score audio prepared for a scene is kept in memory (a few scenes), so
 //   switching back needs no re-analysis; a newer `open` cancels older audio work.
+//   A deferred-probe `open` still queued behind a newer `open` is answered
+//   `superseded` without running, and a newer `open` drops the older scene's pending
+//   probe — so a client may pipeline opens as the person clicks through scenes.
 // - A stream that reaches `to` (or the scene end) sends `{"event":"streamEnd",
 //   "streamID":N}` after its last frame; `message` is set if it stopped on an error.
 //   `cancel` answers `{}` and sends no streamEnd; no frame for that stream follows
@@ -235,15 +238,18 @@ public struct HostMessage: Codable, Sendable {
     /// `audio` events: synthesized score file + loudness envelope.
     public var audioPath: String?
     public var loudness: [Float]?
+    /// `audio` events: the scene the soundtrack belongs to (absent from older hosts), so a
+    /// client that already switched away can drop it.
+    public var scene: String?
 
     public init(id: Int? = nil, result: HostResult? = nil, error: HostError? = nil, event: String? = nil,
                 message: String? = nil, scenes: [SceneSummary]? = nil, version: String? = nil,
                 protocolVersion: Int? = nil, streamID: Int? = nil, frame: HostFrame? = nil,
-                info: SceneInfo? = nil, audioPath: String? = nil, loudness: [Float]? = nil) {
+                info: SceneInfo? = nil, audioPath: String? = nil, loudness: [Float]? = nil, scene: String? = nil) {
         self.id = id; self.result = result; self.error = error; self.event = event; self.message = message
         self.scenes = scenes; self.version = version; self.protocolVersion = protocolVersion
         self.streamID = streamID; self.frame = frame; self.info = info
-        self.audioPath = audioPath; self.loudness = loudness
+        self.audioPath = audioPath; self.loudness = loudness; self.scene = scene
     }
 
     public static func response(_ id: Int, _ result: HostResult) -> HostMessage { HostMessage(id: id, result: result) }
@@ -261,8 +267,8 @@ public struct HostMessage: Codable, Sendable {
     public static func streamEnd(_ streamID: Int, message: String? = nil) -> HostMessage {
         HostMessage(event: "streamEnd", message: message, streamID: streamID)
     }
-    public static func audio(path: String?, loudness: [Float]) -> HostMessage {
-        HostMessage(event: "audio", audioPath: path, loudness: loudness)
+    public static func audio(path: String?, loudness: [Float], scene: String? = nil) -> HostMessage {
+        HostMessage(event: "audio", audioPath: path, loudness: loudness, scene: scene)
     }
     public static func infoChanged(_ info: SceneInfo) -> HostMessage { HostMessage(event: "info", info: info) }
 }

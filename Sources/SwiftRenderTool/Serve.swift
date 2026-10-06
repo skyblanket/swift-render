@@ -721,7 +721,7 @@ final class HostSession {
             fputs(String(format: "[swift-render serve] audio %@ ready in %.2fs (%@) → %@\n", name, ready.seconds,
                          ready.breakdown.isEmpty ? (ready.cacheHit ? "cache hit" : "synthesized") : ready.breakdown,
                          ready.path ?? "-"), stderr)
-            emit(HostPacket(.audio(path: ready.path, loudness: ready.loudness)))
+            emit(HostPacket(.audio(path: ready.path, loudness: ready.loudness, scene: name)))
             if !ready.degraded.isEmpty {
                 let shown = ready.degraded.prefix(3).joined(separator: "; ")
                 let more = ready.degraded.count > 3 ? " (+\(ready.degraded.count - 3) more)" : ""

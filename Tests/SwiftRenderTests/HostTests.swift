@@ -334,6 +334,7 @@ final class HostTests: XCTestCase {
         let path = try XCTUnwrap(event.audioPath)
         XCTAssertTrue(path.hasPrefix(project.cacheDir.appendingPathComponent("audio").path))
         XCTAssertEqual(event.loudness?.count, 50)
+        XCTAssertEqual(event.scene, "ToneLevel", "a client that switched away can tell it isn't its scene's")
         XCTAssertEqual(s.info?.audioPath, path)
 
         // The cache holds the synthesizer's exact samples, and reactive frames now hear them.
