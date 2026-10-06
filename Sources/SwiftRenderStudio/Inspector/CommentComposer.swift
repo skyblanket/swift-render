@@ -30,11 +30,13 @@ struct CommentComposer: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(focused ? 0.25 : 0.1)))
                     .focused($focused)
                     .onExitCommand { model.review.draft = nil }
+                if ReviewController.mentionsAgent(draft.body) {
+                    Label("@claude queues this thread for the next run", systemImage: "sparkles")
+                        .font(.system(size: 10)).foregroundStyle(ReviewStyle.agent)
+                }
                 HStack(spacing: 8) {
-                    Text(Self.hint(draft.body))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    Image(systemName: "camera.viewfinder").font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .help("Posting saves this frame as the comment's BEFORE still")
                     Spacer(minLength: 4)
                     if posting { ProgressView().controlSize(.mini) }
                     Button("Post & Ask Claude") { post(ask: true) }
@@ -84,11 +86,6 @@ struct CommentComposer: View {
         let a = "\(StudioStyle.timecode(d.t)) \(ReviewStyle.frame(d.t, fps: fps))"
         guard let e = d.end else { return a }
         return "\(StudioStyle.timecode(d.t))–\(StudioStyle.timecode(e))"
-    }
-
-    /// Footer hint: what posting will do.
-    static func hint(_ body: String) -> String {
-        ReviewController.mentionsAgent(body) ? "@claude queues this thread for the next run" : "Captures the frame as BEFORE"
     }
 
     private func post(ask: Bool) {

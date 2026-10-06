@@ -343,7 +343,8 @@ struct CompareView: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
+        .background(Color(white: 0.11).opacity(0.94), in: RoundedRectangle(cornerRadius: 9))
+        .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.1)))
         .padding(.bottom, 10)
     }

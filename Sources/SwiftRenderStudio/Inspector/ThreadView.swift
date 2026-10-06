@@ -58,32 +58,39 @@ struct ThreadView: View {
                           height: c.canvas?.height ?? model.info?.height ?? 1080)
         VStack(alignment: .leading, spacing: 4) {
             if let r = c.region {
-                fact(RegionMath.isPoint(r) ? "mappin" : "rectangle.dashed", RegionMath.describe(r, sceneSize: size))
-            }
-            HStack(spacing: 10) {
-                if let src = c.source {
-                    Button { SourceOpener.open(src) } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                            Text(ReviewStyle.short(src))
-                            Image(systemName: "arrow.up.forward").font(.system(size: 8, weight: .bold))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(StudioStyle.accent)
-                    .help("Open \(src.file):\(src.line)")
+                let p = RegionMath.scenePoints(r, sceneSize: size)
+                if RegionMath.isPoint(r) {
+                    fact("mappin", "point \(Int(p.minX)),\(Int(p.minY)) pt", detail: String(format: "%.3f, %.3f", r.x, r.y))
+                } else {
+                    fact("rectangle.dashed", "\(Int(p.minX)),\(Int(p.minY)) · \(Int(p.width))×\(Int(p.height)) pt",
+                         detail: String(format: "%.2f %.2f %.2f %.2f", r.x, r.y, r.w, r.h))
                 }
+            }
+            if let src = c.source {
+                Button { SourceOpener.open(src) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: 9)).frame(width: 12)
+                        Text(ReviewStyle.short(src)).lineLimit(1)
+                        Image(systemName: "arrow.up.forward").font(.system(size: 8, weight: .bold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(StudioStyle.accent)
+                .help("Open \(src.file):\(src.line)")
+            }
+            HStack(spacing: 12) {
                 if let rev = c.revision { fact("arrow.triangle.branch", rev) }
-                if let cv = c.canvas { fact("aspectratio", "\(cv.width)×\(cv.height)@\(cv.fps)") }
+                if let cv = c.canvas { fact("aspectratio", "\(cv.width)×\(cv.height) @\(cv.fps)") }
             }
         }
         .font(.system(size: 10.5, design: .monospaced))
     }
 
-    private func fact(_ symbol: String, _ text: String) -> some View {
+    private func fact(_ symbol: String, _ text: String, detail: String? = nil) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol).font(.system(size: 9)).frame(width: 12)
-            Text(text).lineLimit(1).truncationMode(.middle)
+            Text(text).lineLimit(1).fixedSize()
+            if let detail { Text(detail).lineLimit(1).foregroundStyle(.tertiary).help("normalized x y w h") }
         }
         .foregroundStyle(.secondary)
     }

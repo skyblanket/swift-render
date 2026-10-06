@@ -29,21 +29,33 @@ struct CommentsTab: View {
                                     ? "Press C to comment at the playhead, or R to mark a region on the frame."
                                     : "\(review.comments.count) comment\(review.comments.count == 1 ? "" : "s") hidden by the filters.")
             } else {
-                List(selection: Binding(get: { review.selection }, set: { id in
-                    review.selection = id
-                    if let c = review.comments.first(where: { $0.id == id }) { model.playback.seek(c.t, precise: true) }
-                })) {
-                    ForEach(rows) { c in
-                        CommentRow(comment: c, number: numbers[c.id], fps: model.info?.fps,
-                                   queued: review.agentQueue.contains(c.id))
-                            .tag(c.id)
-                            .listRowBackground(ReviewQuery.involvesAgent(c) ? AgentStripe() : nil)
-                            .contextMenu { menu(c) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(rows) { c in
+                                let selected = review.selection == c.id
+                                CommentRow(comment: c, number: numbers[c.id], fps: model.info?.fps,
+                                           queued: review.agentQueue.contains(c.id))
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(rowBackground(c, selected: selected))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        review.selection = c.id
+                                        model.playback.seek(c.t, precise: true)
+                                    }
+                                    .contextMenu { menu(c) }
+                                    .id(c.id)
+                            }
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 6)
+                    }
+                    .onChange(of: review.selection) { _, id in
+                        if let id { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } }
                     }
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 110, maxHeight: review.selected == nil ? .infinity : 210)
+                // Capped while a thread is open so the thread gets the rest of the column.
+                .frame(height: review.selected == nil ? nil : min(214, CGFloat(rows.count) * 80 + 12))
+                .frame(maxHeight: review.selected == nil ? .infinity : nil)
                 .onDeleteCommand { if let id = review.selection { try? review.delete(id) } }
             }
             if let c = review.selected {
@@ -144,6 +156,20 @@ private struct AgentStripe: View {
         HStack(spacing: 0) {
             ReviewStyle.agent.frame(width: 2.5)
             ReviewStyle.agentFill
+        }
+    }
+}
+
+extension CommentsTab {
+    @ViewBuilder
+    fileprivate func rowBackground(_ c: ReviewComment, selected: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 7)
+        ZStack {
+            if ReviewQuery.involvesAgent(c) { AgentStripe().clipShape(shape) }
+            if selected {
+                shape.fill(Color.white.opacity(0.10))
+                shape.strokeBorder(Color.white.opacity(0.14))
+            }
         }
     }
 }
