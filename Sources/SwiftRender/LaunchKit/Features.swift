@@ -26,6 +26,7 @@ public struct FeatureCard: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 40 * u).padding(.vertical, 34 * u)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     symbol(60 * u).frame(height: 76 * u, alignment: .leading)
@@ -65,7 +66,8 @@ public struct FeatureCard: View {
 
 // MARK: - FeatureTriad
 
-/// Three feature cards landing one per beat — a row at 16:9, a column at 9:16.
+/// Three feature cards (four when there are exactly four) landing one per beat —
+/// a row at 16:9, a column at 9:16.
 public struct FeatureTriad: View {
     var features: [LaunchProps.Feature]
     var t: Double
@@ -74,17 +76,21 @@ public struct FeatureTriad: View {
     @Environment(\.renderContext) private var ctx
 
     public init(_ features: [LaunchProps.Feature], at t: Double, start: Double = 0.2, stagger: Double = 0.6) {
-        self.features = Array(features.prefix(3)); self.t = t; self.start = start; self.stagger = stagger
+        self.features = Array(features.prefix(Self.shown(features.count))); self.t = t; self.start = start; self.stagger = stagger
     }
+
+    /// How many of `count` features the triad shows (the rest go to `FeatureList`).
+    public static func shown(_ count: Int) -> Int { count == 4 ? 4 : min(3, count) }
 
     /// When each card's spring peaks (the score puts a rim here).
     public static func landTimes(count: Int, start: Double, stagger: Double) -> [Double] {
-        (0..<min(3, count)).map { start + Double($0) * stagger }
+        (0..<shown(count)).map { start + Double($0) * stagger }
     }
 
     public var body: some View {
         let L = LaunchLayout(ctx)
         let lands = Self.landTimes(count: features.count, start: start, stagger: stagger)
+        let n = max(1, features.count)
         let layout = L.isVertical
             ? AnyLayout(VStackLayout(spacing: 36 * L.type))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 36 * L.type))
@@ -93,8 +99,8 @@ public struct FeatureTriad: View {
                 // Start 0.1 s early so the spring's first peak lands on the beat.
                 let p = Motion.pop(t, lands[i] - 0.1, response: 0.5, damping: 0.76)
                 FeatureCard(f, compact: L.isVertical)
-                    .frame(width: L.isVertical ? L.width : min(540 * L.type, (L.width - 72 * L.type) / 3),
-                           height: L.isVertical ? 280 * L.type : 430 * L.type)
+                    .frame(width: L.isVertical ? L.width : min(540 * L.type, (L.width - 36 * L.type * CGFloat(n - 1)) / CGFloat(n)),
+                           height: L.isVertical ? (n > 3 ? 270 : 320) * L.type : 430 * L.type)
                     .scaleEffect(0.94 + 0.06 * CGFloat(min(1.05, p)))
                     .reveal(p, rise: 70 * L.type)
             }

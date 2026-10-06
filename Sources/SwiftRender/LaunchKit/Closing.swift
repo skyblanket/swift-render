@@ -167,19 +167,22 @@ public struct ChangelogList: View {
 
 // MARK: - PlatformBadges
 
-/// Platform symbols with minimum versions, and a line of facts underneath.
+/// One claim as a headline ("Zero dependencies."), platform symbols with minimum
+/// versions, and a line of smaller facts underneath.
 public struct PlatformBadges: View {
     var platforms: [LaunchProps.Platform]
     var facts: [String]
+    var headline: String?
     var t: Double
     var start: Double
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
     public init(_ platforms: [LaunchProps.Platform], swift: String? = nil, facts: [String] = [],
-                at t: Double, start: Double = 0.1) {
+                headline: String? = nil, at t: Double, start: Double = 0.1) {
         self.platforms = platforms
         self.facts = (swift.map { ["Swift \($0)"] } ?? []) + facts
+        self.headline = headline
         self.t = t; self.start = start
     }
 
@@ -195,7 +198,8 @@ public struct PlatformBadges: View {
         }
     }
 
-    static func label(_ p: LaunchProps.Platform) -> String {
+    /// "iOS 17+", "macOS 14+".
+    public static func label(_ p: LaunchProps.Platform) -> String {
         let name = p.name == .macCatalyst ? "Mac Catalyst" : p.name == .linux ? "Linux" : p.name.rawValue
         return p.minimum.map { "\(name) \($0)+" } ?? name
     }
@@ -204,17 +208,22 @@ public struct PlatformBadges: View {
         let L = LaunchLayout(ctx)
         let u = L.type
         let shown = Array(platforms.prefix(L.isVertical ? 3 : 5))
-        VStack(spacing: 70 * u) {
+        let badgesAt = start + (headline == nil ? 0 : 0.45)
+        VStack(spacing: 64 * u) {
+            if let headline {
+                KeynoteTitle([headline], at: t, start: start - 0.1, size: 112, accentLine: nil)
+            }
             if !shown.isEmpty {
-                HStack(alignment: .bottom, spacing: (L.isVertical ? 70 : 110) * u) {
+                HStack(alignment: .bottom, spacing: (L.isVertical ? 70 : 100) * u) {
                     ForEach(Array(shown.enumerated()), id: \.offset) { i, p in
-                        let a = Motion.pop(t, start + 0.15 * Double(i), response: 0.45, damping: 0.8)
-                        VStack(spacing: 24 * u) {
+                        let a = Motion.pop(t, badgesAt + 0.15 * Double(i), response: 0.45, damping: 0.8)
+                        VStack(spacing: 20 * u) {
                             Image(systemName: Self.symbol(p.name))
-                                .font(.system(size: 96 * u, weight: .light))
-                                .foregroundStyle(theme.primary)
-                                .frame(height: 120 * u)
-                            Text(Self.label(p)).font(theme.text(28 * u, .medium)).foregroundStyle(theme.secondary)
+                                .font(.system(size: 64 * u, weight: .regular))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(theme.accent)
+                                .frame(height: 80 * u)
+                            Text(Self.label(p)).font(theme.text(28 * u, .medium)).foregroundStyle(theme.primary)
                         }
                         .reveal(a, rise: 30)
                     }
@@ -222,12 +231,12 @@ public struct PlatformBadges: View {
             }
             if !facts.isEmpty {
                 Text(facts.joined(separator: "  ·  "))
-                    .font(theme.text(34 * u, .medium))
-                    .foregroundStyle(theme.primary)
+                    .font(theme.text(28 * u, .regular))
+                    .foregroundStyle(theme.secondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2).minimumScaleFactor(0.6)
                     .frame(maxWidth: L.width)
-                    .reveal(Motion.rise(t, start + 0.15 * Double(shown.count) + 0.2, 0.5), rise: 16)
+                    .reveal(Motion.rise(t, badgesAt + 0.15 * Double(shown.count) + 0.2, 0.5), rise: 16)
             }
         }
     }

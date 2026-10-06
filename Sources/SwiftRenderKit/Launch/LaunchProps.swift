@@ -502,7 +502,7 @@ extension LaunchProps {
         }
 
         if var code = p.code {
-            let (trimmed, cut) = LaunchText.trimCode(code.source, maxLines: 16, maxColumns: 64)
+            let (trimmed, cut) = LaunchText.trimCode(code.source, maxLines: 18, maxColumns: 72)
             if cut { w.append("code: trimmed to \(trimmed.split(separator: "\n", omittingEmptySubsequences: false).count) lines") }
             code.source = trimmed
             p.code = code.source.isEmpty ? nil : code
@@ -571,6 +571,26 @@ public enum LaunchText {
         return (truncate(text, limit), "")
     }
 
+    /// The first sentence, cut at a clause boundary (" — ", ";", ":", " (") when it runs
+    /// past 60 characters, then truncated to `limit`.
+    public static func clause(_ s: String, limit: Int) -> String {
+        var text = splitSentence(s, limit: 400).0
+        if text.count > 60 {
+            let cuts = [" — ", " – ", "; ", ": ", " ("].compactMap { sep -> String.Index? in
+                guard let r = text.range(of: sep), text.distance(from: text.startIndex, to: r.lowerBound) >= 20 else { return nil }
+                return r.lowerBound
+            }
+            if let first = cuts.min() { text = String(text[..<first]) }
+        }
+        return truncate(text.trimmingCharacters(in: CharacterSet(charactersIn: ":;, ")), limit)
+    }
+
+    /// First letter uppercased (the rest untouched).
+    public static func capitalized(_ s: String) -> String {
+        guard let f = s.first, f.isLowercase else { return s }
+        return f.uppercased() + s.dropFirst()
+    }
+
     public static func normalizeVersion(_ v: String) -> String {
         var s = v.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
@@ -606,12 +626,26 @@ public enum LaunchText {
                 }
             }
         }
-        lines = lines.map { line in
-            guard line.count > maxColumns else { return line }
-            cut = true
-            return String(line.prefix(maxColumns - 1)) + "…"
+        // Long lines wrap at the last space or comma that fits, continuing 8 columns deeper.
+        var wrapped: [String] = []
+        for line in lines {
+            var rest = line
+            let indent = String(repeating: " ", count: line.prefix(while: { $0 == " " }).count + 8)
+            var first = true
+            while rest.count > maxColumns {
+                let head = rest.prefix(maxColumns)
+                guard let brk = head.lastIndex(where: { $0 == " " || $0 == "," }),
+                      head.distance(from: head.startIndex, to: brk) > indent.count + 4 else { break }
+                let cutAt = head[brk] == "," ? head.index(after: brk) : brk
+                wrapped.append(String(rest[..<cutAt]))
+                rest = indent + rest[cutAt...].trimmingCharacters(in: .whitespaces)
+                first = false
+            }
+            if !first { cut = true }
+            wrapped.append(rest.count > maxColumns ? String(rest.prefix(maxColumns - 1)) + "…" : rest)
+            if rest.count > maxColumns { cut = true }
         }
-        return (lines.joined(separator: "\n"), cut)
+        return (wrapped.joined(separator: "\n"), cut)
     }
 
     /// SF Symbol for a feature by keyword.

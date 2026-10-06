@@ -552,25 +552,28 @@ private struct State {
 
     static func feature(from text: String, body: String?) -> LaunchProps.Feature {
         // "**Title** — detail", "Title — detail", "Title: detail"
-        var title = text, detail = ""
+        var title = text, rawDetail = ""
         if let m = firstMatch(#"^\*\*([^*]+)\*\*[:\s—–-]*(.*)$"#, text) {
             title = m
-            detail = text.replacingOccurrences(of: #"^\*\*[^*]+\*\*[:\s—–-]*"#, with: "", options: .regularExpression)
+            rawDetail = text.replacingOccurrences(of: #"^\*\*[^*]+\*\*[:\s—–-]*"#, with: "", options: .regularExpression)
         } else {
             for sep in [" — ", " – ", " - ", ": "] where text.contains(sep) {
                 let parts = text.components(separatedBy: sep)
-                title = parts[0]; detail = parts.dropFirst().joined(separator: sep); break
+                title = parts[0]; rawDetail = parts.dropFirst().joined(separator: sep); break
             }
         }
-        title = LaunchText.clean(title).trimmingCharacters(in: CharacterSet(charactersIn: ".:"))
-        detail = LaunchText.clean(detail)
-        if let body, !body.isEmpty {
-            let (sentence, _) = LaunchText.splitSentence(body, limit: 90)
-            if detail.isEmpty || detail.count < 12 { detail = detail.isEmpty ? sentence : detail }
+        title = LaunchText.clean(title).trimmingCharacters(in: CharacterSet(charactersIn: ".: "))
+        var detail = LaunchText.clean(rawDetail)
+        // A heading suffix that is only a code token ("— `--props`") says less than the section's prose.
+        let codeOnly = rawDetail.trimmingCharacters(in: .whitespaces).range(of: #"^`[^`]+`$"#, options: .regularExpression) != nil
+        if let body, !body.isEmpty, detail.count < 12 || codeOnly {
+            detail = LaunchText.clause(body, limit: 80)
         }
         if title.split(separator: " ").count > 4 { title = LaunchText.truncate(title, 28) }
-        if !detail.isEmpty, let first = detail.first, first.isLowercase { detail = first.uppercased() + detail.dropFirst() }
-        return .init(title: title, detail: LaunchText.truncate(detail, 80), symbol: LaunchText.symbol(for: title + " " + detail))
+        detail = LaunchText.capitalized(detail.trimmingCharacters(in: CharacterSet(charactersIn: ":;, ")))
+        let byTitle = LaunchText.symbol(for: title)
+        return .init(title: title, detail: LaunchText.truncate(detail, 80),
+                     symbol: byTitle != "sparkle" ? byTitle : LaunchText.symbol(for: detail))
     }
 
     static func cleanSnippet(_ code: String) -> String {
@@ -582,7 +585,7 @@ private struct State {
             defer { seenImport = true }
             return !seenImport
         }
-        return LaunchText.trimCode(lines.joined(separator: "\n"), maxLines: 16, maxColumns: 64).0
+        return LaunchText.trimCode(lines.joined(separator: "\n"), maxLines: 16, maxColumns: 72).0
     }
 
     static func fileTitle(_ code: String) -> String? {
@@ -633,11 +636,11 @@ private struct State {
         let rank: [LaunchProps.ChangelogItem.Kind: Int] = [.added: 0, .performance: 1, .changed: 2, .fixed: 3, .security: 4, .removed: 5, .deprecated: 6]
         let items = entry.enumerated().sorted { (rank[$0.element.0] ?? 9, $0.offset) < (rank[$1.element.0] ?? 9, $1.offset) }
             .prefix(5).map { e -> LaunchProps.ChangelogItem in
-                let f = Self.feature(from: e.element.1, body: nil)
-                let title = f.detail.isEmpty || e.element.1.hasPrefix("**") == false
-                    ? LaunchText.splitSentence(LaunchText.clean(e.element.1), limit: 60).0
-                    : f.title
-                return .init(e.element.0, LaunchText.truncate(title.trimmingCharacters(in: CharacterSet(charactersIn: ".")), 60))
+                // A bold lead-in is the item's own title; otherwise its first clause.
+                let raw = e.element.1
+                let title = Self.firstMatch(#"^\*\*([^*]+)\*\*"#, raw).map(LaunchText.clean) ?? LaunchText.clause(raw, limit: 60)
+                let clean = LaunchText.capitalized(title.trimmingCharacters(in: CharacterSet(charactersIn: ".:; ")))
+                return .init(e.element.0, LaunchText.truncate(clean, 60))
             }
         props.changelog = items
         if !items.isEmpty { note("changelog", "\(items.count) items from \(v.0)", "\(rel):\(v.2)") }
@@ -838,7 +841,7 @@ private struct State {
         // Facts for the platforms shot.
         if let deps = packageDependencies { props.stats.dependencies = deps }
         if props.kind != .app, packageDependencies == 0 { props.facts.append("Zero dependencies") }
-        if let l = props.license { props.facts.append(l == "MIT" || l == "Apache-2.0" ? "Open source · \(l)" : "\(l) license") }
+        if let l = props.license { props.facts.append("\(l) licensed") }
 
         // Call to action
         switch props.kind {

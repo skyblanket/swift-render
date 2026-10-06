@@ -16,9 +16,9 @@ public struct LaunchShot: Codable, Sendable, Equatable, Identifiable {
         case hero
         /// The tagline as a two-line keynote headline.
         case title
-        /// Three feature cards.
+        /// Three (or four) feature cards.
         case triad
-        /// Features 4–6 as a list.
+        /// Features 4–6 as a list (when there are five or more).
         case more
         /// The app on a device (first screenshot).
         case device
@@ -78,7 +78,8 @@ public struct LaunchPlan: Sendable, Equatable {
         var out: [LaunchShot] = [LaunchShot(.open, bars: 1), LaunchShot(.hero, bars: 2)]
         if !p.tagline.isEmpty { out.append(LaunchShot(.title, bars: p.subtitle == nil ? 1 : 2)) }
         if !p.features.isEmpty { out.append(LaunchShot(.triad, bars: 2)) }
-        if p.features.count >= 4 { out.append(LaunchShot(.more, bars: 2)) }
+        // Four features fit one row; five or six spill into a "more" list.
+        if p.features.count >= 5 { out.append(LaunchShot(.more, bars: 2)) }
 
         // At most two "deep" shots, ordered by what matters for this kind of project.
         let hasDevice = !p.screenshots.isEmpty

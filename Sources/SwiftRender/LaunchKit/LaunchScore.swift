@@ -123,12 +123,12 @@ public enum LaunchScore {
             case .title:
                 ev += rim(at: s0, amp: 0.2)
             case .triad:
-                for (k, _) in p.features.prefix(3).enumerated() {
-                    ev += rim(at: s0 + Double(k) * beat, amp: 0.22, pan: [-0.3, 0, 0.3][k])
+                for k in 0..<FeatureTriad.shown(p.features.count) {
+                    ev += rim(at: s0 + Double(k) * beat, amp: 0.22, pan: [-0.3, -0.1, 0.1, 0.3][k])
                 }
             case .more:
                 ev += rim(at: s0, amp: 0.16)
-                for (k, rt) in FeatureList.rowTimes(count: min(4, max(0, p.features.count - 3)), start: 0.1,
+                for (k, rt) in FeatureList.rowTimes(count: min(4, max(0, p.features.count - FeatureTriad.shown(p.features.count))), start: 0.1,
                                                     stagger: Cue.rowStagger(plan)).enumerated() {
                     ev += rim(at: s0 + rt, amp: 0.11, pan: k % 2 == 0 ? -0.2 : 0.2)
                 }

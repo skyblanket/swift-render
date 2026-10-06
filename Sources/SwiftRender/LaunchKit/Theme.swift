@@ -118,6 +118,14 @@ public extension View {
     }
 }
 
+public extension View {
+    /// The LaunchKit finish: grain 0.035 and a soft vignette (the house PostFX pass is
+    /// heavier). Pair with `ownsPostFX = true` on the scene.
+    func launchPostFX(at t: Double, dark: Bool = true) -> some View {
+        modifier(PostFX(time: t, grainAmount: 0.035, vignetteAmount: dark ? 0.25 : 0.1))
+    }
+}
+
 // MARK: - Layout
 
 /// Canvas-aware sizes. Components are authored at 1920×1080; on a vertical
@@ -133,7 +141,7 @@ public struct LaunchLayout: Sendable {
     public init(_ ctx: RenderContext) {
         size = ctx.size
         isVertical = ctx.isVertical
-        type = ctx.isVertical ? ctx.width / 1920 * 1.5 : ctx.referenceScale
+        type = ctx.isVertical ? ctx.width / 1920 * 1.75 : ctx.referenceScale
         margin = ctx.isVertical ? ctx.width * 0.08 : ctx.width * 0.07
     }
 

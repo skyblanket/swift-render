@@ -53,7 +53,7 @@ public struct AppleLaunchFilm: View {
         let fadeIn = Ease.easeInOut(Ease.clip(t, 0, 1.6))
         let fadeOut = Ease.easeIn(Ease.clip(t, duration - 1.0, duration))
         ZStack {
-            Stage(glow: 0.12 * fadeIn, center: .top, at: t)
+            Stage(glow: 0.075 * fadeIn, center: .top, at: t)
             Timeline(t) {
                 for (i, shot) in plan.shots.enumerated() {
                     // The end card focus-pulls in; the shot before it runs 0.4 s longer so the
@@ -61,10 +61,10 @@ public struct AppleLaunchFilm: View {
                     let intoEnd = i + 1 < plan.shots.count && plan.shots[i + 1].kind == .end
                     let len = plan.length(i) + (intoEnd ? 0.4 : 0)
                     if shot.kind == .end {
-                        Clip(len) { l in LaunchShotView(kind: shot.kind, l: l, length: len, props: props, plan: plan) }
+                        Clip(len) { l in AppleLaunchShot(shot.kind, at: l, length: len, props: props, plan: plan) }
                             .transition(.focusPull(0.4))
                     } else {
-                        Clip(len) { l in LaunchShotView(kind: shot.kind, l: l, length: len, props: props, plan: plan) }
+                        Clip(len) { l in AppleLaunchShot(shot.kind, at: l, length: len, props: props, plan: plan) }
                     }
                 }
             }
@@ -72,12 +72,13 @@ public struct AppleLaunchFilm: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .launchTheme(theme)
-        .modifier(PostFX(time: t, grainAmount: 0.035, vignetteAmount: theme.isDark ? 0.25 : 0.1))
+        .launchPostFX(at: t, dark: theme.isDark)
     }
 }
 
-/// One shot of the film at local time `l`.
-struct LaunchShotView: View {
+/// One stock shot of the AppleLaunch film at local time `l` (with its slow push).
+/// Ejected and `init`-scaffolded scenes fall back to these for shots they don't override.
+public struct AppleLaunchShot: View {
     let kind: LaunchShot.Kind
     let l: Double
     let length: Double
@@ -86,7 +87,11 @@ struct LaunchShotView: View {
     @Environment(\.renderContext) private var ctx
     @Environment(\.launchTheme) private var theme
 
-    var body: some View {
+    public init(_ kind: LaunchShot.Kind, at l: Double, length: Double, props: LaunchProps, plan: LaunchPlan) {
+        self.kind = kind; self.l = l; self.length = length; self.props = props; self.plan = plan
+    }
+
+    public var body: some View {
         let L = LaunchLayout(ctx)
         content(L)
             .frame(width: ctx.width, height: ctx.height)
@@ -108,7 +113,7 @@ struct LaunchShotView: View {
         case .triad:
             FeatureTriad(props.features, at: l, start: LaunchScore.Cue.triadStart(plan), stagger: plan.beat)
         case .more:
-            FeatureList(Array(props.features.dropFirst(3)), at: l, start: 0.1, stagger: LaunchScore.Cue.rowStagger(plan))
+            FeatureList(Array(props.features.dropFirst(FeatureTriad.shown(props.features.count))), at: l, start: 0.1, stagger: LaunchScore.Cue.rowStagger(plan))
         case .device:
             device(L)
         case .code:
@@ -119,7 +124,7 @@ struct LaunchShotView: View {
                 TerminalCard(TerminalCard.session(props.terminal ?? [], start: LaunchScore.Cue.terminalStart,
                                                   cps: LaunchScore.Cue.terminalCPS),
                              at: l, title: props.name, cps: LaunchScore.Cue.terminalCPS,
-                             fontSize: L.isVertical ? 26 : 30)
+                             width: L.isVertical ? L.width : 1360 * L.type, fontSize: L.isVertical ? 28 : 34)
                     .reveal(Motion.pop(l, 0.1, response: 0.5, damping: 0.82), rise: 60)
             }
         case .stats:
@@ -131,7 +136,8 @@ struct LaunchShotView: View {
             ChangelogList(version: props.version ?? "this release", items: props.changelog, at: l,
                           start: 0.25, stagger: LaunchScore.Cue.rowStagger(plan))
         case .platforms:
-            PlatformBadges(props.platforms, swift: props.swiftVersion, facts: props.facts, at: l, start: 0.1)
+            PlatformBadges(props.platforms, swift: props.swiftVersion, facts: Array(props.facts.dropFirst()),
+                           headline: props.facts.first.map { $0.hasSuffix(".") ? $0 : $0 + "." }, at: l, start: 0.1)
         case .end:
             EndCard(name: props.name, icon: LaunchAssets.image(props.icon?.path), iconShape: props.icon?.shape ?? .iOS,
                     cta: props.cta, url: props.url, footnote: footnote, at: l)
@@ -218,7 +224,7 @@ struct LaunchShotView: View {
     }
 
     /// Splits a sentence into one or two lines of similar length (at a comma when there is one).
-    static func balance(_ s: String) -> [String] {
+    public static func balance(_ s: String) -> [String] {
         let words = s.split(separator: " ").map(String.init)
         guard words.count >= 3, s.count > 16 else { return [s] }
         if let comma = words.firstIndex(where: { $0.hasSuffix(",") || $0.hasSuffix(".") }), comma < words.count - 1,
