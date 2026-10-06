@@ -24,9 +24,15 @@ final class InspectorController {
     var isBusy: Bool { launchPending || checkRunning || propsApplying || knobs.isBusy }
     @ObservationIgnored private var launchPending: Bool
 
+    /// Launch options still to run (`sceneOpened`).
+    var hasLaunchWork: Bool { launchPending && !launchStarted }
+    @ObservationIgnored private var launchStarted = false
+
     /// Runs the `--knob`, `--props` and `--check` launch options once the first scene is open.
+    /// ProjectModel calls it when that scene's info arrives; InspectorView too (harmless: once).
     func sceneOpened() async {
-        guard launchPending, model.info != nil else { return }
+        guard launchPending, !launchStarted, model.info != nil else { return }
+        launchStarted = true
         defer { launchPending = false }
         let o = model.options
         if !o.knobs.isEmpty, let info = model.info {

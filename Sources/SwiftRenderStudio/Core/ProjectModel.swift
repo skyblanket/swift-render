@@ -287,10 +287,12 @@ final class ProjectModel {
     func start() async {
         guard !started else { return }
         started = true
-        selectedScene = options.scene
+        // `--scene X`: the same per-scene state a sidebar pick loads (its saved knobs
+        // included — the host loads them too, so model and viewer agree).
+        if let scene = options.scene { loadSceneState(scene) }
         if let tab = options.tab { ui.inspectorTab = tab }
         if let at = options.at { playback.seek(at) }
-        review.load(scene: options.scene)
+        if options.scene == nil { review.load(scene: nil) }
         applyReviewLaunchOptions()
         startWatching()
         if isFake {
@@ -362,11 +364,7 @@ final class ProjectModel {
     func select(scene: String) async {
         guard scene != selectedScene || info == nil else { return }
         playback.pause()
-        selectedScene = scene
-        propsJSON = nil
-        knobValues = KnobFile.load(project.knobsURL(scene: scene))
-        review.load(scene: scene)
-        ui.selectedClipID = nil
+        loadSceneState(scene)
         do {
             if let info = try await host.reopen(openParams()) {
                 adopt(info)
@@ -375,6 +373,15 @@ final class ProjectModel {
         } catch {
             ui.toast = "Couldn't open \(scene): \(HostSupervisor.describe(error))"
         }
+    }
+
+    /// Per-scene state, before the host opens it: default props, the saved knob file, comments.
+    private func loadSceneState(_ scene: String) {
+        selectedScene = scene
+        propsJSON = nil
+        knobValues = KnobFile.load(project.knobsURL(scene: scene))
+        review.load(scene: scene)
+        ui.selectedClipID = nil
     }
 
     func setAspect(_ a: AspectChoice) async {
@@ -394,6 +401,9 @@ final class ProjectModel {
         // A props-driven length change reaches the transport too, not just the timeline.
         if !first { playback.adopt(i) }
         if first || wasFit { ui.viewport.fit(i.duration) }
+        // `--knob` / `--props` / `--check` apply once the first scene is open, whether or
+        // not an inspector tab is on screen (runs once).
+        if first, inspector.hasLaunchWork { Task { await inspector.sceneOpened() } }
     }
 
     // MARK: Knobs / props
@@ -433,17 +443,26 @@ final class ProjectModel {
             ui.toast = "This project's CLI has no AppleLaunch scene (swift-render 0.9+ registers it built in)"
             return
         }
-        ui.toast = "Scanning \(project.root.lastPathComponent) for a launch film…"
-        let root = project.root
-        let out = project.cacheDir.appendingPathComponent("launch-props.json")
-        let result = await Task.detached { () -> Result<String, Error> in
-            do {
-                try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let r = try ProcessRunner.run(exe.path, ["launch", root.path, "--no-render", "--props-out", out.path], cwd: root)
-                guard r.status == 0 else { throw LaunchScanFailure(message: r.stderr.split(separator: "\n").last.map(String.init) ?? "launch failed") }
-                return .success(try String(contentsOf: out, encoding: .utf8))
-            } catch { return .failure(error) }
-        }.value
+        let target = Self.launchTarget(project: project, scenes: scenes)
+        let result: Result<String, Error>
+        if let saved = target.props, let json = try? String(contentsOf: saved, encoding: .utf8) {
+            // An `init` scaffold: the app was scanned into this file (asset paths under assets/).
+            result = .success(json)
+        } else {
+            ui.toast = "Scanning \(target.root.lastPathComponent) for a launch film…"
+            let root = target.root, cwd = project.root
+            let out = project.cacheDir.appendingPathComponent("launch-props.json")
+            result = await Task.detached { () -> Result<String, Error> in
+                do {
+                    try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    let r = try ProcessRunner.run(exe.path, ["launch", root.path, "--no-render", "--props-out", out.path], cwd: cwd)
+                    guard r.status == 0 else { throw LaunchScanFailure(message: r.stderr.split(separator: "\n").last.map(String.init) ?? "launch failed") }
+                    let json = try String(contentsOf: out, encoding: .utf8)
+                    // Scanned outside this package: its relative art paths mean nothing to this host.
+                    return .success(root == cwd ? json : Self.absolutizingAssets(json, base: root))
+                } catch { return .failure(error) }
+            }.value
+        }
         switch result {
         case .success(let json):
             await select(scene: "AppleLaunch")
@@ -456,6 +475,40 @@ final class ProjectModel {
         case .failure(let error):
             ui.toast = "Launch scan failed: \(error)"
         }
+    }
+
+    /// What "New Launch Film…" scans. A `swift-render init` scaffold (product "launch") is a
+    /// Launch/ package inside the app: the film is about the app in the parent folder, and
+    /// `init` already scanned it into `.swift-render/launch/<App>Launch.json` (its own scene's
+    /// name), with the art copied into assets/. Anywhere else: the project itself.
+    nonisolated static func launchTarget(project: Project, scenes: [SceneSummary]) -> (root: URL, props: URL?) {
+        guard project.config.product == "launch" else { return (project.root, nil) }
+        let fm = FileManager.default
+        let dir = project.root.appendingPathComponent(".swift-render/launch", isDirectory: true)
+        for s in scenes where s.name != "AppleLaunch" {
+            let f = dir.appendingPathComponent("\(s.name).json")
+            if fm.fileExists(atPath: f.path) { return (project.root.deletingLastPathComponent(), f) }
+        }
+        let parent = project.root.deletingLastPathComponent()
+        let entries = (try? fm.contentsOfDirectory(atPath: parent.path)) ?? []
+        let isApp = entries.contains { $0 == "Package.swift" || $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }
+        return (isApp ? parent : project.root, nil)
+    }
+
+    /// Launch props with relative icon/screenshot paths made absolute against `base`.
+    nonisolated static func absolutizingAssets(_ json: String, base: URL) -> String {
+        guard var props = try? JSONDecoder().decode(LaunchProps.self, from: Data(json.utf8)) else { return json }
+        func abs(_ p: String) -> String {
+            p.isEmpty || p.hasPrefix("/") || p.hasPrefix("~") ? p : base.appendingPathComponent(p).standardizedFileURL.path
+        }
+        if let icon = props.icon {
+            props.icon?.path = abs(icon.path)
+            props.icon?.darkPath = icon.darkPath.map(abs)
+        }
+        for i in props.screenshots.indices { props.screenshots[i].path = abs(props.screenshots[i].path) }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return (try? enc.encode(props)).map { String(decoding: $0, as: UTF8.self) } ?? json
     }
 
     // MARK: Actions
