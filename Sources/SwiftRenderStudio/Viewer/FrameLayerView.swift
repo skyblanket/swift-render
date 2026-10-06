@@ -19,6 +19,9 @@ final class FrameLayerView: NSView {
     var zoom: ViewerZoom = .fit { didSet { needsLayout = true } }
     var sceneSize = CGSize(width: 1920, height: 1080) { didSet { needsLayout = true } }
     private(set) var image: CGImage?
+    /// The last 2 shown surfaces: a surface on screen (or just replaced, while CA may
+    /// still composite it) must never go back to the pool.
+    private var heldSurfaces: [FrameSurface] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -61,8 +64,25 @@ final class FrameLayerView: NSView {
     private func reportDisplayWidth() {
         guard let engine else { return }
         let scale = window?.backingScaleFactor ?? 2
-        let edge = ViewerGeometry.pixelEdge(canvas: canvasRect, backingScale: scale, sceneSize: sceneSize)
+        let env = ProcessInfo.processInfo.environment
+        let sceneScale = env["SR_PREVIEW_SCALE"].flatMap(Double.init) ?? 1
+        let size = CGSize(width: sceneSize.width * sceneScale, height: sceneSize.height * sceneScale)
+        let edge = env["SR_PREVIEW_DISPLAY_WIDTH"].flatMap(Int.init)
+            ?? ViewerGeometry.pixelEdge(canvas: canvasRect, backingScale: scale, sceneSize: size)
         if engine.displayWidth != edge { engine.displayWidth = edge }
+    }
+
+    /// A decoded frame: its IOSurface goes straight to the layer when it has one (no
+    /// Core Animation copy); `image` stays current for snapshots and covers.
+    func show(frame f: DecodedFrame) {
+        guard let surface = f.surface else { show(f.image); return }
+        image = f.image
+        heldSurfaces.append(surface)
+        if heldSurfaces.count > 2 { heldSurfaces.removeFirst(heldSurfaces.count - 2) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = surface.surface
+        CATransaction.commit()
     }
 
     func show(_ img: CGImage?) {
@@ -117,10 +137,10 @@ final class FrameLayerView: NSView {
 
     private func attachEngine() {
         guard let engine else { return }
-        engine.onFrame = { [weak self] f in self?.show(f.image) }
+        engine.onFrame = { [weak self] f in self?.show(frame: f) }
         engine.onCover = { [weak self] in self?.showCover() }
         engine.onPlayStateChange = { [weak self] playing in self?.link?.isPaused = !playing }
-        if let f = engine.currentFrame { show(f.image) }
+        if let f = engine.currentFrame { show(frame: f) }
         link?.isPaused = !engine.isPlaying
         reportDisplayWidth()
     }

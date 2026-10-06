@@ -25,6 +25,9 @@ struct DecodedFrame: @unchecked Sendable {
     /// Host render + encode time, milliseconds.
     let ms: Double
     let format: FrameFormat
+    /// The IOSurface `image` wraps, for raw frames read straight off the pipe. The viewer
+    /// shows it as layer contents (no Core Animation copy).
+    var surface: FrameSurface? = nil
     /// Approximate resident cost (decoded pixels).
     var byteCost: Int { width * height * 4 }
     /// Longest edge in pixels: what `maxWidth` caps on the wire (portrait scenes too).
@@ -43,6 +46,8 @@ struct OpenedScene: Sendable {
 struct HostReply: Sendable {
     var result: HostResult
     var payload: Data?
+    /// A raw bgra8 payload read straight into an IOSurface (instead of `payload`).
+    var surface: FrameSurface? = nil
 }
 
 /// How a host process ended.
@@ -147,7 +152,7 @@ extension RenderHost {
     func openScene(_ params: HostParams) async throws -> OpenedScene {
         let reply = try await call(.open, params)
         guard let info = reply.result.info else { throw HostClientError.protocolError("open returned no info") }
-        let frame = reply.result.frame.flatMap { try? FrameDecoder.decode($0, payload: reply.payload, fps: info.fps) }
+        let frame = reply.result.frame.flatMap { try? FrameDecoder.decode($0, payload: reply.payload, surface: reply.surface, fps: info.fps) }
         return OpenedScene(info: info, frame: frame, probing: reply.result.probing == true)
     }
 }
