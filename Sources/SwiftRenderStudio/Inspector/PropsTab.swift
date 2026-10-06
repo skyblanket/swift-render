@@ -45,11 +45,8 @@ struct PropsTab: View {
 
     private func header(_ insp: InspectorController) -> some View {
         HStack(spacing: StudioStyle.Space.s) {
-            Picker("Edit As", selection: Binding(get: { insp.propsMode }, set: { insp.switchProps(to: $0) })) {
-                ForEach(InspectorController.PropsMode.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            StudioSegmented(options: InspectorController.PropsMode.allCases,
+                            selection: Binding(get: { insp.propsMode }, set: { insp.switchProps(to: $0) })) { $0.rawValue }
             .fixedSize()
             .help(insp.propsSyntax != nil ? "Fix the JSON to use the form" : "Edit as a form or as JSON")
             Spacer()
@@ -296,7 +293,7 @@ struct PropsForm: View {
             LabeledContent(label) { Text("Empty").foregroundStyle(.tertiary) }
         case .bool(let b):
             Toggle(label, isOn: Binding(get: { b }, set: { insp.setField(path, .bool($0)) }))
-                .toggleStyle(.switch).controlSize(.small)
+                .toggleStyle(StudioSwitchStyle())
         case .number(let lit):
             LabeledContent(label) {
                 PropsNumberField(literal: lit) { insp.setField(path, .number($0)) }

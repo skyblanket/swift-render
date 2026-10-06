@@ -4,9 +4,9 @@ import SwiftRenderKit
 // MARK: - Score lanes
 //
 // One row per `ScoreEventInfo.lane` group (voice, music, drums & hits, samples, effects)
-// plus the captions row, each in one muted tone. Music collapses into phrases: notes
-// closer than a few points merge, so a fit-zoomed score reads as one calm row and the
-// notes come apart as you zoom in. Drums and hits are ticks scaled by amplitude.
+// plus the captions row, all in one neutral tone. Music is note blocks packed into a few
+// rows (density and pitch at a glance), the instrument named on its first block. Drums
+// and hits are label-colored ticks scaled by amplitude.
 // Whooshes and risers are hatched with a warning: the house rule (and the `check`
 // sweep warning) says new scores use swell/tick/rim/thump/blip instead.
 
@@ -46,8 +46,9 @@ struct ScoreLane: LaneRenderer {
         }
     }
 
-    /// Music draws phrases rather than single notes.
-    var phrases: Bool { lanes.contains("melodic") }
+    /// Music labels only the first block of each instrument ("Pad", "Bass"): the rest
+    /// read as note density and pitch rows.
+    var labelsFirstOnly: Bool { lanes.contains("melodic") }
 
     var warnings: Int { events.filter(Self.breaksHouseRule).count }
 
@@ -108,61 +109,14 @@ struct ScoreLane: LaneRenderer {
 
     func draw(in ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         switch style {
-        case .blocks: phrases ? drawPhrases(&ctx, size: size, viewport: v) : drawBlocks(&ctx, size: size, viewport: v)
+        case .blocks: drawBlocks(&ctx, size: size, viewport: v)
         case .hits: drawHits(&ctx, size: size, viewport: v)
-        }
-    }
-
-    /// Spans of notes closer than `gap` points, at this zoom.
-    static func phraseSpans(_ events: ArraySlice<ScoreEventInfo>, pxPerSecond: Double, gap: CGFloat = 6) -> [(start: Double, end: Double, kinds: [String])] {
-        let join = Double(gap) / max(pxPerSecond, 1e-6)
-        var out: [(start: Double, end: Double, kinds: [String])] = []
-        for e in events.sorted(by: { $0.time < $1.time }) {
-            let end = e.time + max(e.duration, 0.01)
-            if let last = out.last, e.time <= last.end + join {
-                out[out.count - 1].end = max(last.end, end)
-                out[out.count - 1].kinds.append(e.kind)
-            } else {
-                out.append((e.time, end, [e.kind]))
-            }
-        }
-        return out
-    }
-
-    /// One row: every note a faint block (overlaps build up, so busy passages read
-    /// darker), and each voice's phrases labelled where there's room ("Pad", "Bass").
-    private func drawPhrases(_ ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
-        var labels = 0
-        let tone = StudioStyle.Lane.music
-        let slice = LaneDraw.visible(events, viewport: v, start: \.time, end: { $0.time + $0.duration })
-        let y: CGFloat = 3, h = size.height - 6
-        var notes = Path()
-        for e in slice where e.time + e.duration >= v.start {
-            if let r = LaneDraw.rect(viewport: v, from: e.time, to: e.time + max(e.duration, 0.01), y: y, height: h) {
-                notes.addRoundedRect(in: r, cornerSize: CGSize(width: 2, height: 2), style: .continuous)
-            }
-        }
-        ctx.fill(notes, with: .color(tone.opacity(0.16)))
-        // Labels: the widest phrases first, never two over the same stretch.
-        var taken: [ClosedRange<CGFloat>] = []
-        let byKind = Dictionary(grouping: slice, by: \.kind)
-        let spans = byKind.flatMap { kind, evs in
-            Self.phraseSpans(evs[...], pxPerSecond: v.pxPerSecond, gap: 12).map { (kind, $0.start, $0.end) }
-        }
-        .compactMap { k, a, b -> (String, CGRect)? in
-            LaneDraw.rect(viewport: v, from: a, to: b, y: y, height: h).map { (k, $0) }
-        }
-        .sorted { $0.1.width > $1.1.width }
-        for (kind, r) in spans where r.width >= 60 {
-            let lane = r.minX...r.maxX
-            guard !taken.contains(where: { $0.overlaps(lane) }) else { continue }
-            taken.append(lane)
-            LaneDraw.label(&ctx, kind.prefix(1).uppercased() + kind.dropFirst(), in: r, labels: &labels)
         }
     }
 
     private func drawBlocks(_ ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         var labels = 0
+        var named = Set<String>()
         let slice = LaneDraw.visible(events, viewport: v, start: \.time, end: { $0.time + $0.duration })
         for i in slice.indices {
             let e = events[i]
@@ -175,7 +129,11 @@ struct ScoreLane: LaneRenderer {
                            fill: StudioStyle.Lane.fill)
             guard let r = LaneDraw.rect(viewport: v, from: e.time, to: e.time + e.duration, y: y, height: h) else { continue }
             if warn { LaneDraw.hatch(&ctx, r, color: StudioStyle.warning.opacity(0.3), spacing: 5) }
-            if rows <= 1 || h >= 12 {
+            if labelsFirstOnly {
+                guard r.width >= LaneDraw.minLabelWidth, !named.contains(e.kind) else { continue }
+                named.insert(e.kind)
+                LaneDraw.label(&ctx, e.kind.prefix(1).uppercased() + e.kind.dropFirst(), in: r, labels: &labels)
+            } else if rows <= 1 || h >= 12 {
                 LaneDraw.label(&ctx, label(e), in: r, labels: &labels)
             }
         }
@@ -213,7 +171,7 @@ struct ScoreLane: LaneRenderer {
                 ticks.move(to: CGPoint(x: x, y: base)); ticks.addLine(to: CGPoint(x: x, y: base - full * 0.7 * amp))
             }
         }
-        ctx.fill(wedges, with: .color(tone.opacity(0.25)))
+        ctx.fill(wedges, with: .color(tone.opacity(0.15)))
         ctx.stroke(ticks, with: .color(tone.opacity(0.7)), lineWidth: 1)
         ctx.stroke(heavy, with: .color(tone.opacity(0.95)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
         ctx.fill(dots, with: .color(tone.opacity(0.9)))
@@ -277,7 +235,7 @@ enum ScoreLanes {
     /// Lane rows in display order (label, lanes grouped into the row, style).
     static let rows: [(title: String, lanes: Set<String>, style: ScoreLane.Style)] = [
         ("Voice", ["speech"], .blocks(maxRows: 2)),
-        ("Music", ["melodic"], .blocks(maxRows: 1)),
+        ("Music", ["melodic"], .blocks(maxRows: 4)),
         ("Drums & Hits", ["drums", "mark"], .hits),
         ("Samples", ["sample"], .blocks(maxRows: 2)),
         ("Effects", ["fx"], .blocks(maxRows: 2)),

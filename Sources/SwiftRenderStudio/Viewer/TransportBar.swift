@@ -4,7 +4,7 @@ import SwiftUI
 //
 //   00:12:24 / 01:33:00        |◀  ◀◀  ▶  ▶▶  ▶|        [In 0:10 → Out 0:20]  ⟲  ♪
 //
-// The large timecode (MM:SS:FF) is the typographic anchor; the play cluster sits centered
+// The large timecode (m:ss.hh, the same clock as the ruler) is the typographic anchor; the play cluster sits centered
 // under the picture. Frame numbers live in the timecode's tooltip.
 
 struct TransportBar: View {

@@ -75,14 +75,11 @@ struct CommentsTab: View {
         let review = model.review
         return VStack(spacing: StudioStyle.Space.s) {
             HStack(spacing: StudioStyle.Space.s) {
-                Picker("Show", selection: Binding(get: { review.query.segment }, set: { review.query.segment = $0 })) {
-                    ForEach(ReviewSegment.allCases) { s in
-                        let n = review.count(segment: s)
-                        Text(s != .done && n > 0 ? "\(s.title) \(n)" : s.title).tag(s)
-                    }
+                StudioSegmented(options: ReviewSegment.allCases,
+                                selection: Binding(get: { review.query.segment }, set: { review.query.segment = $0 })) { s in
+                    let n = review.count(segment: s)
+                    return s != .done && n > 0 ? "\(s.title) \(n)" : s.title
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 .frame(maxWidth: .infinity)
                 Menu {
                     Picker("From", selection: Binding(get: { review.query.author }, set: { review.query.author = $0 })) {

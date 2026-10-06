@@ -6,7 +6,8 @@ import SwiftRenderKit
 // Comments within ±0.25 s of the playhead (`PlaybackEngine.visibleCommentIDs`,
 // republished only when the set changes), each a numbered disc in the shared grammar
 // (see `CommentDisc`). Hover a pin for its text; click opens the thread; the selected
-// comment's rect can be dragged to a new spot (written on release). Compare draws over them.
+// comment's rect can be dragged to a new spot (written on release), and it carries a small
+// callout (author · time · status · first line). Compare draws over them.
 
 struct PinsOverlay: View {
     @Bindable var model: ProjectModel
@@ -27,6 +28,10 @@ struct PinsOverlay: View {
             }
             if let id = hovered, let c = shown.first(where: { $0.id == id }) {
                 caption(c)
+            } else if model.review.draft == nil, draggingID == nil, let id = model.review.selection,
+                      let c = shown.first(where: { $0.id == id }) {
+                // The selected comment's callout: who, when, where it stands, and its first line.
+                caption(c, compact: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -69,10 +74,11 @@ struct PinsOverlay: View {
             }
     }
 
-    /// The note beside a hovered pin.
-    private func caption(_ c: ReviewComment) -> some View {
+    /// The note beside a hovered pin; `compact` (the selected pin's callout) shows only
+    /// the header and the first line.
+    private func caption(_ c: ReviewComment, compact: Bool = false) -> some View {
         let r = RegionMath.rect(c.region!, in: canvas)
-        let width: CGFloat = 260
+        let width: CGFloat = compact ? 240 : 260
         let x = min(max(canvas.minX + 4, (RegionMath.isPoint(c.region!) ? r.minX : r.maxX) + 16), canvas.maxX - width - 4)
         let below = r.minY - 10 < canvas.minY + 40
         return VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
@@ -83,8 +89,13 @@ struct PinsOverlay: View {
                 Spacer(minLength: 0)
                 StatusLabel(state: CommentState(c), font: StudioStyle.Fonts.footnote)
             }
-            Text(c.body).font(StudioStyle.Fonts.callout).lineLimit(5)
-            if let last = c.replies.last {
+            if compact {
+                Text(c.body.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? c.body)
+                    .font(StudioStyle.Fonts.callout).lineLimit(1).truncationMode(.tail)
+            } else {
+                Text(c.body).font(StudioStyle.Fonts.callout).lineLimit(5)
+            }
+            if !compact, let last = c.replies.last {
                 Text("\(ReviewStyle.displayName(last.author)): \(last.body)")
                     .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).lineLimit(2)
             }

@@ -37,8 +37,8 @@ struct InfoTab: View {
             LabeledContent("Name") { Text(info.name).textSelection(.enabled) }
             LabeledContent("Kind") { Text(Self.kind(info.kind)) }
             LabeledContent("Length") {
-                Text(StudioTime.spoken(info.duration)).monospacedDigit()
-                    .help("\(Int((info.duration * Double(info.fps)).rounded())) frames")
+                Text(StudioTime.length(info.duration, fps: info.fps)).monospacedDigit()
+                    .help("\(StudioTime.precise(info.duration)) · \(StudioTime.spoken(info.duration))")
             }
             LabeledContent("Canvas") { Text(verbatim: "\(info.width) × \(info.height) · \(info.fps) fps").monospacedDigit() }
             if let src = info.sourcePath {

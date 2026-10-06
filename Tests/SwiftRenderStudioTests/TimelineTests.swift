@@ -150,6 +150,20 @@ final class ScoreLaneTests: XCTestCase {
         XCTAssertEqual(ScoreLane.pack([(0, 5), (0, 5), (0, 5)], maxRows: 2).count, 2)
     }
 
+    func testOneClockEverywhere() {
+        XCTAssertEqual(StudioTime.transport(3, fps: 60), "0:03.00")
+        XCTAssertEqual(StudioTime.transport(9.9, fps: 60), "0:09.90")
+        XCTAssertEqual(StudioTime.transport(71.5, fps: 30), "1:11.50")
+        XCTAssertEqual(StudioTime.length(9.9, fps: 60), "9.9 s · 594 frames")
+        XCTAssertEqual(StudioTime.short(3), "0:03")
+    }
+
+    func testLanesAreNeutral() {
+        XCTAssertEqual(StudioStyle.Lane.tone("melodic"), StudioStyle.Lane.neutral)
+        XCTAssertEqual(StudioStyle.Lane.tone("sample"), StudioStyle.Lane.neutral)
+        XCTAssertEqual(StudioStyle.Lane.tone("drums"), StudioStyle.Lane.drums)
+    }
+
     func testChordsMergeIntoOneBlock() {
         let pad = { (n: String) in ScoreEventInfo(lane: "melodic", kind: "pad", detail: n, time: 4, duration: 2, amp: 0.5) }
         let lane = ScoreLane(title: "Music", lanes: ["melodic"], style: .blocks(maxRows: 4),

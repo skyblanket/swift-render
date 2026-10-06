@@ -68,6 +68,9 @@ enum StudioStyle {
     static let onLight = Color.black
     /// Drop shadows (applied with an opacity).
     static let shadow = Color.black
+    /// The selected segment of `StudioSegmented`, and the OFF track of `StudioSwitchStyle`.
+    static let segment = dynamic("segment", light: gray(0xFFFFFF), dark: gray(0x5A5A5E))
+    static let switchOff = dynamic("switchOff", light: gray(0x000000, 0.12), dark: gray(0xFFFFFF, 0.18))
     /// Message bubbles in a thread: a soft step off the inspector.
     static let bubble = dynamic("bubble", light: gray(0xEFEFF2), dark: gray(0x2C2C2F))
 
@@ -78,26 +81,25 @@ enum StudioStyle {
         static let white = Color.white
     }
 
-    /// One muted tone per timeline lane (content, not chrome), drawn at ~35%.
+    /// Timeline lanes are content, not chrome: one neutral tone for every lane (only the
+    /// accent and the picture carry color). Blocks draw it at ~35%; drum ticks use `ink`.
     enum Lane {
-        static let clips = Color(nsColor: .systemGray)
-        static let voice = Color(nsColor: .systemTeal)
-        static let music = Color(nsColor: .systemIndigo)
-        static let drums = Color(nsColor: .systemTeal)
-        static let samples = Color(nsColor: .systemPink)
-        static let fx = Color(nsColor: .systemBrown)
-        static let audio = Color(nsColor: .systemGray)
-        static let captions = Color(nsColor: .systemGray)
+        static let neutral = Color(nsColor: .systemGray)
+        static let clips = neutral
+        static let voice = neutral
+        static let music = neutral
+        static let samples = neutral
+        static let fx = neutral
+        static let audio = neutral
+        static let captions = neutral
+        /// Drum and hit ticks: the label color, so they read white in dark mode.
+        static let drums = Color(nsColor: .labelColor)
         static let fill = 0.35
 
         static func tone(_ lane: String) -> Color {
             switch lane {
-            case "speech": return voice
-            case "melodic": return music
             case "drums", "mark": return drums
-            case "sample": return samples
-            case "fx": return fx
-            default: return clips
+            default: return neutral
             }
         }
     }
@@ -243,9 +245,9 @@ enum StudioAppearance: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - Time
 
-/// One formatter for every time Studio shows. Rows and headers read "0:11"; the
-/// transport reads "00:11:10" (minutes, seconds, frames); frame numbers and the fps
-/// live in tooltips. (`ReviewComment.format` stays as is: the CLI and agents read it.)
+/// One clock for every time Studio shows: minutes and seconds, "0:11" in rows, headers
+/// and the ruler, "0:11.40" (m:ss.hh) where precision matters (transport, hover cards).
+/// Frame numbers and the fps are a secondary detail in tooltips. (`ReviewComment.format` stays as is: the CLI and agents read it.)
 enum StudioTime {
     /// "0:11", "1:05:02" past an hour.
     static func short(_ t: Double) -> String {
@@ -260,11 +262,18 @@ enum StudioTime {
         return "\(short(a))–\(short(b))"
     }
 
-    /// "00:11:10" (MM:SS:FF).
+    /// "0:03.00" — the transport uses the same clock as the ruler and comment headers,
+    /// snapped to the frame it shows.
     static func transport(_ t: Double, fps: Int) -> String {
-        let f = max(1, fps)
-        let frames = Int((max(0, t) * Double(f)).rounded(.down))
-        return String(format: "%02d:%02d:%02d", frames / f / 60, (frames / f) % 60, frames % f)
+        let f = Double(max(1, fps))
+        return precise((max(0, t) * f + 1e-6).rounded(.down) / f)
+    }
+
+    /// "9.9 s · 594 frames" (Info › Length).
+    static func length(_ d: Double, fps: Int) -> String {
+        let frames = Int((max(0, d) * Double(max(1, fps))).rounded())
+        let secs = d >= 60 ? short(d) : String(format: d < 10 ? "%.1f s" : "%.0f s", d)
+        return "\(secs) · \(frames) frame\(frames == 1 ? "" : "s")"
     }
 
     /// Tooltip for any timecode: "Frame 671 at 60 fps".
@@ -370,5 +379,68 @@ extension View {
         background(StudioStyle.rounded(cornerRadius).fill(StudioStyle.raised)
             .shadow(color: StudioStyle.shadow.opacity(shadow ? 0.25 : 0), radius: 12, y: 4))
             .overlay(StudioStyle.rounded(cornerRadius).strokeBorder(StudioStyle.hairline))
+    }
+}
+
+// MARK: - Segmented control and switch
+
+/// A segmented control whose selected segment always reads: a raised pill on a quiet
+/// well, label-colored text. (The system control's selection all but vanishes in dark
+/// mode and in snapshots.)
+struct StudioSegmented<Value: Hashable>: View {
+    var options: [Value]
+    @Binding var selection: Value
+    var title: (Value) -> String
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { o in
+                let on = o == selection
+                Button { selection = o } label: {
+                    // Never truncates: each segment is at least its label, the rest is shared.
+                    Text(title(o))
+                        .font(StudioStyle.Fonts.callout.weight(on ? .medium : .regular))
+                        .foregroundStyle(on ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity, minHeight: 22)
+                        .background {
+                            if on {
+                                StudioStyle.rounded(6).fill(StudioStyle.segment)
+                                    .shadow(color: StudioStyle.shadow.opacity(0.18), radius: 1, y: 0.5)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.medium))
+    }
+}
+
+/// The macOS switch, drawn so ON always shows the accent (the system art goes gray in
+/// an inactive window and in snapshots).
+struct StudioSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: StudioStyle.Space.s) {
+            configuration.label
+            Spacer(minLength: 0)
+            Button { withAnimation(.snappy(duration: 0.15)) { configuration.isOn.toggle() } } label: {
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    Capsule().fill(configuration.isOn ? AnyShapeStyle(StudioStyle.accent) : AnyShapeStyle(StudioStyle.switchOff))
+                    Circle().fill(Color.white)
+                        .shadow(color: StudioStyle.shadow.opacity(0.3), radius: 1, y: 0.5)
+                        .padding(1.5)
+                }
+                .frame(width: 30, height: 17)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isOn ? "On" : "Off")
+        }
     }
 }

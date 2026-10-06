@@ -22,7 +22,8 @@ struct TimelineView: View {
         HStack(spacing: 0) {
             TimelineHeaderColumn(model: model, state: state, layout: layout)
                 .frame(width: Self.headerWidth)
-                .background(StudioStyle.chromeAlt)
+                // Not into the safe area: it would extend under the sidebar's edge as a seam.
+                .background(StudioStyle.chromeAlt, ignoresSafeAreaEdges: [])
             StudioStyle.hairline.frame(width: 1)
             GeometryReader { geo in
                 let lanes = CGSize(width: max(1, geo.size.width - Self.gutter), height: geo.size.height)
@@ -31,7 +32,8 @@ struct TimelineView: View {
                         .frame(width: geo.size.width, height: TimelineLayout.rulerHeight)
                     TimelineLanesColumn(model: model, state: state, layout: layout, size: lanes)
                         .offset(x: Self.gutter)
-                    PlayheadOverlay(model: model, inset: Self.gutter)
+                    PlayheadOverlay(model: model, inset: Self.gutter,
+                                    notesY: layout.columnY(.notes, scrollY: state.scrollY))
                         .frame(width: geo.size.width, height: max(0, geo.size.height - TimelineLayout.scrollerHeight))
                 }
             }

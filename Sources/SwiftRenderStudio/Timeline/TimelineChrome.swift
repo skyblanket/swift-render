@@ -120,11 +120,12 @@ struct TimelineZoomControls: View {
     @AppStorage(TimelinePrefs.follow) private var follow = true
 
     var body: some View {
-        let v = model.ui.viewport
         HStack(spacing: StudioStyle.Space.s) {
-            Button("Fit") { model.perform(.timelineZoomFit) }
-                .disabled(v.isFit)
-                .help("Zoom to Fit (⇧Z)")
+            // Always a normal button in label color (a disabled "Fit" read as broken).
+            Button { model.perform(.timelineZoomFit) } label: {
+                Text("Fit").foregroundStyle(.primary)
+            }
+            .help(model.ui.viewport.isFit ? "The whole film fits (⇧Z)" : "Zoom to Fit (⇧Z)")
             Spacer(minLength: 0)
             Toggle(isOn: $follow) { Image(systemName: "arrow.right.to.line") }
                 .toggleStyle(.button)

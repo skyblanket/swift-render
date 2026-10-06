@@ -50,11 +50,11 @@ struct RegionTool: View {
     // MARK: Drawing
 
     /// The marquee: a 1.5 pt accent line over a dark underlay, so it reads on any frame.
+    /// No fill: the picture inside stays exactly as rendered.
     private func marquee(_ r: CGRect) -> some View {
         Rectangle()
             .strokeBorder(StudioStyle.pictureScrim, lineWidth: 3.5)
             .overlay(Rectangle().strokeBorder(StudioStyle.accent, lineWidth: 1.5))
-            .background(StudioStyle.accent.opacity(0.08))
             .frame(width: max(1, r.width), height: max(1, r.height))
             .offset(x: r.minX, y: r.minY)
     }
@@ -120,7 +120,8 @@ struct RegionTool: View {
         if docked { model.ui.inspectorTab = .comments; model.ui.showInspector = true }
     }
 
-    static let composerSize = CGSize(width: 320, height: 156)
+    /// Compact, so it fits beside most regions instead of below them.
+    static let composerSize = CGSize(width: 280, height: 156)
 
     // MARK: Geometry (pure, tested)
 

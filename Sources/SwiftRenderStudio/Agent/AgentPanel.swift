@@ -161,9 +161,15 @@ struct AgentPanel: View {
                             .id(row.id)
                     }
                 }
-                .padding(.vertical, StudioStyle.Space.s)
+                .padding(.top, StudioStyle.Space.xl)
+                .padding(.bottom, StudioStyle.Space.s)
             }
             .defaultScrollAnchor(.bottom)
+            // A soft top edge, so a row scrolled under the header fades instead of being cut.
+            .mask(VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: StudioStyle.Space.xl)
+                Color.black
+            })
             .onChange(of: agent.transcript.count) {
                 if let last = agent.transcript.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
@@ -390,8 +396,12 @@ private struct TranscriptRow: View {
                                         : TranscriptText.result(row.detail, numbers: numbers))
                     .font(StudioStyle.Fonts.calloutEmphasis)
                     .lineLimit(6).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
+            // The run's summary: a small raised card.
             .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.s)
+            .studioCard(cornerRadius: StudioStyle.Radius.medium, shadow: false)
+            .padding(.horizontal, StudioStyle.Space.s).padding(.vertical, StudioStyle.Space.xs)
         }
     }
 
@@ -415,7 +425,7 @@ private struct TranscriptRow: View {
         } else if let ok = row.ok {
             Image(systemName: ok ? "checkmark" : StudioStyle.Symbol.close)
                 .font(StudioStyle.Fonts.footnote)
-                .foregroundStyle(ok ? AnyShapeStyle(.tertiary) : AnyShapeStyle(StudioStyle.error))
+                .foregroundStyle(ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(StudioStyle.error))
         }
     }
 

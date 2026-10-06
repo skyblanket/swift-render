@@ -310,13 +310,12 @@ struct PresetTile: View {
                 Text(preset.tileTitle)
                     .font(StudioStyle.Fonts.calloutEmphasis)
                     .lineLimit(1)
-                ViewThatFits(in: .horizontal) {
-                    Text(verbatim: "\(preset.sizeLabel) · \(preset.fps) fps")
-                    Text(verbatim: preset.sizeLabel)
-                }
-                .font(StudioStyle.Fonts.footnote).monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                // Every tile shows its fps (shrinks a touch rather than dropping it).
+                Text(verbatim: "\(preset.sizeLabel) · \(preset.fps) fps")
+                    .font(StudioStyle.Fonts.footnote).monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             Spacer(minLength: 0)
         }

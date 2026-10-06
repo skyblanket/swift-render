@@ -10,13 +10,7 @@ struct InspectorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Inspector", selection: $model.ui.inspectorTab) {
-                ForEach(InspectorTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            StudioSegmented(options: InspectorTab.allCases, selection: $model.ui.inspectorTab) { $0.title }
             .padding(.horizontal, StudioStyle.Space.m)
             .padding(.vertical, StudioStyle.Space.s)
             Divider()

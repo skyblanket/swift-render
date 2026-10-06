@@ -10,6 +10,9 @@ struct PlayheadOverlay: View {
     @Bindable var model: ProjectModel
     /// Gutter before 0:00 (the lanes start this far right).
     var inset: CGFloat = 0
+    /// Column-space top of the comments lane: the line breaks around any comment disc it
+    /// crosses, so pins (the selected one above all) always draw over the playhead.
+    var notesY: CGFloat? = nil
     @AppStorage(TimelinePrefs.follow) private var follow = true
 
     var body: some View {
@@ -21,7 +24,17 @@ struct PlayheadOverlay: View {
             let r = TimelineLayout.rulerHeight
             // A 1 pt line with a cap: a small rounded tab in the ruler.
             var line = Path()
-            line.move(to: CGPoint(x: x, y: r - 8)); line.addLine(to: CGPoint(x: x, y: size.height))
+            let half = CommentsLane.markerSize / 2 + 4
+            let mid = notesY.map { $0 + CommentsLane(comments: []).height / 2 }
+            let underPin = mid != nil && model.review.comments.contains { c in
+                abs(v.x(c.t) + inset - x) < half
+            }
+            if let mid, underPin, mid - half > r {
+                line.move(to: CGPoint(x: x, y: r - 8)); line.addLine(to: CGPoint(x: x, y: mid - half))
+                line.move(to: CGPoint(x: x, y: mid + half)); line.addLine(to: CGPoint(x: x, y: size.height))
+            } else {
+                line.move(to: CGPoint(x: x, y: r - 8)); line.addLine(to: CGPoint(x: x, y: size.height))
+            }
             ctx.stroke(line, with: .color(StudioStyle.playhead), lineWidth: 1)
             let cap = CGRect(x: x - 5, y: r - 19, width: 10, height: 12)
             ctx.fill(Path(roundedRect: cap, cornerRadius: 3, style: .continuous), with: .color(StudioStyle.playhead))

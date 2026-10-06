@@ -21,6 +21,9 @@ struct SidebarView: View {
             }
             footer
         }
+        // One continuous surface: the sidebar material would otherwise pick up the
+        // picture and the timeline behind it and change shade at the timeline's edge.
+        .background(StudioStyle.chrome)
     }
 
     private var list: some View {
@@ -72,6 +75,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 
     /// A failed build with no live preview: the list is the last good one.

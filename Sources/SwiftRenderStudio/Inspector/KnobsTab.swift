@@ -185,8 +185,7 @@ struct KnobRow: View {
                 Toggle(isOn: Binding(get: { v.boolValue ?? false }, set: { insp.set(knob, .bool($0)) })) {
                     HStack(spacing: 6) { title(label); Spacer(minLength: 0); resetButton }
                 }
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                .toggleStyle(StudioSwitchStyle())
             case .text:
                 VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
                     HStack(spacing: 6) { title(label); Spacer(minLength: 0); resetButton }
