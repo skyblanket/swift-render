@@ -2,11 +2,17 @@ import Foundation
 import SwiftRender
 import SwiftRenderKit
 
-/// `render --jobs N`: split the frame range into N contiguous chunks, render each in
-/// its own `swift-render` process (ImageRenderer is main-thread bound, so parallelism
-/// has to be across processes), then stitch the chunks with MP4Assembler — video is
-/// copied, not re-encoded — and mux the soundtrack once. Chunk frame times come from
-/// absolute frame indices, so the result matches a single-process render frame for frame.
+/// `render --jobs N`: split the frame range into contiguous pieces, render them in a pool of
+/// N `swift-render` processes (ImageRenderer is main-thread bound, so parallelism has to be
+/// across processes), then stitch the pieces with MP4Assembler — video is copied, not
+/// re-encoded — and mux the soundtrack once. Piece frame times come from absolute frame
+/// indices, so the result matches a single-process render frame for frame.
+///
+/// There are up to 4 pieces per process, each at least ~0.5 s, and a process takes the next
+/// piece as soon as it finishes one. Frames cost very different amounts across a film (one
+/// heavy stretch can hold half the work), so equal-sized slices per process left one process
+/// rendering alone at the end — slower, and a progress estimate that said "almost done"
+/// for most of the render.
 ///
 /// `--jobs auto` uses half the logical cores: each process already keeps several
 /// threads busy (SwiftUI layout, CoreImage, the H.264 encoder).
@@ -160,7 +166,9 @@ private final class ChunkSet: @unchecked Sendable {
 func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
                     audio: AudioSource, out: URL, argv: [String], progressJSON: Bool = false) async throws {
     let total = Int((duration * Double(fps)).rounded())
-    let n = max(1, min(jobs, total / max(1, fps / 2)))   // keep chunks ≥ ~0.5 s
+    let minPiece = max(1, fps / 2)                                   // keep pieces ≥ ~0.5 s
+    let pieces = max(1, min(jobs * 4, total / minPiece))
+    let n = max(1, min(jobs, pieces))
     if OutputPath.isDirectory(out) {
         throw OutputPathError("output path \(out.path) is a directory — refusing to replace it")
     }
@@ -189,49 +197,87 @@ func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
 
     // Stage lines come from the chunks (forwarded once each, in order), so an audio-reactive
     // scene reads "music" before "render" exactly as in a single process.
-    let progress = ChunkProgress(chunks: n, total: total, emit: progressJSON, renderDetail: "\(n) parts")
+    let progress = ChunkProgress(chunks: pieces, total: total, emit: progressJSON,
+                                 renderDetail: "\(pieces) parts on \(n) processes")
     // The soundtrack for the final mux is synthesized while the chunks render.
     let planTask = Task.detached(priority: .utility) {
         try AudioPlan.make(audio, fps: fps, needsTrack: false, needsMux: true, announce: false, tempDir: tmp)
     }
-    var procs: [(Process, Pipe, URL)] = []
-    for k in 0..<n {
-        let a = total * k / n, b = total * (k + 1) / n
-        let chunk = tmp.appendingPathComponent(String(format: "chunk%03d.mp4", k))
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = ["render", scene] + passthrough + [
-            "--range", String(format: "%.9f:%.9f", Double(a) / Double(fps), Double(b) / Double(fps)),
-            "--out", chunk.path,
-        ]
-        p.standardOutput = FileHandle.nullDevice
-        let err = Pipe()
-        err.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            if !d.isEmpty { progress.feed(k, d) }
+    let pieceURLs = (0..<pieces).map { tmp.appendingPathComponent(String(format: "chunk%03d.mp4", $0)) }
+    let pool = PiecePool(count: pieces)
+    let group = DispatchGroup()
+    for _ in 0..<n {
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            while let k = pool.next() {
+                let a = total * k / pieces, b = total * (k + 1) / pieces
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: exe)
+                p.arguments = ["render", scene] + passthrough + [
+                    "--range", String(format: "%.9f:%.9f", Double(a) / Double(fps), Double(b) / Double(fps)),
+                    "--out", pieceURLs[k].path,
+                ]
+                p.standardOutput = FileHandle.nullDevice
+                let err = Pipe()
+                err.fileHandleForReading.readabilityHandler = { h in
+                    let d = h.availableData
+                    if !d.isEmpty { progress.feed(k, d) }
+                }
+                p.standardError = err
+                do { try p.run() } catch {
+                    pool.fail(k, "could not start: \(error)"); chunks.terminateAll(); return
+                }
+                chunks.add(p)
+                p.waitUntilExit()
+                err.fileHandleForReading.readabilityHandler = nil
+                let rest = err.fileHandleForReading.readDataToEndOfFile()
+                if !rest.isEmpty { progress.feed(k, rest) }
+                guard p.terminationStatus == 0 else {
+                    // Fail fast: stop every other piece now rather than when the loop reaches it.
+                    if !chunks.isAborted { pool.fail(k, String(progress.log(k).suffix(400))); chunks.terminateAll() }
+                    return
+                }
+            }
         }
-        p.standardError = err
-        try p.run()
-        chunks.add(p)
-        procs.append((p, err, chunk))
     }
-    print("[swift-render] \(n) jobs × ~\(total / n) frames")
-    for (k, (p, err, _)) in procs.enumerated() {
-        p.waitUntilExit()
-        err.fileHandleForReading.readabilityHandler = nil
-        let rest = err.fileHandleForReading.readDataToEndOfFile()
-        if !rest.isEmpty { progress.feed(k, rest) }
-        guard p.terminationStatus == 0 else {
-            // Stopped by a signal: the handler is tearing down and exits with the signal's
-            // status; don't race it with a "chunk failed" error.
-            while chunks.isAborted { sleep(1) }
-            throw NSError(domain: "jobs", code: Int(p.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: "chunk \(k) failed: \(progress.log(k).suffix(400))"])
-        }
+    print("[swift-render] \(n) jobs × \(pieces) pieces of ~\(total / pieces) frames")
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+        group.notify(queue: .global()) { done.resume() }
     }
+    if let failure = pool.failure {
+        throw NSError(domain: "jobs", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "piece \(failure.piece + 1) of \(pieces) failed: \(failure.reason)"])
+    }
+    // Stopped by a signal (no piece failed on its own): the handler is tearing down and exits
+    // with the signal's status; don't race it by stitching or reporting an error.
+    if chunks.isAborted { while true { sleep(1) } }
 
     let plan = try await planTask.value
     defer { plan.cleanup() }
-    StageReporter.emit(.mux, "Joining \(n) parts")
-    try await MP4Assembler.assemble(video: procs.map(\.2), audio: plan.muxURL, to: out)
+    StageReporter.emit(.mux, "Joining \(pieces) parts")
+    try await MP4Assembler.assemble(video: pieceURLs, audio: plan.muxURL, to: out)
+}
+
+/// Hands out piece indices in order to the worker threads and records the first failure.
+private final class PiecePool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cursor = 0
+    private let count: Int
+    private(set) var failure: (piece: Int, reason: String)?
+
+    init(count: Int) { self.count = count }
+
+    /// The next piece to render, or nil when all are taken or one has failed.
+    func next() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        guard failure == nil, cursor < count else { return nil }
+        defer { cursor += 1 }
+        return cursor
+    }
+
+    func fail(_ piece: Int, _ reason: String) {
+        lock.lock(); defer { lock.unlock() }
+        if failure == nil { failure = (piece, reason.isEmpty ? "exited with an error" : reason) }
+    }
 }
