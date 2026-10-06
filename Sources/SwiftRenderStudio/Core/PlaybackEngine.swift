@@ -97,8 +97,9 @@ final class PlaybackEngine {
     /// Where pixels go (FrameLayerView). Called on the main actor.
     @ObservationIgnored var onFrame: ((DecodedFrame) -> Void)?
     @ObservationIgnored var onPlayStateChange: ((Bool) -> Void)?
-    /// A frame request got no answer in `hangTimeout` s.
-    @ObservationIgnored var onHang: ((Double) -> Void)?
+    /// A frame request got no answer in `hangTimeout` s: the playhead time and the host
+    /// that was asked (it may have been swapped out since).
+    @ObservationIgnored var onHang: ((Double, RenderHost) -> Void)?
     @ObservationIgnored var hangTimeout = 5.0
     @ObservationIgnored private(set) var currentFrame: DecodedFrame?
     @ObservationIgnored var sceneName = ""
@@ -403,7 +404,7 @@ final class PlaybackEngine {
             }
             if !s.ended, wall - s.lastFrameWall > hangTimeout, head < duration - 1 / Double(fps) {
                 stopStream()
-                onHang?(nt)
+                onHang?(nt, host)
             }
             return
         }
@@ -430,7 +431,12 @@ final class PlaybackEngine {
         while poisoned.contains(frameIndex(from, fps: fps)) { from += 1 / Double(sfps) }   // don't re-crash the host
         guard from <= duration else { return }
         let gen = generation, width = playWidth
-        let to = loop ? playRange.1 : duration
+        var to = loop ? playRange.1 : duration
+        // End before the next frame that crashed the host; a stream renders straight through
+        // to `to`, and once it ends the lag restart picks up past the bad frame.
+        if let bad = poisoned.filter({ Double($0) / Double(fps) > from }).min() {
+            to = min(to, Double(bad) / Double(fps) - 1e-4)
+        }
         let placeholder = ActiveStreamBox()
         streamsStarted += 1
         let task = Task { [weak self] in
@@ -509,7 +515,7 @@ final class PlaybackEngine {
             }
             guard let self else { return }
             self.scrubInFlight = false
-            if hung { self.onHang?(ask.t) }
+            if hung { self.onHang?(ask.t, host) }
             if let next = self.scrubPending {
                 self.scrubPending = nil
                 self.requestFrame(next)

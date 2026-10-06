@@ -216,7 +216,7 @@ final class HostClient: RenderHost, @unchecked Sendable {
         // Register before sending: the first frames may beat the response.
         let frames = router.registerStream(id)
         do {
-            _ = try await send(id: id, .stream, HostParams(maxWidth: maxWidth, format: format.rawValue,
+            _ = try await send(id: id, .stream, HostParams(fps: fps, maxWidth: maxWidth, format: format.rawValue,
                                                             from: from, to: to, credits: credits))
         } catch {
             router.endStream(id, error: error)

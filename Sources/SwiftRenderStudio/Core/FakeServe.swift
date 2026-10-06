@@ -122,7 +122,7 @@ enum FakeServe {
         private func openStream(_ id: Int, _ p: HostParams) async {
             let format = FrameFormat(rawValue: p.format ?? "jpeg") ?? .jpeg
             do {
-                let s = try await host.openStream(from: p.from ?? 0, to: p.to, fps: p.fps ?? 30,
+                let s = try await host.openStream(from: p.from ?? 0, to: p.to, fps: p.fps ?? host.sessionFPS,
                                                   maxWidth: p.maxWidth ?? 960, format: format, credits: p.credits ?? 4)
                 lock.withLock { streams[id] = s }
                 out.send(.response(id, HostResult()))

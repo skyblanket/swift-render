@@ -58,6 +58,14 @@ final class HostClientProcessTests: XCTestCase {
         XCTAssertEqual(got.suffix(2), [68, 70])
         s.cancel()
 
+        // The stream runs on the playback grid it asks for, not the scene's 60 fps.
+        let quarter = try await host.openStream(from: 1, to: nil, fps: 15, maxWidth: 160, format: .jpeg, credits: 4)
+        var qit = quarter.frames.makeAsyncIterator()
+        var q: [Int] = []
+        for _ in 0..<4 { if let f = try await qit.next() { q.append(f.index) } }
+        XCTAssertEqual(q, [60, 64, 68, 72])
+        quarter.cancel()
+
         // While one frame renders, an older queued request is answered `superseded`
         // and the newest wins. (Spaced so the writes reach the host in order.)
         let a = Task { try await host.frame(t: 1, maxWidth: 1920, format: .png) }

@@ -222,12 +222,14 @@ final class ProjectModel {
         host.warmWidth = { [weak self] in self?.playback.displayWidth ?? 960 }
         host.onActiveHost = { [weak self] h, info, warm in
             guard let self else { return }
+            if let h, h !== self.host.active { return }        // a retired host's late reply
             if h == nil { self.playback.pause() }
             if let info { self.adopt(info) }
             if !self.host.scenes.isEmpty { self.scenes = self.host.scenes }
             self.playback.attach(host: h, info: info, warmFrame: warm)
         }
         host.onPoison = { [weak self] f in self?.playback.poisoned.insert(f) }
+        host.onPoisonCleared = { [weak self] in self?.playback.poisoned = [] }
         host.onEvent = { [weak self] msg in
             guard let self else { return }
             switch msg.event {
@@ -246,7 +248,7 @@ final class ProjectModel {
             default: break
             }
         }
-        playback.onHang = { [weak self] t in self?.host.reportHang(at: t) }
+        playback.onHang = { [weak self] t, h in self?.host.reportHang(at: t, host: h) }
         renders.inputs = { [weak self] scene in
             guard let self else { return RenderInputs() }
             let current = scene == self.selectedScene
@@ -336,14 +338,16 @@ final class ProjectModel {
         }
     }
 
+    /// A build succeeded. The supervisor serializes launches (a build that lands while the
+    /// previous host is still starting queues behind it) and clears the poison set only when
+    /// the new build actually goes live — a failed swap keeps the old build and its poison.
     private func hostBuilt(_ exe: URL, generation gen: Int) async {
-        playback.poisoned = []
-        if host.active == nil, host.state == .idle || host.generation == 0 {
+        if !host.hasStarted {
             await host.start(exe, generation: gen, open: openParams())
-            if selectedScene == nil, let first = host.scenes.first?.name { await select(scene: first) }
         } else {
             await host.swap(to: exe, generation: gen)
         }
+        if selectedScene == nil, let first = host.scenes.first?.name { await select(scene: first) }
     }
 
     // MARK: Scenes

@@ -17,7 +17,8 @@ struct HostCrash: Equatable, Sendable {
     var symbol: String?
     /// The raw report for "Copy backtrace".
     var report: String
-    /// Scene time being rendered when it died (filled by the supervisor).
+    /// Scene time being rendered when it died: the host's breadcrumb, else the supervisor
+    /// fills in the playhead.
     var t: Double?
     var signal: Int32?
 }
@@ -29,6 +30,16 @@ enum RuntimeDiagnostics {
         options: [.anchorsMatchLines])
     /// Any `/path/File.swift:line[:col]` (fallback for older/other formats).
     private static let pathRegex = try! NSRegularExpression(pattern: #"(/[^\s:]+\.swift):(\d+)(?::(\d+))?"#)
+    /// The host's crash breadcrumb (`HostCrashLog`): `[swift-render serve] fatal SIGTRAP while: frame Hello t=1.25`.
+    private static let breadcrumbRegex = try! NSRegularExpression(
+        pattern: #"fatal \S+ while: (?:frame|still|check) \S+ t=([-+0-9.eE]+)"#)
+
+    /// Scene time of the render that crashed, from the host's breadcrumb (last one wins).
+    static func crashTime(_ stderr: String) -> Double? {
+        let ns = stderr as NSString
+        guard let m = breadcrumbRegex.matches(in: stderr, range: NSRange(location: 0, length: ns.length)).last else { return nil }
+        return Double(ns.substring(with: m.range(at: 1)))
+    }
 
     static func parse(stderr: String, projectRoot: URL, signal: Int32? = nil) -> HostCrash {
         let root = projectRoot.standardizedFileURL.path
@@ -64,6 +75,7 @@ enum RuntimeDiagnostics {
                 break
             }
         }
-        return HostCrash(message: message, location: location, symbol: symbol, report: stderr, t: nil, signal: signal)
+        return HostCrash(message: message, location: location, symbol: symbol, report: stderr, t: crashTime(stderr),
+                         signal: signal)
     }
 }
