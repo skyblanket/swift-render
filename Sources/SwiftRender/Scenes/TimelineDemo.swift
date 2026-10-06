@@ -21,13 +21,18 @@ public struct TimelineDemo: RenderScene {
             Color.black.ignoresSafeArea()
             Timeline(t) {
                 Clip(2.2) { local in titleCard(local) }
+                    .named("Title")
                 Clip(2.4) { local in springCard(local) }
                     .transition(.slide(0.45, from: .trailing))
+                    .named("Springs")
                 Clip(2.4) { local in shaderCard(local) }
                     .transition(.flash())
+                    .named("Shader")
                 Clip(3.99) { local in outroCard(local) }
                     .transition(.fade(0.5))
+                    .named("Outro")
                 Clip(at: 0, for: duration) { local in progressHUD(local, total: duration) }
+                    .named("HUD")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
