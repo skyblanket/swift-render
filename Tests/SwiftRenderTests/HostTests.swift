@@ -17,6 +17,15 @@ private struct KnobBox: RenderScene {
     }
 }
 
+/// Declares a knob only in its second half — a probe at t=0 can't see it.
+private struct LateKnob: RenderScene {
+    static let defaultDuration = 2.0
+    @MainActor static func body(at t: Double, duration: Double) -> some View {
+        let glow = t > 1 ? Knob.double("late.glow", 0.5, in: 0...1) : 0
+        return Color(white: glow)
+    }
+}
+
 /// Brightness follows the synthesized score: frames depend on the AudioTrack.
 private struct ToneLevel: AudioReactiveScene {
     static let defaultDuration = 1.0
@@ -51,6 +60,7 @@ final class HostTests: XCTestCase {
         return HostSession(runners: ["TimelineDemo": SceneRunner(TimelineDemo.self),
                                      "AudioBars": SceneRunner(AudioBars.self),
                                      "KnobBox": SceneRunner(KnobBox.self),
+                                     "LateKnob": SceneRunner(LateKnob.self),
                                      "ToneLevel": SceneRunner(ToneLevel.self)],
                            project: project,
                            schedule: { work in Task { @MainActor in work() } },
@@ -93,7 +103,7 @@ final class HostTests: XCTestCase {
         let s = session(try tempProject())
         XCTAssertEqual(s.readyMessage().event, "ready")
         XCTAssertEqual(s.readyMessage().protocolVersion, HostProtocol.version)
-        XCTAssertEqual(try result(call(s, 1, .list)).scenes?.map(\.name), ["AudioBars", "KnobBox", "TimelineDemo", "ToneLevel"])
+        XCTAssertEqual(try result(call(s, 1, .list)).scenes?.map(\.name), ["AudioBars", "KnobBox", "LateKnob", "TimelineDemo", "ToneLevel"])
         XCTAssertEqual(errorCode(call(s, 2, .frame, HostParams(t: 1))), HostError.Code.noScene)
         XCTAssertEqual(errorCode(call(s, 3, .open, HostParams(scene: "Nope"))), HostError.Code.unknownScene)
         XCTAssertEqual(errorCode(call(s, 4, .open)), HostError.Code.badParams)
@@ -228,6 +238,29 @@ final class HostTests: XCTestCase {
         XCTAssertEqual(reopened.knobs.first { $0.key == "box.width" }?.value, .number(640))
         _ = try result(call(s2, 2, .setKnobs, HostParams(knobs: [:], persist: true)))
         XCTAssertFalse(FileManager.default.fileExists(atPath: project.knobsURL(scene: "KnobBox").path), "empty set removes the file")
+
+        // `knobs` on open replaces the project file for this session.
+        try KnobFile.save(["box.width": .number(640)], to: project.knobsURL(scene: "KnobBox"))
+        let explicit = try XCTUnwrap(result(call(s2, 3, .open, HostParams(scene: "KnobBox", knobs: ["box.width": .number(300)]))).info)
+        XCTAssertEqual(explicit.knobs.first { $0.key == "box.width" }?.value, .number(300))
+        XCTAssertEqual(KnobStore.shared.values, ["box.width": .number(300)])
+    }
+
+    func testFramesReportKnobsTheProbeMissed() throws {
+        let s = session(try tempProject())
+        let opened = try XCTUnwrap(result(call(s, 1, .open, HostParams(scene: "LateKnob", width: 320, height: 180))).info)
+        let early = call(s, 2, .frame, HostParams(t: 0.5, maxWidth: 64))
+        XCTAssertFalse(early.contains { $0.message.event == "info" })
+        let late = call(s, 3, .frame, HostParams(t: 1.5, maxWidth: 64))
+        XCTAssertEqual(late.first?.message.result?.frame?.t, 1.5, "the response comes first")
+        let event = late.first { $0.message.event == "info" }
+        if opened.knobs.contains(where: { $0.key == "late.glow" }) {
+            XCTAssertNil(event, "a probe that already found it sends nothing new")
+        } else {
+            XCTAssertEqual(event?.message.info?.knobs.map(\.key), ["late.glow"])
+        }
+        XCTAssertEqual(s.info?.knobs.map(\.key), ["late.glow"])
+        XCTAssertFalse(call(s, 4, .frame, HostParams(t: 1.6, maxWidth: 64)).contains { $0.message.event == "info" }, "reported once")
     }
 
     func testPropsAudioBars() throws {
