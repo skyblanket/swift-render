@@ -65,14 +65,19 @@ enum SnapshotRunner {
             FileHandle.standardError.write(Data("[studio] build failed:\n\(rows.joined(separator: "\n"))\n\(tail)\n".utf8))
         }
         if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
+        if let path = options.agentReplay { await replayAgent(model, path: path, deadline: deadline) }
+        if options.askSheet { model.ui.showAskSheet = true }
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
 
-        guard let png = render(window) else {
+        guard var png = render(window) else {
             FileHandle.standardError.write(Data("[studio] snapshot failed to render\n".utf8))
             return 1
+        }
+        if let sheet = window.attachedSheet, let sheetPNG = render(sheet), let merged = compositeSheet(sheetPNG, over: png, in: window) {
+            png = merged
         }
         let url = URL(fileURLWithPath: out)
         do {
@@ -103,6 +108,52 @@ enum SnapshotRunner {
         print(String(format: "[studio] played %.2f→%.2f s: shown %d, dropped %d, %.1f ms/frame, target %d fps, width %.0f%%, streams %d%@",
                      startT, p.t, s.shown, s.dropped, s.msPerFrame, s.targetFPS, s.widthScale * 100,
                      p.streamsStarted - streams, s.note.map { " · \($0)" } ?? ""))
+    }
+
+    /// `--agent-replay file.jsonl`: recorded `claude` stream-json through the real decoder and
+    /// controller. Reply mode on the scene's active comments, so the snapshot neither claims
+    /// comments nor writes a checkpoint ref.
+    private static func replayAgent(_ model: ProjectModel, path: String, deadline: Date) async {
+        do {
+            model.agent.backend = try ReplayAgentBackend(contentsOf: URL(fileURLWithPath: path))
+        } catch {
+            FileHandle.standardError.write(Data("[studio] agent replay: \(error)\n".utf8))
+            return
+        }
+        model.ui.showAgentPanel = true
+        let ids = model.review.comments.filter { $0.status.isActive }.map(\.id)
+        model.agent.ask(AgentRequest(project: model.project, scene: model.selectedScene ?? "", commentIDs: ids, mode: .reply),
+                        info: model.info)
+        while model.agent.isRunning, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        print("[studio] agent replay: \(model.agent.transcript.count) rows, run ok=\(model.agent.currentRun?.ok.map(String.init) ?? "nil")")
+    }
+
+    /// The sheet window drawn where AppKit attaches it: centered, under the toolbar.
+    private static func compositeSheet(_ sheetPNG: Data, over basePNG: Data, in window: NSWindow) -> Data? {
+        guard let base = NSBitmapImageRep(data: basePNG)?.cgImage, let sheet = NSBitmapImageRep(data: sheetPNG)?.cgImage,
+              let ctx = CGContext(data: nil, width: base.width, height: base.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
+        let scale = window.backingScaleFactor
+        let all = CGRect(x: 0, y: 0, width: base.width, height: base.height)
+        ctx.draw(base, in: all)
+        ctx.setFillColor(CGColor(gray: 0, alpha: 0.25))     // the window dims behind a sheet
+        ctx.fill(all)
+        let toolbar = (window.frame.height - window.contentLayoutRect.height) * scale
+        let r = CGRect(x: (CGFloat(base.width) - CGFloat(sheet.width)) / 2,
+                       y: CGFloat(base.height) - toolbar - CGFloat(sheet.height),
+                       width: CGFloat(sheet.width), height: CGFloat(sheet.height))
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -8 * scale), blur: 30 * scale, color: CGColor(gray: 0, alpha: 0.6))
+        let path = CGPath(roundedRect: r, cornerWidth: 10 * scale, cornerHeight: 10 * scale, transform: nil)
+        ctx.addPath(path); ctx.setFillColor(CGColor(gray: 0.16, alpha: 1)); ctx.fillPath()
+        ctx.restoreGState()
+        ctx.saveGState()
+        ctx.addPath(path); ctx.clip()
+        ctx.draw(sheet, in: r)
+        ctx.restoreGState()
+        guard let img = ctx.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
     }
 
     static func render(_ window: NSWindow) -> Data? {

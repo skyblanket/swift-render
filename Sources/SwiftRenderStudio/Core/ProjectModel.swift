@@ -45,6 +45,10 @@ struct LaunchOptions: Equatable, Sendable {
     var fakeServe = false
     /// Fake host in a child process through the real `HostClient` (implies simulated builds).
     var fakeProcessHost = false
+    /// Snapshot mode: replay this recorded `claude` stream-json into the agent panel first.
+    var agentReplay: String?
+    /// Snapshot mode: capture with the Ask Claude sheet open.
+    var askSheet = false
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -62,6 +66,8 @@ struct LaunchOptions: Equatable, Sendable {
             case "--play-for": o.playFor = v.flatMap(Double.init); i += 2
             case "--tab": o.tab = v.flatMap(InspectorTab.init(rawValue:)); i += 2
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
+            case "--agent-replay": o.agentReplay = v; i += 2
+            case "--ask-sheet": o.askSheet = true; i += 1
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
             default:
                 // macOS passes -NSDocumentRevisionsDebugMode etc.; positional = project.
@@ -199,6 +205,13 @@ final class ProjectModel {
         review.onChange = { [weak self] comments in
             self?.playback.commentMarks = comments.map { (id: $0.id, t: $0.t, end: $0.end) }
         }
+        // S8: while an agent edits, its half-done states don't shout, and a multi-file edit is one build.
+        agent.onRunningChanged = { [weak self] running in
+            guard let self else { return }
+            self.build.agentEditing = running
+            self.watcher?.debounce = .milliseconds(running ? 600 : 150)
+        }
+        agent.onReviewsChanged = { [weak self] in self?.review.reload() }
     }
 
     // MARK: Lifecycle
