@@ -8,9 +8,9 @@ description: Make a video with swift-render (SwiftUI scenes rendered to MP4) thr
 swift-render renders SwiftUI scenes, which are pure functions of time, to MP4. The `swift-render`
 MCP server does it from any Swift codebase. Its tools are `mcp__swift-render__*` from a project
 `.mcp.json` or `claude mcp add`, and `mcp__plugin_swift-render_swift-render__*` from the plugin.
-Each tool's first line says the mode. **project** means scenes live here, **standalone** means any
-other codebase with built-in scenes plus launch films, and **docs-only** means there is no CLI yet
-(see docs/agents.md).
+`list_scenes` and `docs {}` say the mode on their first line. **project** means scenes live here,
+**standalone** means any other codebase with the built-in templates plus launch films, and
+**docs-only** means there is no CLI yet (see docs/agents.md). A tool that needs another mode says so.
 
 ## The recipe
 
@@ -23,12 +23,18 @@ other codebase with built-in scenes plus launch films, and **docs-only** means t
 3. **Your own scene.** Call `init_project` first when the codebase has no swift-render package, then
    `new_scene {name}`. Edit the returned file so `body(at:duration:)` is a pure function of `t`,
    using `Timeline`/`Clip`, `Ease.clip` and `Ease.spring`. Give it a `soundtrack(duration:)` with
-   harmony and hits on the cuts.
+   harmony and hits on the cuts. Without file tools (Claude Desktop), send the whole new source to
+   `write_scene {name, source}`; it builds and returns the compiler errors.
 4. **Look after every edit.** `contact_sheet {scene}` shows the whole film, and
    `render_frames {scene, times:[…]}` zooms in on moments. Iterate two or three times; scenes
    written blind look generic.
 5. **Finish.** Run `check_scene {scene}`: blank frames, loudness, clipping, and whoosh/riser warnings
    (you can't hear it, so read the numbers). Then `render_video {scene}` and report the MP4 path it returns.
+
+**Long work comes back as a job.** `render_video`, `launch_film`, `build` and `write_scene` answer with
+"job jN" when they run past about 45 s (some clients stop a call at 60 s). The work keeps going. Call
+`render_status {job:"jN"}` until it says done; it then returns the tool's result. Don't start the
+same render again.
 
 Data-driven scenes (`AppleLaunch`, any `PropsScene`) take `get_props {scene}` / `set_props {scene, props}`.
 The saved props are what the render tools use. To try a change without saving it, pass `props` to

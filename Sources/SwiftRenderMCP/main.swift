@@ -9,9 +9,11 @@
 // it uses the ready-built `swift-render` next to this binary (see Workspace.swift).
 //
 // Threads: this (reader) thread answers `initialize`, `ping`, `tools/list` and the
-// resource methods at once and acts on `notifications/cancelled`; everything else runs
-// in arrival order on a serial worker. Every CLI child has a time limit and runs in its
-// own process group, which a cancel, stdin EOF or SIGTERM/SIGINT stops — no orphaned renders.
+// resource methods at once and acts on `notifications/cancelled`; `render_status` runs on
+// its own; everything else runs in arrival order on a serial worker. Renders, launch films
+// and builds run as jobs (Jobs.swift) that outlive a call the client stops after ~60 s.
+// Every CLI child has a time limit and runs in its own process group, which a cancel,
+// stdin EOF or SIGTERM/SIGINT stops — no orphaned renders.
 import Foundation
 import SwiftRenderKit
 
@@ -23,10 +25,13 @@ if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-
     swift-render-mcp — MCP stdio server: make swift-render videos (SwiftUI → MP4) from any agent.
     Project: $SWIFT_RENDER_ROOT, else the nearest swift-render project above the cwd; elsewhere
              standalone with the swift-render CLI next to this binary ($SWIFT_RENDER_CLI, then PATH).
-    Tools: docs launch_film new_scene init_project get_props set_props list_scenes scene_info
-           render_frames contact_sheet check_scene render_video set_knobs build
-           list_comments get_comment claim_comment reply_comment resolve_comment
+    Tools: docs launch_film new_scene write_scene init_project get_props set_props list_scenes
+           scene_info render_frames contact_sheet check_scene render_video render_status set_knobs
+           build list_comments get_comment claim_comment reply_comment resolve_comment
     Resources: swift-render://docs/<topic> (the API guide).
+    Jobs: render_video, launch_film, build and write_scene answer with a job id after
+           SWIFT_RENDER_MCP_DETACH_AFTER seconds (default 45; 0 = always wait) and keep going;
+           render_status {job} reports progress and the result.
     Time limits (seconds): SWIFT_RENDER_MCP_TIMEOUT (frames, info, sheets, init),
            SWIFT_RENDER_MCP_RENDER_TIMEOUT (render_video, launch_film), SWIFT_RENDER_MCP_BUILD_TIMEOUT.
     See docs/agents.md (setup for every client) and docs/review-loop.md.
@@ -44,7 +49,8 @@ signal(SIGPIPE, SIG_IGN)
 
 let workspace = Workspace.discover()
 log(workspace.summary)
-let server = MCPServer(tools: ToolBox(workspace: workspace), version: serverVersion)
+let toolBox = ToolBox(workspace: workspace)
+let server = MCPServer(tools: toolBox, version: serverVersion)
 
 /// Responses come from two threads (reader and worker): one line at a time.
 let sendLock = NSLock()
@@ -58,6 +64,7 @@ func send(_ message: Any) {
     sendLock.lock(); defer { sendLock.unlock() }
     do { try protocolOut.write(contentsOf: data) } catch { shutdown(reason: "client went away") }
 }
+server.notify = { send($0) }
 
 /// Queued and running requests, by JSON-RPC id, so `notifications/cancelled` can stop them.
 final class InFlight: @unchecked Sendable {
@@ -102,8 +109,10 @@ let pending = DispatchGroup()
 func shutdown(reason: String) -> Never {
     log("shutting down (\(reason))")
     inFlight.cancelAll()                       // SIGTERM to each running child's process group
+    toolBox.jobs.cancelAll()                   // …and each job's (renders that outlived their call)
     usleep(300_000)
     inFlight.cancelAll(hard: true)             // SIGKILL for anything that ignored it
+    toolBox.jobs.cancelAll(hard: true)
     exit(0)
 }
 
@@ -135,12 +144,16 @@ while let line = readLine(strippingNewline: true) {
             continue
         }
     }
-    // tools/call, unknown methods, batches and parse errors: in order, on the worker.
+    // tools/call, unknown methods, batches and parse errors: in order, on the worker —
+    // except render_status, which only reads the job board and may wait on a job, so it
+    // never queues behind (or holds up) the worker.
     let token = ProcessCancel()
     let id = message?["id"]
+    let concurrent = message?["method"] as? String == "tools/call"
+        && ((message?["params"] as? JSONObject)?["name"] as? String).map(ToolBox.concurrentTools.contains) == true
     inFlight.register(id, token)
     pending.enter()
-    worker.async {
+    (concurrent ? DispatchQueue.global() : worker).async {
         defer { inFlight.remove(id, token); pending.leave() }
         // MCP: a cancelled request gets no response.
         guard !token.isCancelled else { log("skipped cancelled request \(id.map { "\($0)" } ?? "")"); return }
@@ -153,7 +166,13 @@ while let line = readLine(strippingNewline: true) {
 // stdin closed: finish what was already asked (a piped script expects its answers),
 // but never wait on a stuck child for long — then stop whatever is left.
 let grace = ProcessInfo.processInfo.environment["SWIFT_RENDER_MCP_EOF_GRACE"].flatMap(Double.init) ?? 30
+let deadline = Date().addingTimeInterval(grace)
 if pending.wait(timeout: .now() + grace) == .timedOut {
     shutdown(reason: String(format: "stdin closed; calls still running after %.0fs", grace))
+}
+// Jobs that outlived their calls: no one can collect them now, but a piped script's film
+// may be nearly done — same grace, then stop them.
+if !toolBox.jobs.waitAll(max(0, deadline.timeIntervalSinceNow)) {
+    shutdown(reason: String(format: "stdin closed; jobs still running after %.0fs", grace))
 }
 exit(0)

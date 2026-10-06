@@ -8,7 +8,11 @@ final class MCPTestClient: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = Data()
     private var replies: [String: [String: Any]] = [:]
+    private var _notifications: [[String: Any]] = []
     private var nextID = 1000
+
+    /// Server → client notifications (e.g. notifications/progress) received so far.
+    var notifications: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return _notifications }
 
     /// `env` is merged over this process's environment; `cwd` is the server's working directory.
     init(_ bin: URL, env: [String: String], cwd: URL? = nil) throws {
@@ -26,8 +30,9 @@ final class MCPTestClient: @unchecked Sendable {
             while let nl = self.buffer.firstIndex(of: 0x0A) {
                 let line = self.buffer[self.buffer.startIndex..<nl]
                 self.buffer = Data(self.buffer[(nl + 1)...])
-                if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any], let id = obj["id"] {
-                    self.replies["\(id)"] = obj
+                if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
+                    if let id = obj["id"] { self.replies["\(id)"] = obj }
+                    else if obj["method"] != nil { self._notifications.append(obj) }
                 }
             }
         }

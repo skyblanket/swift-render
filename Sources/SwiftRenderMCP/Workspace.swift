@@ -26,6 +26,8 @@ struct Workspace {
     var cliProblem: String?
     /// The swift-render checkout these binaries were built from (for `init --local`).
     var checkout: URL?
+    /// Why SWIFT_RENDER_WORKSPACE was ignored, when it named no directory.
+    var workspaceProblem: String?
 
     enum Mode: String { case project, standalone, docsOnly = "docs-only" }
 
@@ -33,19 +35,22 @@ struct Workspace {
 
     /// One line for initialize, list_scenes and logs.
     var summary: String {
+        let warning = workspaceProblem.map { " WARNING: \($0) — fix it in the client's MCP config." } ?? ""
         switch mode {
         case .project:
             let p = project!
-            return "mode: project — \(p.root.path) (CLI product `\(p.config.product)`, rebuilt when sources change)"
+            return "mode: project — \(p.root.path) (CLI product `\(p.config.product)`, rebuilt when sources change)" + warning
         case .standalone:
             return "mode: standalone — no swift-render project here; using the CLI \(cli!.path) "
                 + "(built-in scenes such as AppleLaunch; launch_film and init_project work on any Swift codebase)"
                 + (root.map { "; workspace \($0.path)" } ?? "; no workspace — pass `path` to launch_film / init_project")
+                + warning
         case .docsOnly:
             return "mode: docs-only — no swift-render project and no swift-render CLI found"
                 + (cliProblem.map { " (\($0))" } ?? "")
-                + ". Build it next to this server (`swift build -c release --product swift-render-mcp --product swift-render` "
-                + "in a swift-render checkout), put `swift-render` on PATH, or set SWIFT_RENDER_CLI."
+                + ". Build both next to this server in a swift-render checkout — `swift build -c release --product "
+                + "swift-render` and then `swift build -c release --product swift-render-mcp` (one product per command) — "
+                + "put `swift-render` on PATH, or set SWIFT_RENDER_CLI." + warning
         }
     }
 
@@ -61,7 +66,12 @@ struct Workspace {
         if let named = env["SWIFT_RENDER_WORKSPACE"], !named.isEmpty {
             var isDir: ObjCBool = false
             let url = URL(fileURLWithPath: (named as NSString).expandingTildeInPath, isDirectory: true)
-            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { start = url }
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                start = url
+            } else {
+                w.workspaceProblem = "SWIFT_RENDER_WORKSPACE=\(named) is not a directory, so it was ignored"
+                log(w.workspaceProblem!)
+            }
         }
         let found = explicit ? Project.discover() : Project.discover(from: start)
         if let p = found, explicit || hostsScenes(p.root) { w.project = p }
@@ -159,7 +169,8 @@ struct Workspace {
 extension URL {
     /// The real path: `..` folded, then every symlink in the longest existing prefix resolved
     /// by the kernel (`realpath`), the rest appended. Two spellings of one place compare equal
-    /// (`/tmp/x` and `/private/tmp/x`), and a symlink can't smuggle a write out of a folder.
+    /// (`/tmp/x` and `/private/tmp/x`). Comparing against a canonical *subfolder* would follow a
+    /// symlink planted there too — confine writes with `SafePath.confined(_:root:sub:)`.
     var canonical: URL {
         let std = standardizedFileURL
         var head = std.path
@@ -183,9 +194,17 @@ enum SafePath {
     static let systemPrefixes = ["/System", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/private/var/db",
                                  "/Library", "/Applications", "/cores", "/dev"]
 
+    /// What makes a folder a codebase.
+    static func isCodebase(_ dir: URL) -> Bool {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.contains { $0 == "Package.swift" || $0 == ".git" || $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }
+    }
+
     /// An existing directory, symlinks resolved; `~` expanded; relative to `base`. Never `/`,
-    /// the home folder itself or a system folder.
-    static func codebase(_ raw: String, base: URL?, home: URL) throws -> URL {
+    /// the home folder itself, a system folder, `~/Library/…`, a hidden folder or one inside
+    /// a hidden folder of the home (`~/.ssh`, `~/.config/x`) — and, unless `anyFolder`, it must
+    /// look like a codebase (Package.swift, *.xcodeproj, *.xcworkspace or .git).
+    static func codebase(_ raw: String, base: URL?, home: URL, anyFolder: Bool = false) throws -> URL {
         let expanded = (raw as NSString).expandingTildeInPath
         guard !expanded.contains("\0") else { throw ToolError("path contains a NUL byte") }
         let url: URL
@@ -209,14 +228,48 @@ enum SafePath {
         if let bad = systemPrefixes.first(where: { p == $0 || p.hasPrefix($0 + "/") }) {
             throw ToolError("refusing a path under \(bad): \(p)")
         }
+        if resolved.lastPathComponent.hasPrefix(".") {
+            throw ToolError("refusing a hidden folder: \(p) — pass the codebase folder")
+        }
+        let inHome = resolved.pathComponents.dropFirst(home.canonical.pathComponents.count)
+        if isInside(resolved, home), let first = inHome.first, first.hasPrefix(".") || first == "Library" {
+            throw ToolError("refusing \(p): ~/\(first) holds settings and keys, not codebases")
+        }
+        if !anyFolder, !isCodebase(resolved) {
+            throw ToolError("\(p) doesn't look like a codebase (no Package.swift, .xcodeproj, .xcworkspace or .git) — "
+                            + "pass the project folder, or any_folder: true if this really is the one")
+        }
         return resolved
     }
 
     /// Whether `url` is `dir` or inside it (both symlink-resolved, compared by component).
+    /// For a folder *inside* a root, use `isInside(_:root:sub:)`: resolving the subfolder
+    /// would follow a symlink planted in it.
     static func isInside(_ url: URL, _ dir: URL) -> Bool {
         let a = url.canonical.pathComponents
         let b = dir.canonical.pathComponents
         return a.count >= b.count && Array(a.prefix(b.count)) == b
+    }
+
+    /// Whether `url` (symlinks resolved) is inside `root/sub` where only `root` is resolved:
+    /// a `sub` that is (or passes through) a symlink resolves elsewhere and fails.
+    static func isInside(_ url: URL, root: URL, sub: String) -> Bool {
+        // Plain path strings: URL.standardizedFileURL would turn /private/var into /var.
+        let a = url.canonical.path.split(separator: "/").map(String.init)
+        let b = (root.canonical.path as NSString).appendingPathComponent(sub).split(separator: "/").map(String.init)
+        return a.count >= b.count && Array(a.prefix(b.count)) == b
+    }
+
+    /// `url`, resolved, when it stays inside `root/sub` (see above); else a ToolError — the
+    /// check every write an agent can steer goes through.
+    @discardableResult
+    static func confined(_ url: URL, root: URL, sub: String) throws -> URL {
+        let resolved = url.canonical
+        guard isInside(resolved, root: root, sub: sub) else {
+            throw ToolError("refusing to write \(url.path): it resolves to \(resolved.path), outside "
+                            + "\(root.canonical.appendingPathComponent(sub).path) (a symlink?)")
+        }
+        return resolved
     }
 
     /// Path text relative to `base` when inside it, else absolute.

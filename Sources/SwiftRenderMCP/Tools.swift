@@ -22,6 +22,10 @@ final class ToolBox {
     let agentName: String
     /// The running call's cancel token, handed to every CLI it starts.
     private(set) var cancel: ProcessCancel?
+    /// The running call's progress reporter (nil unless the client sent a progressToken).
+    private(set) var progress: ProgressSink?
+    /// Renders, launch films and builds (see Jobs.swift).
+    let jobs = JobBoard()
 
     init(workspace: Workspace, agentName: String = "Claude") {
         self._workspace = workspace
@@ -52,6 +56,7 @@ final class ToolBox {
         "init_project": ToolBox.initProject,
         "get_props": ToolBox.getProps,
         "set_props": ToolBox.setProps,
+        "write_scene": ToolBox.writeScene,
         "list_scenes": ToolBox.listScenes,
         "scene_info": ToolBox.sceneInfo,
         "render_frames": ToolBox.renderFrames,
@@ -67,29 +72,165 @@ final class ToolBox {
         "render_video": ToolBox.renderVideo,
     ]
 
-    func has(_ name: String) -> Bool { Self.handlers[name] != nil }
+    func has(_ name: String) -> Bool { Self.handlers[name] != nil || name == "render_status" }
+
+    /// Tools answered off the serial worker (main.swift): they only read the job board.
+    static let concurrentTools: Set<String> = ["render_status"]
+
+    /// Tools that run the project's CLI on the worker, so a project build comes first.
+    private static let projectCLITools: Set<String> = [
+        "list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene", "get_comment", "claim_comment",
+        "reply_comment", "resolve_comment", "set_knobs", "get_props", "set_props",
+    ]
+    /// …of which these still answer when the build fails (the comment without its frame).
+    private static let buildTolerantTools: Set<String> = ["get_comment", "claim_comment", "reply_comment"]
 
     /// Runs one tool. `cancel` stops any build/render child the call starts (MCP
-    /// `notifications/cancelled`, server shutdown).
-    func call(_ name: String, _ arguments: JSONObject, cancel: ProcessCancel? = nil) -> ToolResult {
+    /// `notifications/cancelled`, server shutdown); `progress` reports while it waits on a job.
+    func call(_ name: String, _ arguments: JSONObject, cancel: ProcessCancel? = nil,
+              progress: ProgressSink? = nil) -> ToolResult {
+        // Concurrent with the worker: touches no per-call state.
+        if name == "render_status" { return renderStatus(Args(arguments), cancel: cancel, progress: progress) }
         guard let handler = Self.handlers[name] else { return .error("unknown tool \(name)") }
         self.cancel = cancel
+        self.progress = progress
         cli?.cancel = cancel
-        defer { cli?.cancel = nil; self.cancel = nil }
+        defer { cli?.cancel = nil; self.cancel = nil; self.progress = nil }
+        let args = Args(arguments)
+        let usesCLI = (Self.projectCLITools.contains(name) && (name != "reply_comment" || (args.bool("attach_frame") ?? false)))
+            || (name == "new_scene" && workspace.cli == nil)
+        if usesCLI, let waiting = buildFirst(before: name, strict: !Self.buildTolerantTools.contains(name)) {
+            return waiting
+        }
         do { return try handler(self)(Args(arguments)) }
         catch { return .error(String(describing: error)) }
     }
 
+    // MARK: jobs
+
+    /// How long a call waits for its job: `wait: true` until done, `wait: false` not at all,
+    /// default `Jobs.detachAfter`.
+    func budget(_ a: Args) -> TimeInterval {
+        switch a.bool("wait") {
+        case true?: return .infinity
+        case false?: return 0
+        case nil: return Jobs.detachAfter
+        }
+    }
+
+    /// The tool's answer: the job's result when it finished in time, else its id and what to do.
+    func waitFor(_ job: Job, _ a: Args, budget: TimeInterval? = nil) -> ToolResult {
+        jobs.waitFor(job, budget: budget ?? self.budget(a), cancel: cancel, progress: progress) { job, waited in
+            var out = ToolResult()
+            let started = waited < 1 ? "started" : String(format: "still running after %.0fs", waited)
+            out.text("""
+            \(job.title): \(started) as job \(job.id) — it keeps going in the background.
+            status: \(job.statusLine)
+            next: render_status {job:"\(job.id)"} waits up to 30 s and reports progress; repeat until it says done — \
+            then it returns this tool's result\(job.output.map { " (\($0.path))" } ?? ""). Don't start the same work again; \
+            render_status {job:"\(job.id)", cancel:true} stops it.
+            """)
+            return out
+        }
+    }
+
+    /// The running build job, or a new one. `fresh`: always a new one (queued after any
+    /// running build), when sources changed after that build started.
+    func buildJob(_ cli: ProjectCLI, title: String, fresh: Bool = false) -> Job {
+        if !fresh, let running = jobs.unfinished(.build) { return running }
+        return jobs.start(.build, title) { job in
+            job.setPhase("building \(cli.product)")
+            let r = try cli.build(cancel: job.token)
+            var out = ToolResult()
+            out.text(BuildReport.text(r, product: cli.product))
+            out.isError = !r.success
+            return out
+        }
+    }
+
+    /// In a project whose sources changed, build first as a job: wait for it (leaving the tool
+    /// time to run inside the client's limit), else answer with the job id. A failed build is
+    /// the answer when `strict`. nil = go ahead.
+    private func buildFirst(before tool: String, strict: Bool) -> ToolResult? {
+        guard let cli else { return nil }
+        let job: Job
+        if let running = jobs.unfinished(.build) {
+            job = running
+        } else if cli.freshExecutable(cancel: cancel) == nil {
+            job = buildJob(cli, title: "build \(cli.product) (sources changed)")
+        } else {
+            return nil
+        }
+        let budget = Jobs.detachAfter.isFinite ? max(5, Jobs.detachAfter - 15) : .infinity
+        let r = jobs.waitFor(job, budget: budget, cancel: cancel, stopJobOnCancel: false, progress: progress) { job, waited in
+            var out = ToolResult()
+            out.text(String(format: """
+            %@ needs %@ built first (sources changed); the build runs as job %@ and was still going after %.0fs.
+            status: %@
+            next: render_status {job:"%@"} until it says done, then call %@ again.
+            """, tool, cli.product, job.id, waited, job.statusLine, job.id, tool))
+            return out
+        }
+        if !job.isFinished || (strict && r.isError) { return r }
+        return nil
+    }
+
+    /// `render_status {job?, wait?, cancel?}` — never queued behind the worker.
+    func renderStatus(_ a: Args, cancel: ProcessCancel?, progress: ProgressSink?) -> ToolResult {
+        var out = ToolResult()
+        guard let id = a.optionalString("job") else {
+            let all = jobs.all
+            out.text(all.isEmpty ? "No jobs yet. render_video, launch_film, build and write_scene start one when they "
+                                    + "take longer than \(Int(Jobs.detachAfter.isFinite ? Jobs.detachAfter : 45)) s."
+                     : all.reversed().map(\.statusLine).joined(separator: "\n"))
+            return out
+        }
+        guard let job = jobs.job(id) else {
+            return .error("no job '\(id.prefix(40))' — this server's jobs: "
+                          + (jobs.all.map(\.id).joined(separator: ", ").nilIfEmpty ?? "none")
+                          + " (job ids don't survive a server restart)")
+        }
+        if a.bool("cancel") ?? false {
+            if !job.isFinished { job.cancel(); _ = job.wait(5) }
+            out.text(job.statusLine)
+            return out
+        }
+        let wait = min(Jobs.statusWaitCap, max(0, a.double("wait") ?? 30))
+        if !job.isFinished {
+            _ = jobs.waitFor(job, budget: wait, cancel: cancel, stopJobOnCancel: false, progress: progress) { _, _ in ToolResult() }
+        }
+        guard job.isFinished, let result = job.result else {
+            out.text(job.statusLine + "\nnext: render_status {job:\"\(job.id)\"} again.")
+            return out
+        }
+        out.text(job.statusLine)
+        out.content += result.content
+        out.isError = result.isError
+        return out
+    }
+
     // MARK: catalog
 
-    /// One tool's catalog entry.
+    /// One tool's catalog entry. Annotations: `readOnly` — changes nothing on disk (no
+    /// cache, no build); `idempotent` — repeating the call with the same arguments has no
+    /// further effect; `destructive` — may overwrite what someone wrote; `openWorld` — talks
+    /// to the network.
     static func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
-                     required: [String] = [], readOnly: Bool = false) -> JSONObject {
+                     required: [String] = [], readOnly: Bool = false, idempotent: Bool = false,
+                     destructive: Bool = false, openWorld: Bool = false) -> JSONObject {
         var schema: JSONObject = ["type": "object", "properties": props, "additionalProperties": false]
         if !required.isEmpty { schema["required"] = required }
-        return ["name": name, "title": title, "description": description, "inputSchema": schema,
-                "annotations": ["readOnlyHint": readOnly] as JSONObject]
+        var hints: JSONObject = ["readOnlyHint": readOnly, "openWorldHint": openWorld]
+        if !readOnly { hints["idempotentHint"] = idempotent; hints["destructiveHint"] = destructive }
+        return ["name": name, "title": title, "description": description, "inputSchema": schema, "annotations": hints]
     }
+
+    static let waitArg: JSONObject = [
+        "type": "boolean",
+        "description": "Default (omitted): wait up to 45 s, then answer with a job id and keep working in the background "
+            + "(poll render_status) — safe in clients that stop tool calls after ~60 s (Claude Desktop). "
+            + "true: wait until done (clients without that limit). false: answer with the job id at once.",
+    ]
 
     static let sceneArg: JSONObject = ["type": "string",
                                        "description": "Scene name (a Swift type name), e.g. \"AppleLaunch\" — see list_scenes."]
@@ -109,8 +250,8 @@ final class ToolBox {
 
     var catalog: [JSONObject] {
         func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
-                  required: [String] = [], readOnly: Bool = false) -> JSONObject {
-            Self.tool(name, title, description, props, required: required, readOnly: readOnly)
+                  required: [String] = [], readOnly: Bool = false, idempotent: Bool = false) -> JSONObject {
+            Self.tool(name, title, description, props, required: required, readOnly: readOnly, idempotent: idempotent)
         }
         let scene = Self.sceneArg
         let id: JSONObject = ["type": "string", "description": "Comment id, e.g. \"c1a2b3c4d\" (a unique prefix works)."]
@@ -121,14 +262,32 @@ final class ToolBox {
                                   "description": "Optional canvas aspect (default: the scene's own). Ignored with `comment`."]
         let props = Self.propsArg
         return creationCatalog + [
+            tool("render_status", "Job status",
+                 "Progress and result of a job — what render_video, launch_film, build, write_scene or a rebuild hand back "
+                 + "when they take longer than ~45 s (\"started as job j3\"). Waits up to `wait` seconds (default 30) for it "
+                 + "to finish; once done it returns that tool's result (film path, contact sheet, build diagnostics). "
+                 + "No job: lists every job. cancel: true stops it.",
+                 ["job": ["type": "string", "description": "Job id, e.g. \"j3\"."] as JSONObject,
+                  "wait": ["type": "number", "minimum": 0, "maximum": 50,
+                           "description": "Seconds to wait for it to finish before answering (default 30, max 50)."] as JSONObject,
+                  "cancel": ["type": "boolean", "description": "Stop the job (default false)."] as JSONObject],
+                 readOnly: true),
             tool("list_scenes", "List scenes",
                  "Scenes this server can render (first line says the mode: project or standalone): kind, default length, "
-                 + "score/props, and in a project how many open review comments each has.",
-                 readOnly: true),
+                 + "score/props, and in a project how many open review comments each has. Standalone lists the templates "
+                 + "(data-driven scenes such as AppleLaunch) unless all: true.",
+                 ["all": ["type": "boolean",
+                          "description": "Standalone mode: also list the built-in demo films (examples, not templates)."]
+                    as JSONObject],
+                 idempotent: true),
             tool("scene_info", "Scene structure",
                  "Clips (start/end, transition, source file:line), knobs, captions and score events for one scene. "
-                 + "Use it to map a timecode to the code that draws it.",
-                 ["scene": scene], required: ["scene"], readOnly: true),
+                 + "Use it to map a timecode to the code that draws it. source: true appends the scene's Swift file.",
+                 ["scene": scene,
+                  "source": ["type": "boolean",
+                             "description": "Also return the scene's source file (for clients without file tools, "
+                                + "e.g. Claude Desktop: edit it, then write_scene)."] as JSONObject],
+                 required: ["scene"], idempotent: true),
             tool("render_frames", "Render frames",
                  "Render the scene at one or more times from the code on disk (rebuilds first if sources changed) "
                  + "and return the frames as PNG images. Look at these after every edit.",
@@ -138,30 +297,33 @@ final class ToolBox {
                   "width": ["type": "integer", "minimum": 160, "maximum": 1280,
                             "description": "Returned image width in px (default 960, max 1280)."] as JSONObject,
                   "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
-                 required: ["scene", "times"], readOnly: true),
+                 required: ["scene", "times"], idempotent: true),
             tool("contact_sheet", "Contact sheet",
                  "A grid of thumbnails across the whole scene (each labelled with its time) — the fastest way to see "
                  + "its overall shape. Look at one after every change.",
                  ["scene": scene, "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
-                 required: ["scene"], readOnly: true),
+                 required: ["scene"], idempotent: true),
             tool("check_scene", "Check scene",
                  "Run `check`: contact sheet + blank-frame scan + audio report (loudness, clipping, house-rule warnings "
                  + "such as whoosh/riser sweeps). Run before finishing.",
                  ["scene": scene, "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
-                 required: ["scene"], readOnly: true),
+                 required: ["scene"], idempotent: true),
             tool("build", "Build",
                  "Build the project's CLI product now and return compiler diagnostics (file:line:col). "
-                 + "Other tools also rebuild automatically when sources changed.", readOnly: true),
+                 + "Other tools also rebuild automatically when sources changed. A long build (the first one fetches "
+                 + "swift-render) continues as a job: see wait and render_status.",
+                 ["wait": Self.waitArg], idempotent: true),
             tool("list_comments", "List review comments",
                  "Review comments, newest state from .swift-render/reviews. Default: active (open + inProgress).",
                  ["scene": scene,
                   "status": ["type": "string",
                              "description": "Comma list of open, inProgress, resolved, wontFix — or \"active\" (default) or \"all\"."]
-                    as JSONObject]),
+                    as JSONObject],
+                 readOnly: true),
             tool("get_comment", "Get review comment",
                  "One comment with its thread, the frame at its time with the region boxed in pink, "
                  + "and the clips active at that time with their source file:line.",
-                 ["id": id], required: ["id"], readOnly: true),
+                 ["id": id], required: ["id"], idempotent: true),
             tool("claim_comment", "Claim review comment",
                  "Mark a comment inProgress, assigned to you, and capture a before-frame (if it has none). "
                  + "Claim right before you start editing for it.",
@@ -188,15 +350,16 @@ final class ToolBox {
                   "values": ["type": "object", "description": "key → number | boolean | string (\"#RRGGBB\" for colors) | null",
                              "additionalProperties": true] as JSONObject,
                   "reset": ["type": "boolean", "description": "Clear all overrides first."] as JSONObject],
-                 required: ["scene", "values"]),
+                 required: ["scene", "values"], idempotent: true),
             tool("render_video", "Render video",
                  "Render the scene to an MP4 and return its path (out/<Scene>[-9x16|-1x1][-preview].mp4 in the project, "
                  + "or the workspace in standalone mode). preview=true is half resolution at 30 fps — much faster; do the "
-                 + "full render last.",
+                 + "full render last. A render longer than ~45 s continues as a job: the answer names it and the MP4 "
+                 + "path; poll render_status {job} until done.",
                  ["scene": scene,
                   "preview": ["type": "boolean", "description": "Fast preview render (default false)."] as JSONObject,
-                  "aspect": Self.aspectArg, "props": props, "props_file": Self.propsFileArg],
-                 required: ["scene"]),
+                  "aspect": Self.aspectArg, "props": props, "props_file": Self.propsFileArg, "wait": Self.waitArg],
+                 required: ["scene"], idempotent: true),
         ]
     }
 
@@ -260,7 +423,10 @@ final class ToolBox {
         let fm = FileManager.default
         let dot = root.appendingPathComponent(".swift-render", isDirectory: true)
         let dir = dot.appendingPathComponent("cache/mcp", isDirectory: true)
+        // A symlinked .swift-render or cache/ must not carry scratch files out of the folder.
+        try SafePath.confined(dir, root: root, sub: ".swift-render/cache/mcp")
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try SafePath.confined(dir, root: root, sub: ".swift-render/cache/mcp")
         let ignore = dot.appendingPathComponent(".gitignore")
         if !fm.fileExists(atPath: ignore.path) {
             try "cache/\nreviews/.*.lock\n".write(to: ignore, atomically: true, encoding: .utf8)
@@ -340,19 +506,33 @@ final class ToolBox {
             rows = try JSONDecoder().decode([SceneSummary].self, from: Data(r.stdout.utf8))
                 .map { Row(summary: $0, activeComments: 0, sourcePath: nil) }
         }
-        var out = ToolResult()
-        out.text(workspace.summary + "\n" + rows.map { row in
+        func line(_ row: Row) -> String {
             let s = row.summary
             var line = String(format: "%@ · %@ · %.2fs", s.name, s.kind.rawValue, s.defaultDuration)
             if s.hasSoundtrack { line += " · score" }
             if s.hasProps { line += " · props" }
             if row.activeComments > 0 { line += " · \(row.activeComments) active comment(s)" }
             return line
-        }.joined(separator: "\n"))
-        if project == nil {
-            out.text("Built-in scenes only. For your own: init_project, then new_scene {name}. "
-                     + "For a launch film of a Swift codebase: launch_film.")
         }
+        var out = ToolResult()
+        guard project == nil else {
+            out.text(workspace.summary + "\n" + rows.map(line).joined(separator: "\n"))
+            return out
+        }
+        // Standalone: the built-in templates (data-driven: change the props, not the Swift) are
+        // what an agent in another codebase can use; the demo films are examples of this repo's.
+        let templates = rows.filter(\.summary.hasProps)
+        let demos = rows.filter { !$0.summary.hasProps }
+        var text = workspace.summary + "\n\nTemplates (data-driven — get_props / set_props, then render):\n"
+            + templates.map(line).joined(separator: "\n")
+        if a.bool("all") ?? false {
+            text += "\n\nBuilt-in demo films (examples of what scenes can do, not templates):\n"
+                + demos.map { line($0) + " · demo" }.joined(separator: "\n")
+        } else if !demos.isEmpty {
+            text += "\n\n+ \(demos.count) built-in demo films (list_scenes {all:true} lists them)."
+        }
+        out.text(text)
+        out.text("For a launch film of a Swift codebase: launch_film. For your own scenes: init_project, then new_scene {name}.")
         return out
     }
 
@@ -385,7 +565,25 @@ final class ToolBox {
         }
         var out = ToolResult()
         out.text(lines.joined(separator: "\n"))
+        if a.bool("source") ?? false {
+            out.text(try sceneSource(info.sourcePath, scene: scene))
+        }
         return out
+    }
+
+    /// The scene's Swift file, when it lives in the project (or the swift-render checkout).
+    private func sceneSource(_ path: String?, scene: String) throws -> String {
+        guard let path, path.hasSuffix(".swift") else {
+            throw ToolError("\(scene) reports no source file")
+        }
+        let url = URL(fileURLWithPath: path).canonical
+        let allowed = [project?.root, workspace.root, workspace.checkout].compactMap { $0 }
+        guard allowed.contains(where: { SafePath.isInside(url, $0) }) else {
+            throw ToolError("\(scene)'s source \(url.path) is outside the project — not shown")
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 400_000 else { throw ToolError("\(url.path) is \(data.count / 1000) KB — too big to return") }
+        return "// \(url.path)\n" + String(decoding: data, as: UTF8.self)
     }
 
     /// The comment named by an optional `comment` argument (its scene must match `scene`)
@@ -460,12 +658,8 @@ final class ToolBox {
     }
 
     private func build(_ a: Args) throws -> ToolResult {
-        let (project, cli) = try requireProject()
-        let r = try cli.build()
-        var out = ToolResult()
-        out.text(BuildReport.text(r, product: project.config.product))
-        out.isError = !r.success
-        return out
+        let (_, cli) = try requireProject()
+        return waitFor(buildJob(cli, title: "build \(cli.product)"), a)
     }
 
     // MARK: comments
@@ -714,21 +908,46 @@ final class ToolBox {
         let scene = try a.scene()
         let preview = a.bool("preview") ?? false
         let aspect = try Self.aspect(a)
-        let props = try propsChoice(a, scene: scene, auto: true)
+        // The job may start after later calls rewrote the shared scratch props: its own file.
+        let tag = String(UUID().uuidString.prefix(8))
+        let props = try propsChoice(a, scene: scene, auto: true, scratchTag: tag)
         let suffix = aspect.map { "-" + $0.replacingOccurrences(of: ":", with: "x") } ?? ""
         let rel = "out/\(scene)\(suffix)\(preview ? "-preview" : "").mp4"
         let base = try home()
         try Self.ensureOutDir(in: base)
         let url = base.appendingPathComponent(rel)
-        let started = Date()
         let args = ["render", scene, "--out", url.path] + (aspect.map { ["--aspect", $0] } ?? [])
-            + (preview ? ["--preview"] : []) + props.args
-        let r = try cli.runChecked(args)
-        let tail = r.stdout.split(separator: "\n").suffix(4).joined(separator: "\n")
-        var out = ToolResult()
-        out.text(String(format: "rendered %@ in %.1fs → %@\n%@", scene, Date().timeIntervalSince(started), url.path, tail)
-                 + (props.note.map { "\n" + $0 } ?? ""))
-        return out
+            + (preview ? ["--preview"] : []) + props.args + ["--progress", "json"]
+        let title = "render_video \(scene)" + ([preview ? "preview" : nil, aspect].compactMap { $0 }.joined(separator: ", ")
+                                                .nilIfEmpty.map { " (\($0))" } ?? "")
+        let job = jobs.start(.render, title, output: url) { job in
+            defer { if let f = props.scratch { try? FileManager.default.removeItem(at: f) } }
+            let bound = BoundCLI(cli, cancel: job.token)
+            if let p = cli as? ProjectCLI, p.freshExecutable(cancel: job.token) == nil { job.setPhase("building \(p.product)") }
+            _ = try bound.executable()
+            job.setPhase("rendering")
+            let started = Date()
+            let r = try bound.runStreaming(args, job: job) { isErr, line in
+                guard isErr, let p = Self.renderProgress(line) else { return }
+                job.setProgress(done: p.frame, total: p.total, fps: p.fps)
+            }
+            let tail = r.stdout.split(separator: "\n").suffix(4).joined(separator: "\n")
+            var out = ToolResult()
+            out.text(String(format: "rendered %@ in %.1fs → %@\n%@", scene, Date().timeIntervalSince(started), url.path, tail)
+                     + (props.note.map { "\n" + $0 } ?? ""))
+            return out
+        }
+        return waitFor(job, a)
+    }
+
+    /// render's `--progress json` line: {"progress":{"frame":i,"total":n,"fps":f}}.
+    static func renderProgress(_ line: String) -> (frame: Double, total: Double, fps: Double?)? {
+        guard line.hasPrefix("{\"progress\""),
+              let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? JSONObject,
+              let p = obj["progress"] as? JSONObject,
+              let frame = (p["frame"] as? NSNumber)?.doubleValue, let total = (p["total"] as? NSNumber)?.doubleValue
+        else { return nil }
+        return (frame, total, (p["fps"] as? NSNumber)?.doubleValue)
     }
 
     /// `aspect`, validated (nil = the scene's own).
@@ -744,6 +963,7 @@ final class ToolBox {
     /// (what `launch` does too).
     static func ensureOutDir(in root: URL) throws {
         let out = root.appendingPathComponent("out", isDirectory: true)
+        try SafePath.confined(out, root: root, sub: "out")
         guard !FileManager.default.fileExists(atPath: out.path) else { return }
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         try? "*\n".write(to: out.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
@@ -775,6 +995,11 @@ struct Args {
         if let s = raw[k] as? String { return s.isEmpty ? nil : s }
         if let n = raw[k] as? NSNumber { return n.stringValue }
         return nil
+    }
+
+    func double(_ k: String) -> Double? {
+        if let n = raw[k] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.doubleValue.isFinite ? n.doubleValue : nil }
+        return (raw[k] as? String).flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
     }
 
     func int(_ k: String) -> Int? {
@@ -813,6 +1038,10 @@ struct Args {
         default: throw ToolError("missing required argument '\(k)'")
         }
     }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 /// Shortest round-tripping text for a time ("2", "1.25") — CLI arguments and file names.

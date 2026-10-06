@@ -27,7 +27,7 @@ Doing it yourself, with the `swift-render` MCP tools (`mcp__swift-render__*` fro
 | what's open | `list_comments {scene?, status?}` — default open + inProgress |
 | read + see it | `get_comment {id}` — thread, frame with the region boxed, active clips with `file:line` |
 | start | `claim_comment {id}` — inProgress, assigned to you, before-frame captured |
-| verify | `build {}`, `render_frames {scene, times, comment?, aspect?, width?}`, `contact_sheet {scene, comment?}`, `check_scene {scene, comment?}` — pass the comment id to render on the note's canvas (e.g. 9:16) |
+| verify | `build {}`, `render_frames {scene, times, comment?, aspect?, width?}`, `contact_sheet {scene, comment?}`, `check_scene {scene, comment?}` — pass the comment id to render on the note's canvas (e.g. 9:16). A build past ~45 s answers "job jN": poll `render_status {job}` |
 | ask | `reply_comment {id, body, attach_frame?, reopen?}` — the comment keeps its status unless `reopen` |
 | finish | `resolve_comment {id, summary}` — renders + attaches the after-frame, marks resolved |
 | tune | `set_knobs {scene, values}` — for values a scene exposes with `Knob.*` |
