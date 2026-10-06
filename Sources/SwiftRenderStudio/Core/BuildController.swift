@@ -78,18 +78,44 @@ final class BuildController {
     private(set) var pendingRebuild = false
     /// While an agent edits files, failures are shown muted (it is mid-edit).
     var agentEditing = false
+    /// A release build of the same sources is running in the background (after a good
+    /// debug build); on success it fires `onSuccess` again with the same generation, so
+    /// the host swaps to the optimized executable without a visible change.
+    private(set) var optimizing = false
+    /// The last release executable that went live (nil until one does).
+    private(set) var lastReleaseExecutable: URL?
     var onSuccess: ((URL, Int) -> Void)?
     var onFailure: (([CompilerDiagnostic]) -> Void)?
 
     @ObservationIgnored private let runner: Runner
     @ObservationIgnored private var cancelCurrent: (@Sendable () -> Void)?
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// Runs the background release build; nil disables it (tests that inject `runner`,
+    /// `SR_PREVIEW_RELEASE=0`).
+    @ObservationIgnored var releaseRunner: Runner?
+    @ObservationIgnored private var releaseCancel: (@Sendable () -> Void)?
+    @ObservationIgnored private var releaseTask: Task<Void, Never>?
 
     init(project: Project, product: String? = nil, runner: Runner? = nil) {
         self.project = project
         self.product = product ?? project.config.product
         self.scratchPath = Self.canonical(project.root).appendingPathComponent(".build/studio", isDirectory: true)
         self.runner = runner ?? BuildController.swiftPM
+        let optOut = ProcessInfo.processInfo.environment["SR_PREVIEW_RELEASE"] == "0"
+        self.releaseRunner = (runner == nil && !optOut) ? BuildController.swiftPMRelease : nil
+    }
+
+    /// `swift build -c release` into the same scratch path (its own `release/` folder).
+    static let swiftPMRelease: Runner = { project, product, scratch in
+        let (events, cancel) = ProjectBuilder.stream(project, configuration: "release", product: product, scratchPath: scratch)
+        let mapped = AsyncStream<BuildUpdate> { cont in
+            let task = Task(priority: .utility) {
+                for await e in events { cont.yield(BuildUpdate(e)) }
+                cont.finish()
+            }
+            cont.onTermination = { _ in task.cancel() }
+        }
+        return (mapped, { cancel.cancel() })
     }
 
     static let swiftPM: Runner = { project, product, scratch in
@@ -133,9 +159,47 @@ final class BuildController {
     func cancel() {
         pendingRebuild = false
         cancelCurrent?()
+        cancelRelease()
+    }
+
+    /// Stops a background release build (a new edit wins: they share the scratch lock).
+    func cancelRelease() {
+        releaseTask?.cancel()
+        releaseTask = nil
+        releaseCancel?()
+        releaseCancel = nil
+        optimizing = false
+    }
+
+    private func startRelease(generation gen: Int) {
+        cancelRelease()
+        guard let releaseRunner else { return }
+        optimizing = true
+        let (events, cancel) = releaseRunner(project, product, scratchPath)
+        releaseCancel = cancel
+        releaseTask = Task(priority: .utility) { [weak self] in
+            var result: BuildUpdate.Result?
+            for await e in events {
+                if case .finished(let r) = e { result = r }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.releaseFinished(result, generation: gen)
+        }
+    }
+
+    private func releaseFinished(_ r: BuildUpdate.Result?, generation gen: Int) {
+        optimizing = false
+        releaseCancel = nil
+        releaseTask = nil
+        // Only the newest debug build's release follow-up may swap; a failed release
+        // build is silent (the debug host keeps running).
+        guard gen == generation, !isBuilding, let r, r.success, let exe = r.executable else { return }
+        lastReleaseExecutable = exe
+        onSuccess?(exe, gen)
     }
 
     private func start() {
+        cancelRelease()
         pendingRebuild = false
         buildsStarted += 1
         phase = .building("Starting build…")
@@ -172,6 +236,7 @@ final class BuildController {
                 lastGoodExecutable = exe
                 phase = .succeeded(seconds: r.seconds, at: Date())
                 onSuccess?(exe, generation)
+                if !pendingRebuild { startRelease(generation: generation) }
             } else {
                 phase = .failed(r.errors.isEmpty ? Self.fallbackErrors(r.log) : r.errors, log: r.log)
                 onFailure?(r.errors)

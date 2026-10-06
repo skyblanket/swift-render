@@ -105,6 +105,46 @@ final class BuildControllerTests: XCTestCase {
         XCTAssertEqual(rows.count, 1)
         XCTAssertTrue(rows[0].message.contains("undefined symbol"))
     }
+
+    func testReleaseFollowUpSwapsWithTheSameGeneration() async {
+        let builds = ScriptedBuilds(), release = ScriptedBuilds()
+        let b = BuildController(project: project, runner: builds.runner)
+        XCTAssertNil(b.releaseRunner, "injected runners get no release follow-up")
+        b.releaseRunner = release.runner
+        var succeeded: [Int] = []
+        b.onSuccess = { _, gen in succeeded.append(gen) }
+        b.requestBuild(.initial)
+        builds.finish(0, success: true)
+        await waitUntil(2, "debug success") { succeeded == [1] }
+        XCTAssertEqual(release.started, 1)
+        XCTAssertTrue(b.optimizing)
+        XCTAssertFalse(b.isBuilding, "the release build is not a visible build")
+        release.finish(0, success: true)
+        await waitUntil(2, "release swap") { succeeded == [1, 1] }
+        XCTAssertFalse(b.optimizing)
+        XCTAssertNotNil(b.lastReleaseExecutable)
+        XCTAssertEqual(b.generation, 1)
+    }
+
+    func testNewEditCancelsTheReleaseBuild() async {
+        let builds = ScriptedBuilds(), release = ScriptedBuilds()
+        let b = BuildController(project: project, runner: builds.runner)
+        b.releaseRunner = release.runner
+        var succeeded: [Int] = []
+        b.onSuccess = { _, gen in succeeded.append(gen) }
+        b.requestBuild(.initial)
+        builds.finish(0, success: true)
+        await waitUntil(2, "debug success") { succeeded == [1] }
+        XCTAssertEqual(release.started, 1)
+        b.requestBuild(.sourceChange(["Sources/A.swift"]))
+        XCTAssertFalse(b.optimizing, "a new debug build cancels the release build")
+        XCTAssertEqual(builds.started, 2)
+        builds.finish(1, success: true)
+        await waitUntil(2, "second debug") { succeeded == [1, 2] }
+        XCTAssertEqual(release.started, 2)
+        release.finish(1, success: true)
+        await waitUntil(2, "release swap") { succeeded == [1, 2, 2] }
+    }
 }
 
 final class FileWatcherTests: XCTestCase {

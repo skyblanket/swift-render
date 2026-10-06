@@ -79,6 +79,17 @@ enum SnapshotRunner {
         }
         // Inspector launch work (--knob / --props / --check) lands before the capture.
         while model.inspector.isBusy, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        // SR_PREVIEW_WAIT_RELEASE=1: measure against the release preview host (up to 240 s).
+        if ProcessInfo.processInfo.environment["SR_PREVIEW_WAIT_RELEASE"] == "1" {
+            let until = Date().addingTimeInterval(240)
+            while model.build.lastReleaseExecutable == nil, model.build.optimizing || model.build.isBuilding,
+                  Date() < until { try? await Task.sleep(for: .milliseconds(100)) }
+            try? await Task.sleep(for: .milliseconds(300))
+            while !model.host.state.isReady || !model.playback.hasFrame, Date() < until {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            print("[studio] preview host: \(model.build.lastReleaseExecutable?.path ?? "debug (release build unavailable)")")
+        }
         // `--switch-to X`: a scene switch after the first scene showed; `--switch-hold` captures
         // its loading state (the open is never sent), otherwise the settled result.
         if let target = options.switchTo {
@@ -422,4 +433,8 @@ private final class SnapshotWindow: NSWindow {
 
 extension NSAppearance {
     var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+}
+
+private extension HostSupervisor.State {
+    var isReady: Bool { if case .ready = self { return true }; return false }
 }
