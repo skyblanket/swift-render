@@ -65,15 +65,17 @@ enum SnapshotRunner {
             FileHandle.standardError.write(Data("[studio] build failed:\n\(rows.joined(separator: "\n"))\n\(tail)\n".utf8))
         }
         if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
+        await RenderSnapshot.prepare(model: model, options: options)
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
 
-        guard let png = render(window) else {
+        guard let raw = render(window) else {
             FileHandle.standardError.write(Data("[studio] snapshot failed to render\n".utf8))
             return 1
         }
+        let png = RenderSnapshot.decorate(raw, window: window, model: model, options: options)
         let url = URL(fileURLWithPath: out)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
