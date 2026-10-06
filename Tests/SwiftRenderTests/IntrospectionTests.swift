@@ -48,6 +48,111 @@ private enum KnobFixture {
     static func make(_ t: Double) -> AnyView { AnyView(body(at: t)) }
 }
 
+/// Every local time each clip's content was asked for, by clip name.
+@MainActor
+private enum CallLog {
+    static var calls: [String: [Double]] = [:]
+    static func note(_ name: String, _ l: Double) { calls[name, default: []].append(l) }
+}
+
+/// Clips whose content is only defined where the scene can show them.
+@MainActor
+private enum OutOfReachFixture {
+    static let duration = 4.0
+    static let lines = ["one", "two", "three", "four"]
+    static func make(_ t: Double) -> AnyView {
+        AnyView(Timeline(t) {
+            // "Until the end" HUD: content(.infinity) would trap on Int(_:).
+            Clip(at: 0, for: .infinity) { l in
+                let _ = CallLog.note("hud", l)
+                Text("REC").opacity(Int(l * 4) % 2 == 0 ? 1 : 0.4)
+            }.named("hud")
+            // Longer than the scene, indexing data by local time.
+            Clip(10) { l in
+                let _ = CallLog.note("captions", l)
+                Text(lines[min(Int(l), lines.count - 1)])
+            }.named("captions")
+            Clip(at: -2, for: 3) { l in let _ = CallLog.note("early", l); Color.red }.named("early")
+            Clip(at: 10, for: 2) { l in let _ = CallLog.note("late", l); Color.blue }.named("late")
+            Clip(at: 1, for: .nan) { l in let _ = CallLog.note("nan", l); Color.green }.named("nan")
+        })
+    }
+}
+
+/// Timelines whose clock isn't `t - k`.
+@MainActor
+private enum RetimedFixture {
+    static func twice(_ t: Double) -> AnyView {
+        AnyView(Timeline(t * 2) {
+            Clip(3.2) { _ in Color.red }.named("headline")
+            Clip(3.0) { _ in Color.blue }.transition(.fade(0.4)).named("stats")
+        })
+    }
+    /// Holds the first clip's first frame for 1 s, then plays.
+    static func clamped(_ t: Double) -> AnyView {
+        AnyView(Timeline(max(0, t - 1)) {
+            Clip(2) { _ in Color.red }.named("a")
+            Clip(2) { _ in Color.blue }.named("b")
+        })
+    }
+    /// The clamp's kink (1.2) falls between the probe's grid times.
+    static func kink(_ t: Double) -> AnyView {
+        AnyView(Timeline(max(0, t - 1.2)) {
+            Clip(1) { _ in Color.red }.named("k1")
+            Clip(1) { _ in Color.blue }.named("k2")
+        })
+    }
+    static func nested(_ t: Double) -> AnyView {
+        AnyView(Timeline(t) {
+            Clip(2) { _ in Color.black }.named("outer1")
+            Clip(4) { l in
+                Timeline(max(0, l - 0.5)) {
+                    Clip(1) { _ in Color.green }.named("inner1")
+                    Clip(1) { _ in Color.yellow }.named("inner2")
+                }
+            }.named("outer2")
+        })
+    }
+    /// One helper drawn twice at once, the second a second behind.
+    static func card(_ t: Double) -> some View {
+        Timeline(t) {
+            Clip(1) { _ in Color.red }.named("card.a")
+            Clip(1) { _ in Color.blue }.named("card.b")
+        }
+    }
+    static func twoCards(_ t: Double) -> AnyView { AnyView(HStack { card(t); card(t - 1) }) }
+}
+
+/// A Timeline built only to read its `.duration`, as that property's doc suggests.
+@MainActor
+private enum DurationOnlyFixture {
+    static func outro(_ t: Double) -> Timeline {
+        Timeline(t) {
+            Clip(1.5) { _ in Color.red }.named("outro.a")
+            Clip(1.5) { _ in Color.blue }.named("outro.b")
+        }
+    }
+    static func make(_ t: Double) -> AnyView {
+        let outroLength = outro(0).duration
+        return AnyView(Timeline(t) {
+            Clip(5) { _ in Color.black }.named("main")
+            Clip(outroLength) { l in outro(l) }.named("outro")
+        })
+    }
+}
+
+/// Each clip nests six more, seven deep: 6^7 clips if walked exhaustively.
+@MainActor
+private enum BranchingFixture {
+    static var evaluations = 0
+    static func make(_ t: Double, _ n: Int = 0) -> AnyView {
+        guard n < 7 else { return AnyView(Color.white) }
+        return AnyView(Timeline(t) {
+            for _ in 0..<6 { Clip(1) { l in let _ = (evaluations += 1); make(l * 6, n + 1) } }
+        })
+    }
+}
+
 // MARK: - Tests
 
 @MainActor
@@ -211,6 +316,110 @@ final class IntrospectionTests: XCTestCase {
         _ = Knob.text("inner", "x")
         XCTAssertEqual(store.endRecording().map(\.key), ["inner"])
         XCTAssertEqual(store.endRecording().map(\.key), ["inner", "outer"])
+    }
+
+    // MARK: probe reach and retiming
+
+    /// The structural tier must only ask a clip for frames the render can reach:
+    /// local times in 0 ..< duration, while the clip is inside its parent and the scene.
+    func testProbeOnlyEvaluatesClipsWhereTheSceneCanShowThem() throws {
+        CallLog.calls = [:]
+        let d = OutOfReachFixture.duration
+        let s = probe(d, OutOfReachFixture.make)
+        let calls = CallLog.calls
+        XCTAssertFalse(calls["hud", default: []].isEmpty)
+        XCTAssertTrue(calls["hud", default: []].allSatisfy { $0.isFinite && $0 >= 0 && $0 < d }, "\(calls["hud"]!)")
+        XCTAssertTrue(calls["captions", default: []].allSatisfy { $0 >= 0 && $0 < d }, "\(calls["captions"]!)")
+        XCTAssertTrue(calls["early", default: []].allSatisfy { $0 >= 2 && $0 < 3 }, "\(calls["early"] ?? [])")
+        XCTAssertNil(calls["late"], "a clip that starts after the scene is never evaluated")
+        XCTAssertNil(calls["nan"], "a NaN-length clip is never drawn, so never evaluated")
+
+        let byName = Dictionary(uniqueKeysWithValues: s.clips.map { ($0.label ?? "", $0) })
+        XCTAssertEqual(Set(byName.keys), ["hud", "captions", "early"])
+        XCTAssertEqual(byName["hud"].map { [$0.start, $0.end] }, [0, d])
+        XCTAssertEqual(byName["captions"].map { [$0.start, $0.end] }, [0, d])
+        XCTAssertEqual(byName["early"].map { [$0.start, $0.end] }, [0, 1])
+
+        // And the real render agrees: every frame of the scene draws.
+        let recorder = Recorder(config: .init(fps: 10, size: CGSize(width: 160, height: 90), postFX: false))
+        for i in 0..<40 { _ = try recorder.renderImage(at: Double(i) / 10, duration: d, content: OutOfReachFixture.make) }
+    }
+
+    /// NaN used to hang the grid and infinity trapped; an empty scene shows no clips.
+    func testProbeOfNonFiniteOrEmptyDurationShowsNoClips() {
+        for d in [Double.nan, .infinity, -.infinity] {
+            XCTAssertEqual(probe(d, NestedFixture.make), SceneStructure(), "duration \(d)")
+        }
+        for d in [0.0, -1] {
+            XCTAssertEqual(probe(d, NestedFixture.make).clips, [], "duration \(d)")
+            XCTAssertEqual(probe(d) { KnobFixture.make($0) }.knobs.count, 4, "knobs are still declared")
+        }
+    }
+
+    /// Clip times come from each Timeline's fitted clock, not from "local = t - offset
+    /// at first sighting": a scaled, clamped or nested-clamped clock reports where its
+    /// clips are actually on screen.
+    func testRetimedTimelinesReportWhereClipsAreOnScreen() throws {
+        func spans(_ s: SceneStructure) -> [String: [Double]] {
+            Dictionary(uniqueKeysWithValues: s.clips.map { ($0.label ?? "?", [$0.start, $0.end]) })
+        }
+        XCTAssertEqual(spans(probe(3, RetimedFixture.twice)), ["headline": [0, 1.6], "stats": [1.4, 2.9]])
+        // The first clip is on screen (holding frame 0) from 0, then plays until 3.
+        XCTAssertEqual(spans(probe(6, RetimedFixture.clamped)), ["a": [0, 3], "b": [3, 5]])
+        XCTAssertEqual(spans(probe(4, RetimedFixture.kink)), ["k1": [0, 2.2], "k2": [2.2, 3.2]])
+        let nested = probe(6, RetimedFixture.nested)
+        XCTAssertEqual(spans(nested), ["outer1": [0, 2], "outer2": [2, 6], "inner1": [2, 3.5], "inner2": [3.5, 4.5]])
+        XCTAssertEqual(nested.clips.filter { $0.depth == 1 }.map(\.label), ["inner1", "inner2"])
+        XCTAssertEqual(spans(probe(3, RetimedFixture.twoCards)), ["card.a": [0, 1], "card.b": [1, 2]],
+                       "two instances of one call site resolve the same way every run")
+
+        // Pixels agree: during the clamp's hold, clip "a" (red) is what's drawn; at 3.5, "b" (blue).
+        let recorder = Recorder(config: .init(fps: 30, size: CGSize(width: 32, height: 32), postFX: false))
+        func rgb(_ t: Double) throws -> [UInt8] {
+            let img = try recorder.renderImage(at: t, duration: 6, content: RetimedFixture.clamped)
+            var px = [UInt8](repeating: 0, count: 4)
+            let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            ctx?.draw(img, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return Array(px[0..<3])
+        }
+        XCTAssertGreaterThan(try rgb(0.5)[0], 200)
+        XCTAssertGreaterThan(try rgb(3.5)[2], 200)
+    }
+
+    /// KnobLab drives its root Timeline with `t * speed`; at any speed, `info` must
+    /// put Headline and Stats where they play (the review's repro).
+    func testKnobLabSpeedPropMovesClips() throws {
+        for (speed, headline, stats) in [(1.0, [0, 3.2], [2.8, 5.8]), (2.0, [0, 1.6], [1.4, 2.9]),
+                                         (0.5, [0, 6.4], [5.6, 11.6])] {
+            var props = KnobLab.defaultProps
+            props.speed = speed
+            let d = KnobLab.duration(for: props)
+            let s = probe(d) { AnyView(KnobLab.body(at: $0, duration: d, props: props)) }
+            let byName = Dictionary(uniqueKeysWithValues: s.clips.map { ($0.label ?? "?", [$0.start, $0.end]) })
+            XCTAssertEqual(byName["Headline"], headline, "speed \(speed)")
+            XCTAssertEqual(byName["Stats"], stats, "speed \(speed)")
+        }
+    }
+
+    func testTimelineBuiltOnlyForItsDurationIsNotReported() {
+        let s = probe(8, DurationOnlyFixture.make)
+        XCTAssertEqual(s.clips.map(\.label), ["main", "outro", "outro.a", "outro.b"])
+        XCTAssertEqual(s.clips.map(\.start), [0, 5, 5, 6.5])
+        XCTAssertEqual(s.clips.map(\.depth), [0, 0, 1, 1])
+    }
+
+    /// `maxDepth` bounds depth; the evaluation budget bounds breadth.
+    func testStructuralTierHasABreadthBudget() {
+        BranchingFixture.evaluations = 0
+        let start = Date()
+        let s = probe(6) { BranchingFixture.make($0) }
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertLessThanOrEqual(BranchingFixture.evaluations, SceneProbe.maxEvaluations + 64 * 8 * 4,
+                                 "structural walks plus what the capped render tier draws")
+        XCTAssertEqual(s.clips.filter { $0.depth == 0 }.count, 6)
+        XCTAssertEqual(s.clips.filter { $0.depth == 1 }.count, 36, "shallow levels are complete")
+        XCTAssertLessThan(seconds, 20)
     }
 
     func testColorParsing() {
