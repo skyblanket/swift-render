@@ -166,16 +166,17 @@ public struct CodeReveal: View {
     var title: String?
     var lineNumbers: Bool
     var maxWidth: CGFloat?
+    var maxHeight: CGFloat?
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
     public init(_ code: String, language: LaunchProps.CodeLanguage = .swift, at t: Double, start: Double = 0.2,
                 mode: Mode = .lines(), focus: [Int]? = nil, fontSize: CGFloat? = nil,
                 palette: CodePalette = .xcodeDark, title: String? = nil, lineNumbers: Bool = true,
-                maxWidth: CGFloat? = nil) {
+                maxWidth: CGFloat? = nil, maxHeight: CGFloat? = nil) {
         self.code = code; self.language = language; self.t = t; self.start = start; self.mode = mode
         self.focus = Set(focus ?? []); self.fontSize = fontSize; self.palette = palette; self.title = title
-        self.lineNumbers = lineNumbers; self.maxWidth = maxWidth
+        self.lineNumbers = lineNumbers; self.maxWidth = maxWidth; self.maxHeight = maxHeight
     }
 
     /// When each line starts appearing (the score ticks here).
@@ -208,7 +209,12 @@ public struct CodeReveal: View {
         let width = maxWidth ?? L.width
         let gutter: CGFloat = lineNumbers ? 3.2 : 0
         let fitted = (width - 96 * L.type) / (CGFloat(cols) + gutter) / 0.61
-        let fs = min(fontSize ?? 30 * L.type, fitted)
+        // Height too: a line is ~1.2 em of text + 0.5 em spacing; the title bar and padding are fixed.
+        let rows = CGFloat(lines.count)
+        let chrome: CGFloat = 110 * L.type + 1     // title bar 54 + padding 2 × 28 + hairline
+        let budget: CGFloat = maxHeight ?? .infinity
+        let fittedHeight: CGFloat = (budget - chrome) / (rows * 1.7 - 0.5)
+        let fs = min(fontSize ?? 30 * L.type, fitted, fittedHeight)
         let times = Self.lineTimes(code, mode: mode, start: start)
         let end = Self.revealEnd(code, mode: mode, start: start)
         let dim = focus.isEmpty ? 0 : Ease.easeInOut(Ease.clip(t, end + 0.3, end + 0.9))
@@ -314,22 +320,19 @@ public struct TerminalCard: View {
     }
 
     /// Times a shell transcript: lines starting with "$ " are typed at `cps`, the rest
-    /// print 0.3 s after the command before them finishes.
+    /// print 0.3 s after the command before them finishes (`LaunchTerminal.schedule`).
     public static func session(_ transcript: [String], start: Double = 0.3, cps: Double = 30) -> [Line] {
-        var t = start, out: [Line] = []
-        for raw in transcript {
-            if raw.hasPrefix("$ ") {
-                if !out.isEmpty { t += 0.45 }
-                let cmd = String(raw.dropFirst(2))
-                out.append(Line(cmd, .command, at: t))
-                t += Double(cmd.count) / cps + 0.3
-            } else {
-                let kind: Line.Kind = raw.hasPrefix("✓") ? .success : raw.hasPrefix("✗") ? .failure : raw.hasPrefix("#") ? .comment : .output
-                out.append(Line(raw, kind, at: t))
-                t += 0.14
+        LaunchTerminal.schedule(transcript, start: start, cps: cps).map { l in
+            let kind: Line.Kind
+            switch l.kind {
+            case .command: kind = .command
+            case .output: kind = .output
+            case .success: kind = .success
+            case .failure: kind = .failure
+            case .comment: kind = .comment
             }
+            return Line(l.text, kind, at: l.at)
         }
-        return out
     }
 
     /// Keystroke times for the score (every `every`th character).
@@ -339,10 +342,28 @@ public struct TerminalCard: View {
         }
     }
 
+    /// Columns a line takes (a command's prompt and caret included).
+    static func columns(_ line: Line, prompt: String) -> Int {
+        line.kind == .command ? prompt.count + line.text.count + 1 : line.text.count
+    }
+
+    /// The font size that fits the longest line in a card `width` wide: at most `fontSize`, never
+    /// under `floor` (a line still too long then wraps). SF Mono advances 0.6 em; 0.62 leaves slack.
+    public static func fittedFontSize(_ lines: [Line], prompt: String, width: CGFloat, padding: CGFloat,
+                                      fontSize: CGFloat, floor: CGFloat) -> CGFloat {
+        let cols = max(20, lines.map { columns($0, prompt: prompt) }.max() ?? 20)
+        return max(floor, min(fontSize, (width - 2 * padding) / CGFloat(cols) / 0.62))
+    }
+
     public var body: some View {
         let L = LaunchLayout(ctx)
-        let fs = fontSize * L.type
         let w = width ?? min(L.width, 1240 * L.type)
+        // Shrink to fit down to 70% of the authored size; past that a long line wraps once
+        // (tiny mono on a phone-sized canvas reads worse than a wrapped command).
+        let fs = Self.fittedFontSize(lines, prompt: prompt, width: w, padding: 32 * L.type,
+                                     fontSize: fontSize * L.type, floor: fontSize * L.type * 0.7)
+        let perRow = max(1, Int((w - 64 * L.type) / (fs * 0.62)))
+        let rows = lines.reduce(0) { $0 + min(2, (Self.columns($1, prompt: prompt) + perRow - 1) / perRow) }
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 HStack(spacing: 9 * L.type) {
@@ -362,12 +383,12 @@ public struct TerminalCard: View {
                 }
             }
             .padding(.horizontal, 32 * L.type).padding(.vertical, 30 * L.type)
-            .frame(maxWidth: .infinity, minHeight: fs * 1.5 * CGFloat(max(3, lines.count)) + 60 * L.type, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: fs * 1.5 * CGFloat(max(3, rows)) + 60 * L.type, alignment: .topLeading)
         }
         .frame(width: w)
         .background(RoundedRectangle(cornerRadius: 22 * L.type, style: .continuous).fill(Color(white: 0.07).opacity(0.96)))
         .overlay(RoundedRectangle(cornerRadius: 22 * L.type, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.6), radius: 40, y: 24)
+        .shadow(color: .black.opacity(theme.isDark ? 0.6 : 0.2), radius: 40, y: 24)
     }
 
     private func row(_ line: Line, _ i: Int, _ fs: CGFloat) -> some View {
@@ -387,6 +408,6 @@ public struct TerminalCard: View {
         case .success: text = Text(line.text).foregroundColor(theme.accent)
         case .failure: text = Text(line.text).foregroundColor(Color(red: 1, green: 0.42, blue: 0.4))
         }
-        return text.font(mono).lineLimit(1).truncationMode(.tail)
+        return text.font(mono).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
     }
 }

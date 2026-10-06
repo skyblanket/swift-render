@@ -116,7 +116,7 @@ public struct AppIconHero: View {
             }
             .frame(width: s * 1.3, height: s * 1.15)
             if let name {
-                KeynoteTitle([name], at: t, start: nameAt - 0.12, size: nameSize, reveal: .letters(stagger: 0.035),
+                KeynoteTitle([name], at: t, start: nameAt, size: nameSize, reveal: .letters(stagger: 0.035),
                              accentLine: nil)
                     .padding(.top, 30 * L.type)
             }

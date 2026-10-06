@@ -17,10 +17,21 @@ public enum LaunchScore {
         public static func triadStart(_ plan: LaunchPlan) -> Double { 0.1 }
         public static func codeMode(_ plan: LaunchPlan) -> CodeReveal.Mode { .lines(step: plan.beat / 6) }
         public static let codeStart = 0.35
-        public static let terminalStart = 0.4
-        public static let terminalCPS = 26.0
+        public static let terminalStart = LaunchTerminal.start
+        /// The base typing speed; a long session types faster (`terminalSpeed`).
+        public static let terminalCPS = LaunchTerminal.cps
+        /// Typing speed for this film's terminal shot: fitted so the session finishes
+        /// `LaunchTerminal.hold` before the cut. The picture and the keystroke ticks both use it.
+        public static func terminalSpeed(_ plan: LaunchPlan, _ p: LaunchProps) -> Double {
+            LaunchTerminal.cps(p.terminal ?? [], length: plan.index(of: .terminal).map(plan.length) ?? .infinity)
+        }
+        /// The hero's specular sweep and name reveal sit on the beat grid (beat 2), so they move
+        /// with the tempo — and the blip and bell that mark them move with them.
+        public static func heroSweep(_ plan: LaunchPlan) -> Double { plan.beat * 2 - 0.2 }
+        public static func heroName(_ plan: LaunchPlan) -> Double { plan.beat * 2 - 0.1 }
+        public static func heroTagline(_ plan: LaunchPlan) -> Double { plan.beat * 3 + 0.1 }
         public static func statStagger(_ plan: LaunchPlan) -> Double { plan.beat }
-        public static let statStart = 0.2
+        public static let statStart = 0.1
         public static func rowStagger(_ plan: LaunchPlan) -> Double { plan.beat / 2 }
     }
 
@@ -118,8 +129,8 @@ public enum LaunchScore {
                 ev += swell(Chord(Note.midi(62 + key), [0, 4, 7, 14]), into: s0, duration: bar * 0.5, amp: 0.05)
                 ev += thump(at: s0, amp: 0.5)
                 ev += strum(chords[0], at: s0, amp: 0.06)
-                ev += blip(Note.midi(86 + key), at: s0 + 1.0, amp: 0.05)          // the specular sweep
-                ev += bell(Note.midi(78 + key), at: s0 + 1.1, amp: 0.06, pan: 0.15) // the name
+                ev += blip(Note.midi(86 + key), at: s0 + Cue.heroSweep(plan), amp: 0.05)          // the specular sweep
+                ev += bell(Note.midi(78 + key), at: s0 + Cue.heroName(plan), amp: 0.06, pan: 0.15) // the name
             case .title:
                 ev += rim(at: s0, amp: 0.2)
             case .triad:
@@ -144,8 +155,9 @@ public enum LaunchScore {
                 }
             case .terminal:
                 ev += rim(at: s0, amp: 0.16)
-                let lines = TerminalCard.session(p.terminal ?? [], start: Cue.terminalStart, cps: Cue.terminalCPS)
-                for (k, kt) in TerminalCard.keystrokeTimes(lines, cps: Cue.terminalCPS, every: 2).enumerated() where kt < len {
+                let cps = Cue.terminalSpeed(plan, p)
+                let lines = TerminalCard.session(p.terminal ?? [], start: Cue.terminalStart, cps: cps)
+                for (k, kt) in TerminalCard.keystrokeTimes(lines, cps: cps, every: max(2, Int(cps / 13))).enumerated() where kt < len {
                     ev += tick(at: s0 + kt, amp: 0.045 + 0.02 * Motion.hash(k), pan: (Motion.hash(k + 3) - 0.5) * 0.5)
                 }
                 for l in lines where l.kind == .success && l.at < len { ev += blip(Note.midi(81 + key), at: s0 + l.at, amp: 0.08) }

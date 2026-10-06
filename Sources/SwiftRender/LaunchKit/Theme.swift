@@ -90,6 +90,54 @@ public struct LaunchTheme: Sendable {
         size >= 96 ? -size * 0.025 : size >= 48 ? -size * 0.015 : size >= 28 ? -size * 0.006 : 0
     }
 
+    /// The display face as an NSFont, for measuring (`displayWidth`).
+    public func displayNSFont(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> NSFont {
+        let w: NSFont.Weight
+        switch weight {
+        case .ultraLight: w = .ultraLight
+        case .thin: w = .thin
+        case .light: w = .light
+        case .regular: w = .regular
+        case .medium: w = .medium
+        case .bold: w = .bold
+        case .heavy: w = .heavy
+        case .black: w = .black
+        default: w = .semibold
+        }
+        let system = NSFont.systemFont(ofSize: size, weight: w)
+        switch typeface {
+        case .sfPro: return system
+        case .sfRounded: return system.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? system
+        case .newYork: return system.fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) } ?? system
+        case .inter: return NSFont(name: "InterDisplay-\(Self.interWeight(weight))", size: size) ?? system
+        }
+    }
+
+    /// Width of `text` set in the display face at `size` with display tracking (CoreText,
+    /// deterministic — so a layout that depends on it stays a pure function of its inputs).
+    public func displayWidth(_ text: String, size: CGFloat, weight: Font.Weight = .semibold) -> CGFloat {
+        let attr = NSAttributedString(string: text, attributes: [.font: displayNSFont(size, weight),
+                                                                  .kern: Self.tracking(size)])
+        return CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(attr), nil, nil, nil))
+    }
+
+    /// One size for a block of display lines: the largest ≤ `size` (and ≥ `size × minimumScale`)
+    /// at which the widest line fits `width`. Every line of a headline is set at this size, so a
+    /// long punchline never ends up smaller than its setup line.
+    public func fittedDisplaySize(_ lines: [String], size: CGFloat, width: CGFloat, minimumScale: CGFloat = 0.45) -> CGFloat {
+        guard width > 0, !lines.isEmpty else { return size }
+        func widest(_ s: CGFloat) -> CGFloat { lines.map { displayWidth($0, size: s) }.max() ?? 0 }
+        let target = width * 0.98   // SwiftUI sets a hair wider than CoreText measures
+        var s = size
+        // Tracking steps with the size, so refine once at the scaled size.
+        for _ in 0..<3 {
+            let w = widest(s)
+            guard w > target else { break }
+            s *= target / w
+        }
+        return max(size * minimumScale, min(size, s))
+    }
+
     private static func interWeight(_ w: Font.Weight) -> String {
         switch w {
         case .bold, .heavy, .black: return "Bold"
@@ -129,10 +177,13 @@ public extension View {
 // MARK: - Layout
 
 /// Canvas-aware sizes. Components are authored at 1920×1080; on a vertical
-/// canvas `type` keeps headlines large relative to the narrow width.
+/// canvas `type` keeps headlines large relative to the narrow width. A square
+/// (or near-square) canvas stacks like a vertical one, at a type scale between the two.
 public struct LaunchLayout: Sendable {
     public let size: CGSize
     public let isVertical: Bool
+    /// Square or near-square (landscape narrower than 1.3:1): not wide enough for side-by-side shots.
+    public let isSquare: Bool
     /// Multiply authored point sizes by this.
     public let type: CGFloat
     /// Side margin.
@@ -141,9 +192,13 @@ public struct LaunchLayout: Sendable {
     public init(_ ctx: RenderContext) {
         size = ctx.size
         isVertical = ctx.isVertical
-        type = ctx.isVertical ? ctx.width / 1920 * 1.75 : ctx.referenceScale
+        isSquare = !ctx.isVertical && ctx.width < ctx.height * 1.3
+        type = ctx.isVertical ? ctx.width / 1920 * 1.75 : isSquare ? ctx.width / 1920 * 1.35 : ctx.referenceScale
         margin = ctx.isVertical ? ctx.width * 0.08 : ctx.width * 0.07
     }
+
+    /// Lay shots out in a column (caption above the subject, cards stacked): 9:16 and 1:1.
+    public var stacks: Bool { isVertical || isSquare }
 
     /// Usable content width.
     public var width: CGFloat { size.width - margin * 2 }

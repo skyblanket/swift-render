@@ -92,7 +92,11 @@ public struct LaunchPlan: Sendable, Equatable {
         case .library, .framework, .plugin: order = [.code, .terminal, .device]
         }
         let available: [LaunchShot.Kind: Bool] = [.device: hasDevice, .code: hasCode, .terminal: hasTerminal]
-        out += order.filter { available[$0] == true }.prefix(2).map { LaunchShot($0, bars: 2) }
+        let bar = 240 / frameExactBPM(p.music.bpm)
+        out += order.filter { available[$0] == true }.prefix(2).map {
+            // The terminal shot is as long as its session needs (2–4 bars), so it never cuts mid-keystroke.
+            LaunchShot($0, bars: $0 == .terminal ? LaunchTerminal.bars(p.terminal ?? [], bar: bar) : 2)
+        }
 
         if !p.highlights.isEmpty { out.append(LaunchShot(.stats, bars: 2)) }
         if !p.changelog.isEmpty { out.append(LaunchShot(.changelog, bars: 2)) }
@@ -123,5 +127,70 @@ public struct LaunchPlan: Sendable, Equatable {
         guard t >= 0, t < duration else { return nil }
         let i = (starts.lastIndex { $0 <= t }) ?? 0
         return (shots[i], i, t - starts[i])
+    }
+}
+
+// MARK: - LaunchTerminal
+
+/// Timing of the terminal shot's typed session, shared by the plan (how long the shot is),
+/// the picture (`TerminalCard.session`) and the score (keystroke ticks), so all three agree.
+/// Lines starting with "$ " are typed; the rest print 0.3 s after the command before them finishes.
+public enum LaunchTerminal {
+    /// When the first command starts typing (seconds into the shot).
+    public static let start = 0.4
+    /// Typing speed when the session fits the shot.
+    public static let cps = 26.0
+    /// The fastest the film types to fit a long session into the longest terminal shot.
+    public static let maxCPS = 60.0
+    /// How long the finished session stays on screen before the cut.
+    public static let hold = 1.2
+
+    public enum Kind: Sendable, Equatable { case command, output, success, failure, comment }
+
+    public struct Line: Sendable, Equatable {
+        public var text: String
+        public var kind: Kind
+        /// Seconds into the shot.
+        public var at: Double
+    }
+
+    public static func schedule(_ transcript: [String], start: Double = start, cps: Double = cps) -> [Line] {
+        var t = start, out: [Line] = []
+        for raw in transcript {
+            if raw.hasPrefix("$ ") {
+                if !out.isEmpty { t += 0.45 }
+                let cmd = String(raw.dropFirst(2))
+                out.append(Line(text: cmd, kind: .command, at: t))
+                t += Double(cmd.count) / cps + 0.3
+            } else {
+                let kind: Kind = raw.hasPrefix("✓") ? .success : raw.hasPrefix("✗") ? .failure : raw.hasPrefix("#") ? .comment : .output
+                out.append(Line(text: raw, kind: kind, at: t))
+                t += 0.14
+            }
+        }
+        return out
+    }
+
+    /// When the session is complete: the last command fully typed, or the last line printed.
+    public static func end(_ transcript: [String], start: Double = start, cps: Double = cps) -> Double {
+        guard let last = schedule(transcript, start: start, cps: cps).last else { return start }
+        return last.kind == .command ? last.at + Double(last.text.count) / cps : last.at
+    }
+
+    /// Bars the terminal shot needs to show the session at `cps` plus `hold`: 2–4, in half bars.
+    public static func bars(_ transcript: [String], bar: Double) -> Double {
+        let need = (end(transcript) + hold) / bar
+        return min(4, max(2, (need * 2).rounded(.up) / 2))
+    }
+
+    /// The typing speed that finishes the session `hold` before a shot of `length` seconds ends
+    /// (never slower than `cps`, never faster than `maxCPS`).
+    public static func cps(_ transcript: [String], length: Double) -> Double {
+        guard length.isFinite else { return cps }
+        let typed = Double(transcript.filter { $0.hasPrefix("$ ") }.reduce(0) { $0 + $1.count - 2 })
+        let fixed = end(transcript, cps: .infinity)          // gaps and output lines, no typing
+        let room = length - hold - fixed
+        guard typed > 0, end(transcript) > length - hold else { return cps }
+        return room > 0 ? min(maxCPS, max(cps, typed / room)) : maxCPS
     }
 }

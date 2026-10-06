@@ -83,13 +83,14 @@ public struct StatRow: View {
     public var body: some View {
         let L = LaunchLayout(ctx)
         let size: CGFloat = stats.count == 1 ? 260 : stats.count == 2 ? 210 : 180
-        let layout = L.isVertical
+        // Side by side, the labels share a baseline even when one number scales down to fit its column.
+        let layout = L.stacks
             ? AnyLayout(VStackLayout(spacing: 90 * L.type))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
+            : AnyLayout(HStackLayout(alignment: .lastTextBaseline, spacing: 0))
         layout {
             ForEach(Array(stats.enumerated()), id: \.offset) { i, s in
                 StatCounter(s, at: t, start: start + Double(i) * stagger, size: size, accent: i == 0)
-                    .frame(width: L.isVertical ? L.width : L.width / CGFloat(max(1, stats.count)))
+                    .frame(width: L.stacks ? L.width : L.width / CGFloat(max(1, stats.count)))
             }
         }
     }
@@ -122,7 +123,7 @@ public struct ChangelogList: View {
         switch k {
         case .added: return "plus.circle.fill"
         case .performance: return "bolt.circle.fill"
-        case .fixed: return "wrench.and.screwdriver.fill"
+        case .fixed: return "hammer.circle.fill"
         case .changed: return "arrow.triangle.2.circlepath.circle.fill"
         case .removed: return "minus.circle.fill"
         case .security: return "lock.circle.fill"
@@ -137,7 +138,7 @@ public struct ChangelogList: View {
         let w = min(L.width, 1300 * u)
         VStack(alignment: .leading, spacing: 0) {
             KeynoteTitle(headline.map { [$0] } ?? ["What's new", "in \(version)."], eyebrow: "Release notes",
-                         at: t, start: start - 0.15, size: 92, alignment: .leading, accentLine: 1, maxWidth: w)
+                         at: t, start: max(0, start - 0.25), size: 92, alignment: .leading, accentLine: 1, maxWidth: w)
                 .padding(.bottom, 44 * u)
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                 let p = Motion.pop(t, rows[i] - 0.08, response: 0.42, damping: 0.8)
@@ -211,7 +212,7 @@ public struct PlatformBadges: View {
         let badgesAt = start + (headline == nil ? 0 : 0.45)
         VStack(spacing: 64 * u) {
             if let headline {
-                KeynoteTitle([headline], at: t, start: start - 0.1, size: 112, accentLine: nil)
+                KeynoteTitle([headline], at: t, start: max(0, start - 0.1), size: 112, accentLine: nil)
             }
             if !shown.isEmpty {
                 HStack(alignment: .bottom, spacing: (L.isVertical ? 70 : 100) * u) {

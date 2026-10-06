@@ -6,7 +6,7 @@ it scans the repo, writes the facts it found to a JSON file you can edit, and re
 
 ```bash
 swift run swift-render launch ~/Code/MyApp --open              # scan + render → MyApp/out/myapp-launch.mp4
-swift run swift-render launch ~/Code/MyApp --aspect 9:16       # vertical cut, same plan
+swift run swift-render launch ~/Code/MyApp --aspect 9:16       # vertical cut, same plan (1:1 stacks the same way)
 swift run swift-render init ~/Code/MyApp                       # scaffold MyApp/Launch/, a package you edit
 ```
 
@@ -24,7 +24,11 @@ swift-render launch [path=.] [--out f.mp4] [--aspect 16:9|9:16|1:1] [--props-out
    `<Name>.scan.json`). On later runs the existing file is reused — it is the thing you, Studio
    and the review agent edit. `--rescan` replaces it.
 3. **Render** `AppleLaunch` in-process with those props → `<path>/out/<name>-launch.mp4`.
-   `--preview` renders half-size at 30 fps. Props edits need no rebuild.
+   `--preview` renders half-size at 30 fps. Props edits need no rebuild. When `launch` creates
+   `out/` it also drops an `out/.gitignore` (`*`), so the film stays out of the app's commits.
+
+When the props file is reused, the summary credits each value that differs from the fresh scan
+to that file (`← .swift-render/launch/MyApp.json (edited)`), not to the scan's evidence.
 
 `--eject` also writes an editable `<Name>Launch.swift` into the project's scenes directory
 (`swift-render.json` `scenesDir`, or `Sources/SwiftRender/Scenes` in this repo).
@@ -44,15 +48,21 @@ Run these from the scanned project's root: icon and screenshot paths in the prop
 | Source | Fields |
 |---|---|
 | `Package.swift` (`swift package dump-package`, regex fallback) | name, products → kind, platforms + minimums, dependency count, tools version |
+| `@main … : App` in an executable target | `kind: app` for SwiftPM apps, when that executable is named like the package or there is no library (an auxiliary App beside a library, like swift-render's Studio, keeps `library`) |
 | `*.xcodeproj/project.pbxproj` | app target, `PRODUCT_NAME`, `MARKETING_VERSION`, deployment targets, `SWIFT_VERSION`, display name, app icon set name |
-| `Assets.xcassets` | `AppIcon` (largest image, light appearance), `AccentColor` (hex) |
+| `Assets.xcassets` | `AppIcon` (largest image, light appearance; plain file names inside the icon set only), `AccentColor` (hex) |
 | `Info.plist` | `CFBundleDisplayName` / `CFBundleName` |
 | `README.md` | title, tagline + subtitle (first lead paragraph), features (bullets under a Features-like heading, else H3s, else H2s), first ```swift block, `.package(url:)` install line, shell commands |
 | `CHANGELOG.md` | latest released version, date, up to five items (Added > Performance > Changed > Fixed) |
 | `LICENSE` | MIT / Apache-2.0 / BSD / GPL / MPL / ISC |
 | git | commits, contributors (bots dropped), first commit date, release tags, GitHub URL from `origin` |
 | `*.swift` | lines of Swift, test count (`func test…` + `@Test`), a short SwiftUI view for apps without a README snippet |
-| `fastlane/screenshots`, `Screenshots/`, `docs/screenshots` | PNG screenshots, device guessed from pixel size |
+| `fastlane/screenshots`, `Screenshots/`, `docs/screenshots`, `.github/screenshots` | PNG screenshots, device guessed from pixel size |
+
+The walk is breadth-first and skips build output, dependencies, hidden folders (except `.github/`)
+and a `swift-render init` scaffold (`Launch/`), so the launch film's own code never counts as the
+app's. Past 20,000 files it stops, but top-level files (README, CHANGELOG, LICENSE) and shallow
+manifests are always read. A symlinked project path is followed; CRLF files read like LF.
 
 Accent precedence: `AccentColor` → the README release badge `color=` → the icon's dominant hue
 → a default. Accents under 3:1 contrast on the stage are lightened. Numbers are never invented:
@@ -71,7 +81,7 @@ prints a complete example. The fields that change the film most:
 | `icon` | `{"path": "…", "shape": "iOS" \| "macOS" \| "none"}`; missing → a generated monogram tile |
 | `accent`, `accentSecondary`, `appearance`, `typeface` | look; `typeface: "inter"` for license-safe commercial renders |
 | `features` | 3–6 `{title, detail, symbol}`; four fit one row, five or six add an "And so much more." shot |
-| `screenshots`, `code`, `terminal` | the two "deep" shots (`terminal` lines starting `$ ` are typed) |
+| `screenshots`, `code`, `terminal` | the two "deep" shots (`terminal` lines starting `$ ` are typed; up to 3 commands with 3 output lines each, 8 lines in all) |
 | `highlights` | up to three `{value, format: integer\|compact\|percent\|multiplier, label}` count-ups |
 | `changelog`, `version` | "What's new in x.y." |
 | `platforms`, `swiftVersion`, `facts` | platforms shot; the first fact is its headline ("Zero dependencies.") |
@@ -92,7 +102,7 @@ prints a complete example. The fields that change the film most:
 | title | 1–2 | tagline headline + subtitle | `rim`; soft groove enters |
 | triad | 2 | three (or four) glass feature cards, one per beat | `rim` per card |
 | more | 2 | features 4–6 beside "And so much more." | `rim` per row |
-| device / code / terminal | 2 each | screenshot in a device, highlighted Swift cascading in, a typed shell session | `thump` / `tick` per line / `tick` per keystroke |
+| device / code / terminal | 2 each (terminal 2–4) | screenshot in a device, highlighted Swift cascading in, a typed shell session | `thump` / `tick` per line / `tick` per keystroke |
 | stats | 2 | up to three count-ups | `blip` on each landing, chord tones |
 | changelog | 2 | "What's new in x.y." rows | `rim` per row |
 | platforms | 1 | fact headline, platform badges | drums out, swell into the end |
@@ -101,7 +111,11 @@ prints a complete example. The fields that change the film most:
 House rules held by the defaults: one accent; SF Pro display type tracked −2.5% at hero sizes;
 springs damped 0.72–0.82; a slow 4.5% push on every shot; hard cuts on downbeats and a single
 dissolve (into the end card); grain 0.035, vignette 0.25; no camera shake, no flash frames, no
-whoosh/riser/crash in the score. Every layout restacks for 9:16.
+whoosh/riser/crash in the score. Every layout restacks for 9:16 and 1:1. Each shot's first
+element moves from the cut frame, under the downbeat hit. A headline's lines share one size (the
+block scales down together when its widest line is too wide). The terminal shot is as long as its
+session needs (2–4 bars, `LaunchTerminal`), typing faster only when a session can't fit 4 bars;
+the terminal card sizes its mono type to the longest line and wraps one only on narrow canvases.
 
 ## LaunchKit
 
@@ -131,10 +145,16 @@ host's transparency settings, so `GlassPanel` defaults to a tinted fill with a l
 ## `init`
 
 ```
-swift-render init [path=.] [--local <swift-render checkout>] [--force]
+swift-render init [path=.] [--local <swift-render checkout>] [--force] [--rescan] [--no-manifest]
 ```
 
-Scaffolds `<path>/Launch/`:
+Scaffolds `<path>/Launch/` from the props `launch` keeps in `<path>/.swift-render/launch/<Name>.json`
+— so edits made in the launch / Studio / agent loop carry over — or from a fresh scan when there
+are none (`--rescan` forces one). `init` never overwrites: if any file it would write already
+exists (an unrelated `Launch/` or `launch/` folder, or an earlier scaffold), it lists them and
+stops; `--force` overwrites them and prints each one it replaced. Only icon and screenshot files
+inside `<path>` are copied into `assets/` (a path that leads out of the project is skipped with a
+note).
 
 ```
 Launch/
