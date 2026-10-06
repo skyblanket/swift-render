@@ -65,6 +65,7 @@ enum SnapshotRunner {
             FileHandle.standardError.write(Data("[studio] build failed:\n\(rows.joined(separator: "\n"))\n\(tail)\n".utf8))
         }
         if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
+        await TimelineSnapshot.prepare(model)
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
