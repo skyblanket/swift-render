@@ -86,7 +86,10 @@ struct StudioEmptyState: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                    // Not fixedSize(vertical:): measured at a column's minimum width the message
+                    // wraps a character per line, and that ~970 pt "minimum" made the whole window
+                    // content taller than the window (sidebar footer and agent panel cut off).
+                    .lineLimit(6)
             }
         }
         .frame(maxWidth: 260)
