@@ -25,7 +25,9 @@ final class HostClientProcessTests: XCTestCase {
     }
 
     func testOpenFramesAndStreamOverPipes() async throws {
-        let host = try spawn()
+        // 60 ms frames: the superseding check below queues requests 15 ms apart behind one
+        // in-flight render, which a 4 ms fake frame raced on a loaded machine.
+        let host = try spawn(["--fake-render-ms", "60"])
         let ready = try await host.waitUntilReady(timeout: 10)
         XCTAssertEqual(ready.event, "ready")
         XCTAssertEqual(ready.scenes?.map(\.name), FakeHostClient.scenes.map(\.name))

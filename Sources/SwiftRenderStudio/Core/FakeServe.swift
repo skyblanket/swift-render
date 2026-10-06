@@ -22,6 +22,7 @@ enum FakeServe {
         let out = WireWriter(fd: protoFD)
         var o = FakeHostClient.Options()
         o.crashAt = options.fakeCrashAt
+        if let ms = options.fakeRenderMs { o.renderMs = ms }
         o.startupDelay = 0
         o.projectRoot = Project.discover()?.root ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         o.onCrash = { report in

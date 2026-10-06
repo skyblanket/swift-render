@@ -35,6 +35,9 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// FakeHost only: minimum milliseconds per frame (`--fake-render-ms`), so tests can
+    /// queue requests behind an in-flight render without racing the machine's load.
+    var fakeRenderMs: Double?
     /// Fake modes: simulated builds fail (and one runs right after launch).
     var fakeBuildFails = false
     /// Inspector tab to show first (`--tab knobs`), e.g. to snapshot a tab.
@@ -93,6 +96,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--props": o.propsFile = v; i += 2
             case "--check": o.runCheck = true; i += 1
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
+            case "--fake-render-ms": o.fakeRenderMs = v.flatMap(Double.init); i += 2
             case "--comment": o.commentSelection = v; i += 2
             case "--compare": o.compareMode = v.flatMap(CompareMode.init(rawValue:)); i += 2
             case "--draft": o.draftRegion = v; i += 2

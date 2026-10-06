@@ -458,8 +458,12 @@ final class AgentTests: XCTestCase {
         try "#!/bin/sh\nhead -n 3 \"\(fixture.path)\"\nexec sleep 30\n".write(to: script, atomically: true, encoding: .utf8)
         let started = Date()
         var got: [AgentEvent] = []
-        Task { try await Task.sleep(for: .milliseconds(500)); backend.cancel() }
-        for try await e in backend.run(r) { got.append(e) }
+        // Stop once the first line has been decoded (a fixed delay raced process start-up
+        // when the suite's other tests were spawning hosts).
+        for try await e in backend.run(r) {
+            if got.isEmpty { backend.cancel() }
+            got.append(e)
+        }
         XCTAssertLessThan(Date().timeIntervalSince(started), 5, "SIGINT should end it well before the 2 s SIGTERM + SIGKILL path")
         XCTAssertEqual(got.first, .started(sessionID: "5f1c9a20-0000-4000-8000-000000000001", model: "claude-sonnet-4-5", mcpStatus: "connected"))
         guard case .finished(let ok, _, _, let result) = got.last else { return XCTFail("\(String(describing: got.last))") }

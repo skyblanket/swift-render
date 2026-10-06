@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 import AppKit
 import CoreImage
 import SwiftUI
@@ -108,7 +109,18 @@ final class RecorderTests: XCTestCase {
                                    postFX: s.postFX, content: s.make)
             let a = try await compressedSamples(new), b = try await compressedSamples(old)
             XCTAssertEqual(a.count, 30, s.name)
-            XCTAssertEqual(a, b, "\(s.name): encoded video differs from the legacy pipeline")
+            guard a != b else { continue }
+            // Within one busy test process (the full suite), VideoToolbox's rate control has
+            // been seen to pick different slices from some frame on for identical input; the
+            // pixel-exact encoder input is pinned by the conversion test above. So a bitstream
+            // mismatch must still decode to the same pictures, within coding noise.
+            let first = a.indices.first { $0 >= b.count || a[$0] != b[$0] } ?? 0
+            let pa = try await decodedFrames(new), pb = try await decodedFrames(old)
+            XCTAssertEqual(pa.count, pb.count, s.name)
+            let worst = zip(pa, pb).map { psnr($0, $1) }.min() ?? 0
+            print(String(format: "[recorder] %@: bitstreams differ from frame %d; decoded frames match within %.1f dB",
+                         s.name, first, worst))
+            XCTAssertGreaterThan(worst, 38, "\(s.name): encoded video differs from the legacy pipeline beyond coding noise")
         }
     }
 
@@ -270,6 +282,39 @@ private func compressedSamples(_ url: URL) async throws -> [Data] {
         samples.append(slices)
     }
     return samples
+}
+
+/// Decoded BGRA bytes of every frame of `url`.
+private func decodedFrames(_ url: URL) async throws -> [[UInt8]] {
+    let asset = AVURLAsset(url: url)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: try XCTUnwrap(tracks.first),
+                                          outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(output)
+    XCTAssertTrue(reader.startReading())
+    var frames: [[UInt8]] = []
+    while let sample = output.copyNextSampleBuffer() {
+        guard let pb = CMSampleBufferGetImageBuffer(sample) else { continue }
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        let n = CVPixelBufferGetBytesPerRow(pb) * CVPixelBufferGetHeight(pb)
+        frames.append([UInt8](UnsafeRawBufferPointer(start: CVPixelBufferGetBaseAddress(pb), count: n)))
+    }
+    return frames
+}
+
+/// Peak signal-to-noise ratio of two equal-size byte images (∞ when identical).
+private func psnr(_ a: [UInt8], _ b: [UInt8]) -> Double {
+    guard a.count == b.count, !a.isEmpty else { return 0 }
+    // vDSP: a scalar loop over 30 × 8 MB frames takes ~20 s in a debug build.
+    var fa = [Float](repeating: 0, count: a.count), fb = fa
+    vDSP_vfltu8(a, 1, &fa, 1, vDSP_Length(a.count))
+    vDSP_vfltu8(b, 1, &fb, 1, vDSP_Length(b.count))
+    var sum: Float = 0
+    vDSP_distancesq(fa, 1, fb, 1, &sum, vDSP_Length(a.count))
+    let mse = Double(sum) / Double(a.count)
+    return mse == 0 ? .infinity : 10 * log10(255 * 255 / mse)
 }
 
 /// The pre-0.9 Recorder conversion (fresh buffer per frame + CIContext), verbatim,
