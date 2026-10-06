@@ -68,7 +68,8 @@ public final class Recorder {
     public init(config: Config = Config()) { self.config = config }
 
     /// Render a SwiftUI view that's a pure function of time `t` (in seconds)
-    /// to an MP4 at `outputURL`. Optionally muxes in `audioURL`.
+    /// to an MP4 at `outputURL`. Optionally muxes in `audioURL`, which is scene-timed:
+    /// a range render plays it from `startTime`, in sync with its first frame.
     ///
     /// Frames `startTime…duration` are rendered (`duration` is the END time). Pass
     /// `sceneDuration` when that is a sub-range of a longer scene so the render
@@ -169,10 +170,12 @@ public final class Recorder {
             throw writer.error ?? NSError(domain: "Recorder", code: 2)
         }
 
-        // Audio mux: if an audio file is provided, take the just-finished video
-        // and mux in the audio track via AVMutableComposition.
+        // Audio mux: if an audio file is provided, take the just-finished video and
+        // mux in the audio track. The audio is scene-timed, so a range render
+        // (startTime > 0) takes it from startTime, in sync with its first frame.
         if let audioURL = audioURL, FileManager.default.fileExists(atPath: audioURL.path) {
-            try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: duration)
+            try await MP4Assembler.assemble(video: [outputURL], audio: audioURL,
+                                            audioOffset: Double(firstFrame) / Double(config.fps), to: outputURL)
         }
     }
 
@@ -264,11 +267,5 @@ public final class Recorder {
         ctx.interpolationQuality = .high
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return true
-    }
-
-    /// Replace the file at `outputURL` with one that has both video and audio tracks.
-    /// Mux `audioURL` into the finished video — video samples are copied, not re-encoded.
-    private func muxAudio(into outputURL: URL, audioURL: URL, videoDuration: Double) async throws {
-        try await MP4Assembler.assemble(video: [outputURL], audio: audioURL, to: outputURL)
     }
 }

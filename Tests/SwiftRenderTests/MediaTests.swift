@@ -147,6 +147,52 @@ final class AssemblerTests: XCTestCase {
         XCTAssertEqual(pts.sorted()[15], 0.5, accuracy: 1e-6, "chunk 2 starts exactly at 0.5 s")
         XCTAssertEqual(pts.sorted().first ?? -1, 0, accuracy: 1e-6)
     }
+
+    /// The score is scene-timed: a range render of 1…2 s must play the audio's 1…2 s,
+    /// not its first second. A tone that starts at 1.0 s must sound at the first frame.
+    func testRangeRenderMuxesAudioFromItsStartTime() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-amux-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rate = scoreSampleRate
+        let tone = (0..<Int(2.5 * rate)).map { i -> Float in
+            let t = Double(i) / rate
+            return t < 1 ? 0 : 0.5 * sin(2 * .pi * 440 * Float(t))
+        }
+        let wav = dir.appendingPathComponent("score.wav")
+        try WAV.write(left: tone, right: tone, to: wav)
+
+        func onset(_ url: URL) async throws -> (onset: Double, length: Double) {
+            let asset = AVURLAsset(url: url)
+            let tracks = try await asset.loadTracks(withMediaType: .audio)
+            let track = try XCTUnwrap(tracks.first)
+            let reader = try AVAssetReader(asset: asset)
+            let out = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false, AVNumberOfChannelsKey: 1,
+                AVSampleRateKey: 44_100,
+            ])
+            reader.add(out)
+            reader.startReading()
+            var samples: [Float] = []
+            while let sb = out.copyNextSampleBuffer(), let block = CMSampleBufferGetDataBuffer(sb) {
+                var chunk = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / 4)
+                _ = chunk.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!) }
+                samples += chunk
+            }
+            let first = samples.firstIndex { abs($0) > 0.1 } ?? samples.count
+            return (Double(first) / 44_100, Double(samples.count) / 44_100)
+        }
+
+        let rec = Recorder(config: .init(fps: 30, size: CGSize(width: 64, height: 36), postFX: false))
+        let full = dir.appendingPathComponent("full.mp4"), range = dir.appendingPathComponent("range.mp4")
+        try await rec.render(to: full, duration: 2, audioURL: wav) { _ in Color.black }
+        try await rec.render(to: range, duration: 2, startTime: 1, sceneDuration: 2, audioURL: wav) { _ in Color.black }
+        let a = try await onset(full), b = try await onset(range)
+        XCTAssertEqual(a.onset, 1.0, accuracy: 0.03, "full render: the tone starts at 1 s")
+        XCTAssertEqual(b.onset, 0.0, accuracy: 0.03, "range render from 1 s: the tone starts at its first frame")
+        XCTAssertEqual(b.length, 1.0, accuracy: 0.05, "audio is trimmed to the 1 s of video")
+    }
 }
 
 final class VisionTrackTests: XCTestCase {
