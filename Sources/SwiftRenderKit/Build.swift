@@ -9,10 +9,63 @@ public struct ProcessResult: Sendable {
     public var seconds: Double
 }
 
+/// Why `ProcessRunner.run` gave up on a child before it exited on its own.
+public enum ProcessRunnerError: Error, CustomStringConvertible, Equatable {
+    case timedOut(seconds: Double)
+    case cancelled
+
+    public var description: String {
+        switch self {
+        case .timedOut(let s): return String(format: "timed out after %.0fs (stopped)", s)
+        case .cancelled: return "cancelled"
+        }
+    }
+}
+
+/// Stops running children on request: SIGTERM to the child's process group (so
+/// `swift build`'s compilers and a scene's helpers go too), then SIGKILL after a
+/// grace period. One token can serve several runs in sequence; cancelling it also
+/// stops any run started later.
+public final class ProcessCancel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running: [Int32] = []
+    private var cancelled = false
+
+    public init() {}
+
+    public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+
+    /// Stops the running child's process group: SIGTERM, then SIGKILL two seconds later
+    /// (`hard`: SIGKILL now — for a process that is about to exit itself).
+    public func cancel(hard: Bool = false) {
+        lock.lock(); cancelled = true; let pids = running; lock.unlock()
+        for pid in pids {
+            if hard { kill(-pid, SIGKILL); kill(pid, SIGKILL) } else { ProcessRunner.terminateGroup(pid) }
+        }
+    }
+
+    /// false when already cancelled (the caller then stops the child itself).
+    fileprivate func attach(_ pid: Int32) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { return false }
+        running.append(pid)
+        return true
+    }
+
+    fileprivate func detach(_ pid: Int32) {
+        lock.lock(); running.removeAll { $0 == pid }; lock.unlock()
+    }
+}
+
 public enum ProcessRunner {
     /// Run a program to completion, capturing both streams.
+    ///
+    /// `timeout`: stop the child (and its process group) after that many seconds and
+    /// throw `ProcessRunnerError.timedOut`. `cancel`: a token another thread can fire to
+    /// stop it early (`ProcessRunnerError.cancelled`).
     public static func run(_ executable: String, _ args: [String], cwd: URL? = nil,
-                           environment: [String: String]? = nil) throws -> ProcessResult {
+                           environment: [String: String]? = nil, timeout: TimeInterval? = nil,
+                           cancel: ProcessCancel? = nil) throws -> ProcessResult {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = args
@@ -32,14 +85,52 @@ public enum ProcessRunner {
         group.enter()
         DispatchQueue.global().async { errBox.data = errHandle.readDataToEndOfFile(); group.leave() }
 
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
         let start = Date()
-        try p.run()
-        p.waitUntilExit()
-        group.wait()
+        do { try p.run() } catch {
+            // Nothing will ever write: close our write ends so the readers finish.
+            try? out.fileHandleForWriting.close(); try? err.fileHandleForWriting.close()
+            throw error
+        }
+        let pid = p.processIdentifier
+        let attached = cancel?.attach(pid) ?? true
+        defer { cancel?.detach(pid) }
+        if !attached { terminateGroup(pid) }
+
+        var timedOut = false
+        if let timeout {
+            if exited.wait(timeout: .now() + max(0, timeout)) == .timedOut {
+                timedOut = true
+                terminateGroup(pid)
+                exited.wait()
+            }
+        } else {
+            exited.wait()
+        }
+        // A grandchild that left the group can keep the pipes open: don't wait on it forever.
+        let stopped = timedOut || !attached || (cancel?.isCancelled ?? false)
+        if group.wait(timeout: .now() + (stopped ? 2 : 3600)) == .timedOut {
+            try? outHandle.close(); try? errHandle.close()
+        }
+        if timedOut { throw ProcessRunnerError.timedOut(seconds: timeout ?? 0) }
+        if stopped { throw ProcessRunnerError.cancelled }
         return ProcessResult(status: p.terminationStatus,
                              stdout: String(decoding: outBox.data, as: UTF8.self),
                              stderr: String(decoding: errBox.data, as: UTF8.self),
                              seconds: Date().timeIntervalSince(start))
+    }
+
+    /// SIGTERM to `pid`'s process group (Foundation starts each child in its own group)
+    /// and to `pid` itself, then SIGKILL two seconds later for anything still alive.
+    public static func terminateGroup(_ pid: Int32) {
+        guard pid > 0 else { return }
+        kill(-pid, SIGTERM)
+        kill(pid, SIGTERM)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            kill(-pid, SIGKILL)
+            kill(pid, SIGKILL)
+        }
     }
 }
 
@@ -92,15 +183,17 @@ public struct BuildResult: Sendable {
 
 public enum ProjectBuilder {
     /// `swift build --product <product>` in the project root. Blocking; call off the main thread.
+    /// `timeout`/`cancel` stop the build (and its compiler processes) — see `ProcessRunner.run`.
     public static func build(_ project: Project, configuration: String = "debug",
-                             product: String? = nil) throws -> BuildResult {
+                             product: String? = nil, timeout: TimeInterval? = nil,
+                             cancel: ProcessCancel? = nil) throws -> BuildResult {
         let prod = product ?? project.config.product
         let r = try ProcessRunner.run("/usr/bin/env",
                                       ["swift", "build", "-c", configuration, "--product", prod],
-                                      cwd: project.root)
+                                      cwd: project.root, timeout: timeout, cancel: cancel)
         let log = r.stdout + r.stderr
         var exe: URL? = nil
-        if r.status == 0, let bin = try? binPath(project, configuration: configuration) {
+        if r.status == 0, let bin = try? binPath(project, configuration: configuration, cancel: cancel) {
             exe = bin.appendingPathComponent(prod)
         }
         return BuildResult(success: r.status == 0, seconds: r.seconds,
@@ -108,12 +201,13 @@ public enum ProjectBuilder {
     }
 
     /// `swift build --show-bin-path` (cached per root+configuration).
-    public static func binPath(_ project: Project, configuration: String = "debug") throws -> URL {
+    public static func binPath(_ project: Project, configuration: String = "debug",
+                               cancel: ProcessCancel? = nil) throws -> URL {
         let key = project.root.path + "|" + configuration
         if let hit = BinPathCache.shared.get(key) { return hit }
         let r = try ProcessRunner.run("/usr/bin/env",
                                       ["swift", "build", "-c", configuration, "--show-bin-path"],
-                                      cwd: project.root)
+                                      cwd: project.root, timeout: 300, cancel: cancel)
         let path = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard r.status == 0, !path.isEmpty else {
             throw NSError(domain: "ProjectBuilder", code: Int(r.status),
@@ -125,8 +219,9 @@ public enum ProjectBuilder {
     }
 
     /// Executable path for the project's CLI product (may not exist yet).
-    public static func executable(_ project: Project, configuration: String = "debug") throws -> URL {
-        try binPath(project, configuration: configuration).appendingPathComponent(project.config.product)
+    public static func executable(_ project: Project, configuration: String = "debug",
+                                  cancel: ProcessCancel? = nil) throws -> URL {
+        try binPath(project, configuration: configuration, cancel: cancel).appendingPathComponent(project.config.product)
     }
 }
 

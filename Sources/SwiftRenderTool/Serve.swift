@@ -102,6 +102,8 @@ final class HostSession {
     private lazy var summaries: [SceneSummary] = runners.keys.sorted().map { runners[$0]!.summary(name: $0) }
 
     static let loudnessRate = 50.0
+    /// Largest |t| a frame request may ask for (a day): frame indices stay far inside Int.
+    static let maxTime = 86_400.0
 
     init(runners: [String: SceneRunner], project: Project?, schedule: @escaping Schedule,
          emit: @escaping (HostPacket) -> Void) {
@@ -120,27 +122,25 @@ final class HostSession {
 
     // MARK: Dispatch
 
-    /// One turn's worth of requests: everything in order, except that only the
-    /// last `frame` renders (after the others); earlier ones are superseded.
+    /// One turn's worth of requests, handled in arrival order — except that a `frame`
+    /// followed by a newer `frame` in the same turn is superseded (answered at once,
+    /// not rendered). The surviving frame renders at its own position, so it reflects
+    /// exactly the requests that arrived before it (not a later setProps/open/setKnobs).
     func process(_ batch: [HostRequest], send: (HostPacket) -> Void) {
         let lastFrame = batch.lastIndex { $0.method == .frame }
         for (i, r) in batch.enumerated() {
-            if r.method == .frame {
-                if i != lastFrame {
-                    send(HostPacket(.failure(r.id, HostError(code: HostError.Code.superseded,
-                                                             message: "a newer frame request replaced this one"))))
+            if r.method == .frame, i != lastFrame {
+                send(HostPacket(.failure(r.id, HostError(code: HostError.Code.superseded,
+                                                         message: "a newer frame request replaced this one"))))
+                continue
+            }
+            guard !shutdownRequested else {
+                if r.method == .frame {
+                    send(HostPacket(.failure(r.id, HostError(code: HostError.Code.superseded, message: "host shutting down"))))
                 }
                 continue
             }
-            guard !shutdownRequested else { continue }
             for p in handle(r) { send(p) }
-        }
-        if let i = lastFrame {
-            if shutdownRequested {
-                send(HostPacket(.failure(batch[i].id, HostError(code: HostError.Code.superseded, message: "host shutting down"))))
-            } else {
-                for p in handle(batch[i]) { send(p) }
-            }
         }
     }
 
@@ -156,7 +156,11 @@ final class HostSession {
             case .setProps: return try setProps(r.id, p)
             case .stream:   return try startStream(r.id, p)
             case .credit:
-                if let id = p.streamID, stream?.id == id { stream!.credits += max(0, p.credits ?? 1) }
+                // Saturating: a client's huge credit value must not overflow (and trap).
+                if let id = p.streamID, stream?.id == id {
+                    let (sum, overflow) = stream!.credits.addingReportingOverflow(max(0, p.credits ?? 1))
+                    stream!.credits = overflow ? Int.max : sum
+                }
                 return [ok(r.id)]
             case .cancel:
                 if let id = p.streamID, stream?.id == id { stream = nil }
@@ -205,7 +209,8 @@ final class HostSession {
             let size = CGSize(width: width, height: height)
             let audio = audioSource(runner: runner, duration: duration, propsURL: propsURL, file: audioFile)
             let key = audioKey(audio, fps: fps, duration: duration)
-            let reuse = audioDone.flatMap { $0.key == key ? $0.ready : nil }
+            // A degraded mix (TTS/sample failed) is retried on every open, never reused.
+            let reuse = audioDone.flatMap { $0.key == key && $0.ready.degraded.isEmpty ? $0.ready : nil }
             laps.lap("score")
             HostCrashLog.note("open \(name)")
             let scene = try preparedScene(name: name, runner: runner, duration: duration, size: size, fps: fps,
@@ -247,6 +252,7 @@ final class HostSession {
     private func frame(_ id: Int, _ p: HostParams) throws -> [HostPacket] {
         let o = try requireOpen()
         guard let t = p.t, t.isFinite else { throw bad("frame needs a finite 't'") }
+        guard abs(t) <= Self.maxTime else { throw bad("frame 't' out of range (|t| ≤ \(Int(Self.maxTime)) s)") }
         let format = try frameFormat(p.format, binary: o.binaryFrames)
         let (frame, payload, discovered) = try render(t: t, maxWidth: p.maxWidth, format: format, quality: p.quality)
         return [HostPacket(.response(id, HostResult(frame: frame)), payload: payload)] + discovered
@@ -305,6 +311,9 @@ final class HostSession {
         let format = try frameFormat(p.format, binary: o.binaryFrames)
         let fps = Double(p.fps ?? o.scene.fps)
         guard fps > 0 else { throw bad("fps must be > 0") }
+        guard fps.isFinite, fps <= 1000 else { throw bad("fps must be ≤ 1000") }
+        if let f = p.from, !f.isFinite { throw bad("'from' must be finite") }
+        if let t = p.to, !t.isFinite { throw bad("'to' must be finite") }
         let from = max(0, p.from ?? 0)
         let to = min(p.to ?? o.scene.duration, o.scene.duration)
         var out: [HostPacket] = []
@@ -421,7 +430,7 @@ final class HostSession {
 
     private func still(_ id: Int, _ p: HostParams) throws -> [HostPacket] {
         let o = try requireOpen()
-        guard let t = p.t, t.isFinite else { throw bad("still needs a finite 't'") }
+        guard let t = p.t, t.isFinite, abs(t) <= Self.maxTime else { throw bad("still needs a finite 't' (|t| ≤ \(Int(Self.maxTime)) s)") }
         guard let path = p.path, !path.isEmpty else { throw bad("still needs 'path'") }
         let format = p.format ?? "png"
         guard format == "png" || format == "jpeg" else { throw bad("still format must be png or jpeg") }
@@ -541,6 +550,14 @@ final class HostSession {
                          ready.breakdown.isEmpty ? (ready.cacheHit ? "cache hit" : "synthesized") : ready.breakdown,
                          ready.path ?? "-"), stderr)
             emit(HostPacket(.audio(path: ready.path, loudness: ready.loudness)))
+            if !ready.degraded.isEmpty {
+                let shown = ready.degraded.prefix(3).joined(separator: "; ")
+                let more = ready.degraded.count > 3 ? " (+\(ready.degraded.count - 3) more)" : ""
+                let message = "audio: \(ready.degraded.count) sound(s) missing from the preview mix — \(shown)\(more). "
+                    + "Exports retry them; reopen the scene once fixed."
+                fputs("[swift-render serve] \(message)\n", stderr)
+                emit(HostPacket(.warning(message)))
+            }
             if captionsChanged { emit(HostPacket(.infoChanged(o.info))) }
         case .failure(let error):
             fputs("[swift-render serve] audio \(name) failed: \(error)\n", stderr)

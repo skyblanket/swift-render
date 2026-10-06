@@ -164,6 +164,35 @@ final class HostTests: XCTestCase {
         XCTAssertEqual(out[3].message.result?.frame?.t, 0.7)
     }
 
+    /// The surviving frame renders at its arrival position: it must not see a later
+    /// request's state, and a frame queued before `shutdown` is still rendered.
+    func testBatchKeepsArrivalOrderForTheSurvivingFrame() throws {
+        let s = session(try tempProject())
+        _ = try result(call(s, 1, .open, HostParams(scene: "KnobBox", fps: 30)))
+        var out: [HostPacket] = []
+        s.process([HostRequest(id: 20, method: .frame, params: HostParams(t: 0.5, maxWidth: 160)),
+                   HostRequest(id: 21, method: .list),
+                   HostRequest(id: 22, method: .shutdown)]) { out.append($0) }
+        XCTAssertEqual(out.map { $0.message.id }, [20, 21, 22], "responses in arrival order")
+        XCTAssertEqual(out[0].message.result?.frame?.t, 0.5, "the frame before shutdown renders")
+        XCTAssertTrue(s.shutdownRequested)
+    }
+
+    func testHugeCreditsAndTimesAreRejectedNotFatal() throws {
+        let s = session(try tempProject())
+        _ = try result(call(s, 1, .open, HostParams(scene: "TimelineDemo", fps: 30)))
+        // t beyond Int range once multiplied by fps used to trap the host.
+        for t in [1e18, 1e300, -1e18] {
+            XCTAssertEqual(errorCode(call(s, 2, .frame, HostParams(t: t, maxWidth: 160))), HostError.Code.badParams, "t=\(t)")
+        }
+        // Credits saturate instead of overflowing.
+        _ = try result(call(s, 3, .stream, HostParams(maxWidth: 160, from: 0, to: 1, credits: 0)))
+        _ = try result(call(s, 4, .credit, HostParams(credits: 2, streamID: 3)))
+        _ = try result(call(s, 5, .credit, HostParams(credits: Int.max, streamID: 3)))
+        XCTAssertTrue(s.hasStreamWork)
+        _ = try result(call(s, 6, .cancel, HostParams(streamID: 3)))
+    }
+
     func testHostFrameMatchesRecorderPNG() throws {
         let size = CGSize(width: 1920, height: 1080)
         let scene = try PreparedScene(name: "TimelineDemo", runner: SceneRunner(TimelineDemo.self), duration: 9.9,

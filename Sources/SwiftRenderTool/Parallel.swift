@@ -1,5 +1,6 @@
 import Foundation
 import SwiftRender
+import SwiftRenderKit
 
 /// `render --jobs N`: split the frame range into N contiguous chunks, render each in
 /// its own `swift-render` process (ImageRenderer is main-thread bound, so parallelism
@@ -13,29 +14,93 @@ func resolveJobs(_ raw: String) -> Int {
     if raw == "auto" { return max(2, ProcessInfo.processInfo.activeProcessorCount / 2) }
     return max(1, Int(raw) ?? 1)
 }
+/// Arguments the `--jobs` driver forwards to each chunk process: everything after
+/// `<subcommand> <scene>` except the options the driver owns (`--jobs`, `--out`,
+/// `--range`, `--open`). Built from the argv the command was *invoked with* — not
+/// `CommandLine.arguments`, which differs when a host calls `SwiftRenderCommand.main(arguments:)`.
+func chunkPassthrough(_ argv: [String]) -> [String] {
+    var passthrough: [String] = []
+    let tail = Array(argv.dropFirst(3))
+    var i = 0
+    while i < tail.count {
+        switch tail[i] {
+        case "--jobs", "--out", "--range": i += 2
+        case "--open": i += 1
+        default: passthrough.append(tail[i]); i += 1
+        }
+    }
+    return passthrough
+}
+
+/// Sums the chunks' `--progress json` lines into one progress stream for the whole render.
+private final class ChunkProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done: [Int]
+    private var logs: [Data]
+    private var partial: [Data]
+    private var lastEmitted = -1
+    let total: Int
+    let start = Date()
+    let emit: Bool
+
+    init(chunks: Int, total: Int, emit: Bool) {
+        done = Array(repeating: 0, count: chunks)
+        logs = Array(repeating: Data(), count: chunks)
+        partial = Array(repeating: Data(), count: chunks)
+        self.total = total
+        self.emit = emit
+    }
+
+    /// Bytes from chunk `k`'s stderr: kept for error reports; progress lines are summed.
+    func feed(_ k: Int, _ data: Data) {
+        lock.lock()
+        logs[k].append(data)
+        partial[k].append(data)
+        var lines: [Data] = []
+        while let nl = partial[k].firstIndex(of: 0x0A) {
+            lines.append(partial[k][partial[k].startIndex..<nl])
+            partial[k] = Data(partial[k][(nl + 1)...])
+        }
+        var out: Data? = nil
+        for line in lines {
+            guard emit, let p = try? HostWire.decode(RenderProgressLine.self, line: line) else { continue }
+            done[k] = p.progress.frame
+            let sum = done.reduce(0, +)
+            guard sum != lastEmitted, sum % 10 == 0 || sum == total else { continue }
+            lastEmitted = sum
+            let fps = Double(sum) / max(1e-6, Date().timeIntervalSince(start))
+            if let encoded = try? HostWire.encode(RenderProgressLine(frame: sum, total: total, fps: (fps * 10).rounded() / 10)) {
+                out = (out ?? Data()) + encoded
+            }
+        }
+        lock.unlock()
+        if let out { FileHandle.standardError.write(out) }
+    }
+
+    func log(_ k: Int) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: logs[k], as: UTF8.self)
+    }
+}
+
 @MainActor
 func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
-                    audio: AudioSource, out: URL) async throws {
+                    audio: AudioSource, out: URL, argv: [String], progressJSON: Bool = false) async throws {
     let total = Int((duration * Double(fps)).rounded())
     let n = max(1, min(jobs, total / max(1, fps / 2)))   // keep chunks ≥ ~0.5 s
+    if OutputPath.isDirectory(out) {
+        throw OutputPathError("output path \(out.path) is a directory — refusing to replace it")
+    }
     let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("sr-jobs-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tmp) }
 
     // Forward every option except the ones this driver owns.
-    var passthrough: [String] = []
-    let argv = Array(CommandLine.arguments.dropFirst(3))
-    var i = 0
-    while i < argv.count {
-        switch argv[i] {
-        case "--jobs", "--out", "--range": i += 2
-        case "--open": i += 1
-        default: passthrough.append(argv[i]); i += 1
-        }
-    }
+    let passthrough = chunkPassthrough(argv)
     guard let exe = Bundle.main.executablePath else { throw NSError(domain: "jobs", code: 1) }
 
-    var procs: [(Process, URL, URL)] = []
+    let progress = ChunkProgress(chunks: n, total: total, emit: progressJSON)
+    var procs: [(Process, Pipe, URL)] = []
     for k in 0..<n {
         let a = total * k / n, b = total * (k + 1) / n
         let chunk = tmp.appendingPathComponent(String(format: "chunk%03d.mp4", k))
@@ -46,19 +111,24 @@ func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
             "--out", chunk.path,
         ]
         p.standardOutput = FileHandle.nullDevice
-        let log = tmp.appendingPathComponent("chunk\(k).log")
-        FileManager.default.createFile(atPath: log.path, contents: nil)
-        p.standardError = try FileHandle(forWritingTo: log)
+        let err = Pipe()
+        err.fileHandleForReading.readabilityHandler = { h in
+            let d = h.availableData
+            if !d.isEmpty { progress.feed(k, d) }
+        }
+        p.standardError = err
         try p.run()
-        procs.append((p, log, chunk))
+        procs.append((p, err, chunk))
     }
     print("[swift-render] \(n) jobs × ~\(total / n) frames")
-    for (k, (p, log, _)) in procs.enumerated() {
+    for (k, (p, err, _)) in procs.enumerated() {
         p.waitUntilExit()
+        err.fileHandleForReading.readabilityHandler = nil
+        let rest = err.fileHandleForReading.readDataToEndOfFile()
+        if !rest.isEmpty { progress.feed(k, rest) }
         guard p.terminationStatus == 0 else {
-            let msg = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
             throw NSError(domain: "jobs", code: Int(p.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: "chunk \(k) failed: \(msg.suffix(400))"])
+                NSLocalizedDescriptionKey: "chunk \(k) failed: \(progress.log(k).suffix(400))"])
         }
     }
 

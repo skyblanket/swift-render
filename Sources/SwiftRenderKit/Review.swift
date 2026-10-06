@@ -107,8 +107,12 @@ public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
         return a
     }
 
+    /// "MM:SS.ss". Safe for any input: non-finite times print as "--:--.--", and huge
+    /// ones are clamped (Int(t) would trap past Int.max).
     public static func format(_ t: Double) -> String {
-        String(format: "%02d:%05.2f", Int(t) / 60, t.truncatingRemainder(dividingBy: 60))
+        guard t.isFinite else { return "--:--.--" }
+        let s = min(max(t, -359_999.99), 359_999.99)
+        return String(format: "%02d:%05.2f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60))
     }
 }
 
@@ -120,11 +124,18 @@ public struct ReviewCanvas: Codable, Sendable, Equatable, Hashable {
 }
 
 public enum ReviewAttachmentPaths {
-    /// `.swift-render/attachments/<commentID>-before.png` (project-relative).
-    public static func before(_ commentID: String) -> String { ".swift-render/attachments/\(commentID)-before.png" }
+    /// Project-relative directory every attachment file lives in.
+    public static let directory = ".swift-render/attachments/"
+
+    /// `.swift-render/attachments/<commentID>-before.png` (project-relative). Ids come
+    /// from shared review files, so they are made file-safe: the result is always a
+    /// direct child of the attachments directory.
+    public static func before(_ commentID: String) -> String {
+        directory + "\(ReviewIDs.fileSafe(commentID))-before.png"
+    }
     /// `.swift-render/attachments/<commentID>-after-<replyID>.png` (project-relative).
     public static func after(_ commentID: String, reply replyID: String) -> String {
-        ".swift-render/attachments/\(commentID)-after-\(replyID).png"
+        directory + "\(ReviewIDs.fileSafe(commentID))-after-\(ReviewIDs.fileSafe(replyID)).png"
     }
 }
 
@@ -146,6 +157,24 @@ public enum ReviewIDs {
     /// Short random id: "c" + 8 hex chars. Collisions within one scene are vanishingly rare.
     public static func make(_ prefix: String) -> String {
         prefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).lowercased()
+    }
+
+    /// Ids that are safe to use in a file name: 1–64 of `[A-Za-z0-9_-]`. Everything
+    /// `make` produces qualifies; a hand-edited or hostile review file may not.
+    public static func isValid(_ id: String) -> Bool {
+        let s = id.unicodeScalars
+        return (1...64).contains(s.count) && s.allSatisfy {
+            ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" || $0 == "-"
+        }
+    }
+
+    /// `id` when valid; otherwise `x` + a stable 16-hex-digit hash of it, so a crafted
+    /// id like "../../x" can never become a path.
+    public static func fileSafe(_ id: String) -> String {
+        if isValid(id) { return id }
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325          // FNV-1a
+        for b in id.utf8 { h = (h ^ UInt64(b)) &* 0x0000_0100_0000_01b3 }
+        return "x" + String(format: "%016llx", h)
     }
 }
 
@@ -207,7 +236,7 @@ public struct ReviewStore: Sendable {
     @discardableResult
     public func mutate<R>(scene: String, _ body: (inout ReviewFile) throws -> R) throws -> R {
         try project.ensureDotDir()
-        let lockURL = project.reviewsDir.appendingPathComponent(".\(scene).lock")
+        let lockURL = project.reviewsDir.appendingPathComponent(".\(Project.fileComponent(scene: scene)).lock")
         let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o644)
         guard fd >= 0 else { throw ReviewError.io("cannot open lock \(lockURL.path)") }
         defer { close(fd) }
@@ -249,12 +278,40 @@ public struct ReviewStore: Sendable {
             guard let i = file.comments.firstIndex(where: { $0.id == id }) else {
                 throw ReviewError.notFound(scene: scene, id: id)
             }
-            file.comments[i].status = status
-            file.comments[i].assignee = status == .inProgress ? author : nil
-            if let resolution { file.comments[i].resolution = resolution }
-            file.comments[i].updatedAt = Date()
+            try Self.apply(status, by: author, resolution: resolution, to: &file.comments[i])
             return file.comments[i]
         }
+    }
+
+    /// Like `setStatus`, but `check` runs on the comment as it is *under the lock*, right
+    /// before the change — so a decision made from an earlier read (an agent's claim or
+    /// resolve after a long render) can't overwrite what a person did meanwhile.
+    /// `check` throws to refuse.
+    @discardableResult
+    public func transition(scene: String, id: String, to status: ReviewStatus, by author: ReviewAuthor? = nil,
+                           resolution: String? = nil,
+                           check: (ReviewComment) throws -> Void) throws -> ReviewComment {
+        try mutate(scene: scene) { file in
+            guard let i = file.comments.firstIndex(where: { $0.id == id }) else {
+                throw ReviewError.notFound(scene: scene, id: id)
+            }
+            try check(file.comments[i])
+            try Self.apply(status, by: author, resolution: resolution, to: &file.comments[i])
+            return file.comments[i]
+        }
+    }
+
+    /// A status change. A human's sign-off (`acceptedBy`) is about one specific
+    /// resolution, so it is cleared whenever the status changes (reopen, claim, wontFix)
+    /// or a different resolution replaces the accepted one.
+    private static func apply(_ status: ReviewStatus, by author: ReviewAuthor?, resolution: String?,
+                              to c: inout ReviewComment) throws {
+        let previous = c.status
+        if status != previous || (resolution != nil && resolution != c.resolution) { c.acceptedBy = nil }
+        c.status = status
+        c.assignee = status == .inProgress ? author : nil
+        if let resolution { c.resolution = resolution }
+        c.updatedAt = Date()
     }
 
     @discardableResult
@@ -390,16 +447,48 @@ public extension ReviewStore {
     /// Find by exact id, else by a unique prefix (≥ 4 characters) across all scenes.
     func resolve(id: String) throws -> ReviewEntry {
         if let hit = find(id: id) { return ReviewEntry(scene: hit.scene, comment: hit.comment) }
-        guard id.count >= 4 else { throw ReviewError.notFound(scene: "*", id: id) }
+        func notFound() -> Error {
+            let broken = unreadableScenes()
+            guard !broken.isEmpty else { return ReviewError.notFound(scene: "*", id: id) }
+            return ReviewError.io("no comment \(id) in the readable review files; unreadable: "
+                                  + broken.map { "\($0.scene) (\($0.error))" }.joined(separator: "; "))
+        }
+        guard id.count >= 4 else { throw notFound() }
         let matches = all().filter { $0.comment.id.hasPrefix(id) }
         if matches.count == 1 { return ReviewEntry(scene: matches[0].scene, comment: matches[0].comment) }
-        if matches.isEmpty { throw ReviewError.notFound(scene: "*", id: id) }
+        if matches.isEmpty { throw notFound() }
         throw ReviewError.io("ambiguous id \(id): " + matches.map(\.comment.id).joined(separator: ", "))
     }
 
-    /// Absolute URL for a project-relative attachment path.
+    /// Absolute URL for a project-relative attachment path (for reading/displaying).
+    /// Anything that writes or deletes uses `containedAttachmentURL` instead.
     func url(forAttachment path: String) -> URL {
-        path.hasPrefix("/") ? URL(fileURLWithPath: path) : project.root.appendingPathComponent(path)
+        path.hasPrefix("/") ? URL(fileURLWithPath: path) : project.root.appendingPathComponent(path).standardizedFileURL
+    }
+
+    /// The file an attachment path names, only when it is a plain file name directly
+    /// inside `.swift-render/attachments/` (no "..", no subdirectories, no absolute
+    /// paths, no symlinked parent leading elsewhere); nil otherwise. Review files are
+    /// shared through git, so their paths are untrusted.
+    func containedAttachmentURL(_ path: String) -> URL? {
+        let prefix = ReviewAttachmentPaths.directory
+        guard path.hasPrefix(prefix) else { return nil }
+        let name = String(path.dropFirst(prefix.count))
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else { return nil }
+        let dir = project.attachmentsDir
+        let target = dir.appendingPathComponent(name)
+        let parent = target.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        guard parent == dir.resolvingSymlinksInPath().standardizedFileURL.path else { return nil }
+        return target
+    }
+
+    /// Review files that exist but can't be read (merge conflict markers, a status from
+    /// a newer version, a hand edit) — `all()` and `find()` skip them, so callers that
+    /// list comments should say so instead of reporting "no comments".
+    func unreadableScenes() -> [(scene: String, error: String)] {
+        scenes().compactMap { scene in
+            do { _ = try load(scene: scene); return nil } catch { return (scene, "\(error)") }
+        }
     }
 
     /// Adds an attachment to the comment itself. A comment has one `.before` frame,
@@ -420,8 +509,13 @@ public extension ReviewStore {
         try delete(scene: scene, id: id)
         guard let comment else { return }
         let paths = (comment.attachments ?? []).map(\.path) + comment.replies.flatMap { $0.attachments.map(\.path) }
-        for p in paths where p.hasPrefix(".swift-render/attachments/") {
-            try? FileManager.default.removeItem(at: url(forAttachment: p))
+        for p in paths {
+            // Only regular files directly inside attachments/ — never a directory, never
+            // anything a crafted path ("attachments/../../x") points at.
+            guard let target = containedAttachmentURL(p),
+                  let type = (try? FileManager.default.attributesOfItem(atPath: target.path))?[.type] as? FileAttributeType,
+                  type == .typeRegular else { continue }
+            try? FileManager.default.removeItem(at: target)
         }
     }
 

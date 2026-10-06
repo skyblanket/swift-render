@@ -40,8 +40,12 @@ final class ToolBox {
 
     func has(_ name: String) -> Bool { Self.handlers[name] != nil }
 
-    func call(_ name: String, _ arguments: JSONObject) -> ToolResult {
+    /// Runs one tool. `cancel` stops any build/render child the call starts (MCP
+    /// `notifications/cancelled`, server shutdown).
+    func call(_ name: String, _ arguments: JSONObject, cancel: ProcessCancel? = nil) -> ToolResult {
         guard let handler = Self.handlers[name] else { return .error("unknown tool \(name)") }
+        cli?.cancel = cancel
+        defer { cli?.cancel = nil }
         do { return try handler(self)(Args(arguments)) }
         catch { return .error(String(describing: error)) }
     }
@@ -51,6 +55,11 @@ final class ToolBox {
     var catalog: [JSONObject] {
         let scene: JSONObject = ["type": "string", "description": "Scene name, e.g. \"TimelineDemo\" (see list_scenes)."]
         let id: JSONObject = ["type": "string", "description": "Comment id, e.g. \"c1a2b3c4d\" (a unique prefix works)."]
+        let onComment: JSONObject = ["type": "string",
+                                     "description": "Optional comment id: render on that comment's canvas (aspect, size, "
+                                        + "pinned duration) — the same composition get_comment and resolve_comment show."]
+        let aspect: JSONObject = ["type": "string", "enum": ["16:9", "9:16", "1:1"],
+                                  "description": "Optional canvas aspect (default: the scene's own). Ignored with `comment`."]
         func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
                   required: [String] = [], readOnly: Bool = false) -> JSONObject {
             var schema: JSONObject = ["type": "object", "properties": props]
@@ -73,15 +82,16 @@ final class ToolBox {
                   "times": ["type": "array", "items": ["type": "number"], "minItems": 1, "maxItems": 8,
                             "description": "Seconds from scene start."] as JSONObject,
                   "width": ["type": "integer", "minimum": 160, "maximum": 1280,
-                            "description": "Returned image width in px (default 960, max 1280)."] as JSONObject],
+                            "description": "Returned image width in px (default 960, max 1280)."] as JSONObject,
+                  "comment": onComment, "aspect": aspect],
                  required: ["scene", "times"], readOnly: true),
             tool("contact_sheet", "Contact sheet",
                  "A grid of thumbnails across the whole scene — the fastest way to see its overall shape.",
-                 ["scene": scene], required: ["scene"], readOnly: true),
+                 ["scene": scene, "comment": onComment, "aspect": aspect], required: ["scene"], readOnly: true),
             tool("check_scene", "Check scene",
                  "Run `check`: contact sheet + blank-frame scan + audio report (loudness, clipping, house-rule warnings "
                  + "such as whoosh/riser sweeps). Run before finishing.",
-                 ["scene": scene], required: ["scene"], readOnly: true),
+                 ["scene": scene, "comment": onComment, "aspect": aspect], required: ["scene"], readOnly: true),
             tool("build", "Build",
                  "Build the project's CLI product now and return compiler diagnostics (file:line:col). "
                  + "Other tools also rebuild automatically when sources changed.", readOnly: true),
@@ -154,18 +164,34 @@ final class ToolBox {
         return url
     }
 
-    /// Renders one frame through the CLI on the comment's canvas.
-    private func renderFrame(scene: String, t: Double, comment: ReviewComment? = nil, scale: Double? = nil,
-                             to url: URL) throws {
-        let (_, cli) = try requireProject()
-        try? FileManager.default.removeItem(at: url)
-        var args = ["frame", scene, "--at", fmt(t), "--out", url.path]
+    /// CLI options that put a render on a comment's canvas (size + fps, else its aspect,
+    /// plus a pinned duration), or on `aspect`; empty = the scene's own canvas.
+    private func canvasArgs(comment: ReviewComment?, aspect: String? = nil) -> [String] {
+        var args: [String] = []
         if let canvas = comment?.canvas {
             args += ["--width", "\(canvas.width)", "--height", "\(canvas.height)", "--fps", "\(canvas.fps)"]
-        } else if let aspect = comment?.context?["aspect"] {
+        } else if let aspect = comment?.context?["aspect"] ?? aspect {
             args += ["--aspect", aspect]
         }
         if let pinned = comment?.context?["duration"] { args += ["--duration", pinned] }
+        return args
+    }
+
+    /// Width in px of the canvas a render will use (for scaling previews).
+    private func canvasWidth(comment: ReviewComment?, aspect: String?) -> Double {
+        if let w = comment?.canvas?.width { return Double(w) }
+        switch comment?.context?["aspect"] ?? aspect {
+        case "9:16", "1:1": return 1080
+        default: return 1920
+        }
+    }
+
+    /// Renders one frame through the CLI on the comment's canvas (or `aspect`).
+    private func renderFrame(scene: String, t: Double, comment: ReviewComment? = nil, aspect: String? = nil,
+                             scale: Double? = nil, to url: URL) throws {
+        let (_, cli) = try requireProject()
+        try? FileManager.default.removeItem(at: url)
+        var args = ["frame", scene, "--at", fmt(t), "--out", url.path] + canvasArgs(comment: comment, aspect: aspect)
         if let scale, scale < 1 { args += ["--scale", fmt(scale)] }
         try cli.runChecked(args)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -216,7 +242,7 @@ final class ToolBox {
 
     private func sceneInfo(_ a: Args) throws -> ToolResult {
         let (_, cli) = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
         let info = try cli.sceneInfo(scene)
         var lines = [String(format: "%@ · %@ · %.2fs · %d×%d @ %dfps", info.name, info.kind.rawValue, info.duration,
                             info.width, info.height, info.fps)]
@@ -246,29 +272,51 @@ final class ToolBox {
         return out
     }
 
+    /// The comment named by an optional `comment` argument (its scene must match `scene`)
+    /// and the optional `aspect`.
+    private func canvasChoice(_ a: Args, scene: String) throws -> (comment: ReviewComment?, aspect: String?) {
+        var comment: ReviewComment? = nil
+        if let cid = a.optionalString("comment") {
+            let e = try entry(cid)
+            guard e.scene == scene else {
+                throw ToolError("comment \(e.comment.id) is on \(e.scene), not \(scene)")
+            }
+            comment = e.comment
+        }
+        let aspect = a.optionalString("aspect")
+        if let aspect, !["16:9", "9:16", "1:1"].contains(aspect) {
+            throw ToolError("aspect must be 16:9, 9:16 or 1:1 (got \(aspect))")
+        }
+        return (comment, aspect)
+    }
+
     private func renderFrames(_ a: Args) throws -> ToolResult {
         _ = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
         let times = try a.doubles("times")
         guard !times.isEmpty else { throw ToolError("times must list at least one time in seconds") }
         guard times.count <= 8 else { throw ToolError("at most 8 times per call (got \(times.count))") }
         let width = min(1280, max(160, a.int("width") ?? 960))
+        let (comment, aspect) = try canvasChoice(a, scene: scene)
+        let canvas = canvasWidth(comment: comment, aspect: aspect)
         var out = ToolResult()
         for t in times {
             let url = try scratch("frame-\(scene)-\(fmt(t)).png")
-            // Render near the target size: much faster than full 1080p, same layout (scenes use 1080p points).
-            try renderFrame(scene: scene, t: t, scale: Double(width) / 1920, to: url)
-            out.text(String(format: "%@ at t=%.2fs (%@)", scene, t, ReviewComment.format(t)))
-            out.png(try ReviewImage.prepare(url, maxWidth: width))
+            // Render near the target size: much faster than full size, same layout (scenes lay out in canvas points).
+            try renderFrame(scene: scene, t: t, comment: comment, aspect: aspect, scale: Double(width) / canvas, to: url)
+            out.text(String(format: "%@ at t=%.2fs (%@)", scene, t, ReviewComment.format(t))
+                     + (comment.map { " on comment \($0.id)'s canvas" } ?? aspect.map { " at \($0)" } ?? ""))
+            out.png(try ReviewImage.prepare(url, region: comment?.region, maxWidth: width))
         }
         return out
     }
 
     private func contactSheet(_ a: Args) throws -> ToolResult {
         let (_, cli) = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
+        let (comment, aspect) = try canvasChoice(a, scene: scene)
         let url = try scratch("contact-\(scene).png")
-        try cli.runChecked(["contact", scene, "--out", url.path])
+        try cli.runChecked(["contact", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect))
         var out = ToolResult()
         out.text("\(scene) contact sheet (cells are evenly spaced; each is labelled with its time)")
         out.png(try ReviewImage.prepare(url, maxWidth: 1280))
@@ -277,9 +325,10 @@ final class ToolBox {
 
     private func checkScene(_ a: Args) throws -> ToolResult {
         let (_, cli) = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
+        let (comment, aspect) = try canvasChoice(a, scene: scene)
         let url = try scratch("check-\(scene).png")
-        try cli.runChecked(["check", scene, "--out", url.path])
+        try cli.runChecked(["check", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect))
         let report = (try? String(contentsOf: url.deletingPathExtension().appendingPathExtension("txt"), encoding: .utf8))
             ?? "(no report written)"
         var out = ToolResult()
@@ -310,6 +359,12 @@ final class ToolBox {
                      + (a.optionalString("scene").map { " on \($0)" } ?? "") + ".")
         } else {
             out.text("\(entries.count) comment(s):\n\n" + entries.map { describe($0, full: false) }.joined(separator: "\n\n"))
+        }
+        // A review file that doesn't decode is skipped above — say so rather than "nothing to do".
+        let broken = store.unreadableScenes()
+        if !broken.isEmpty {
+            out.text("warning: unreadable review file(s), their comments are not listed — "
+                     + broken.map { "\($0.scene): \($0.error)" }.joined(separator: "; "))
         }
         return out
     }
@@ -343,7 +398,7 @@ final class ToolBox {
         if !context.isEmpty { out.text(context.joined(separator: "\n")) }
 
         do {
-            let url = try scratch("comment-\(c.id).png")
+            let url = try scratch("comment-\(ReviewIDs.fileSafe(c.id)).png")
             try renderFrame(scene: e.scene, t: c.t, comment: c, to: url)
             out.text("Current frame at \(c.timecode)" + (c.region != nil ? " — the pink box is the commenter's region" : "")
                      + (c.end != nil ? " (start of the commented range)" : ""))
@@ -364,7 +419,15 @@ final class ToolBox {
         if e.comment.status == .inProgress, let who = e.comment.assignee, who.kind == .human {
             throw ToolError("\(e.comment.id) is being worked on by \(who.name) — leave it")
         }
-        let claimed = try store.setStatus(scene: e.scene, id: e.comment.id, .inProgress, by: .agent(agentName))
+        // Re-checked under the review lock: a person may have claimed or closed it since the read above.
+        let claimed = try store.transition(scene: e.scene, id: e.comment.id, to: .inProgress, by: .agent(agentName)) { now in
+            guard now.status.isActive else {
+                throw ToolError("\(now.id) is \(now.status.rawValue) — only open or inProgress comments can be claimed")
+            }
+            if now.status == .inProgress, let who = now.assignee, who.kind == .human {
+                throw ToolError("\(now.id) is being worked on by \(who.name) — leave it")
+            }
+        }
         var lines = ["claimed \(claimed.id) (\(e.scene) \(claimed.timecode)) → inProgress, assignee \(agentName)"]
         let existing = claimed.beforeAttachment.map { store.url(forAttachment: $0.path) }
         if let existing, FileManager.default.fileExists(atPath: existing.path) {
@@ -398,7 +461,14 @@ final class ToolBox {
         }
         var updated = try store.reply(scene: e.scene, id: e.comment.id, reply)
         let reopen = (a.bool("reopen") ?? false) && updated.status == .inProgress
-        if reopen { updated = try store.setStatus(scene: e.scene, id: e.comment.id, .open) }
+        if reopen {
+            updated = try store.transition(scene: e.scene, id: e.comment.id, to: .open) { now in
+                guard now.status == .inProgress, now.assignee?.kind != .human else {
+                    throw ToolError("reply posted, but \(now.id) is \(now.status.rawValue)"
+                                    + (now.assignee.map { " (assignee \($0.name))" } ?? "") + " now — not reopened")
+                }
+            }
+        }
         var out = ToolResult()
         out.text("replied \(reply.id) on \(updated.id) (status \(reopen ? "back to" : "stays") \(updated.status.rawValue))"
                  + (reply.attachments.first.map { "; frame → \($0.path)" } ?? ""))
@@ -410,6 +480,9 @@ final class ToolBox {
         let store = try requireStore()
         let e = try entry(try a.string("id"))
         let summary = try a.string("summary")
+        guard e.comment.status.isActive else {
+            throw ToolError("\(e.comment.id) is \(e.comment.status.rawValue) — only open or inProgress comments can be resolved")
+        }
         var reply = ReviewReply(author: .agent(agentName), body: summary)
         let rel = ReviewAttachmentPaths.after(e.comment.id, reply: reply.id)
         let url = store.url(forAttachment: rel)
@@ -417,8 +490,17 @@ final class ToolBox {
         try renderFrame(scene: e.scene, t: e.comment.t, comment: e.comment, to: url)
         reply.attachments = [ReviewAttachment(kind: .after, path: rel, t: e.comment.t)]
         try store.reply(scene: e.scene, id: e.comment.id, reply)
-        let done = try store.setStatus(scene: e.scene, id: e.comment.id, .resolved, by: .agent(agentName),
-                                       resolution: summary)
+        // The render above can take a while (rebuild): if a person reopened, resolved or took
+        // the comment meanwhile, their change stands — the summary and frame stay as a reply.
+        let done = try store.transition(scene: e.scene, id: e.comment.id, to: .resolved, by: .agent(agentName),
+                                        resolution: summary) { now in
+            let stillOurs = now.status == .open || (now.status == .inProgress && now.assignee?.kind != .human)
+            guard stillOurs, now.status == e.comment.status else {
+                throw ToolError("\(now.id) changed while rendering (now \(now.status.rawValue)"
+                                + (now.assignee.map { ", assignee \($0.name)" } ?? "")
+                                + ") — your summary and after frame are posted as a reply; status left as is")
+            }
+        }
         var out = ToolResult()
         out.text("resolved \(done.id) (\(e.scene) \(done.timecode)); after frame → \(rel)")
         out.png(try ReviewImage.prepare(url, region: e.comment.region, maxWidth: 960))
@@ -429,10 +511,26 @@ final class ToolBox {
 
     private func setKnobs(_ a: Args) throws -> ToolResult {
         let (project, cli) = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
         guard let values = a.raw["values"] as? JSONObject else { throw ToolError("values must be an object") }
+        // Know the scene before touching the file system: a typo must not leave an orphan
+        // knob file and report success.
+        var info: SceneInfo? = nil
+        var notes: [String] = []
+        do {
+            info = try cli.sceneInfo(scene)
+        } catch let e as ToolError where e.description.contains("Unknown scene") {
+            throw ToolError("unknown scene '\(scene)' — see list_scenes; nothing was written")
+        } catch {
+            notes.append("note: could not confirm \(scene) exists (\(String(describing: error).prefix(200)))")
+        }
         let url = project.knobsURL(scene: scene)
-        var current = (a.bool("reset") ?? false) ? [:] : KnobFile.load(url)
+        var current: [String: KnobValue]
+        do {
+            current = (a.bool("reset") ?? false) ? [:] : try KnobFile.loadStrict(url)
+        } catch {
+            throw ToolError("\(error) (pass reset: true only once the file is fixed or removed)")
+        }
         for (k, v) in values {
             switch v {
             case is NSNull: current[k] = nil
@@ -446,7 +544,8 @@ final class ToolBox {
         var lines = ["\(scene) knob overrides (\(url.path.replacingOccurrences(of: project.root.path + "/", with: ""))):"]
         lines += current.keys.sorted().map { "  \($0) = \(knobText(current[$0]!))" }
         if current.isEmpty { lines.append("  (none — scene defaults)") }
-        if let info = try? cli.sceneInfo(scene) {
+        lines += notes
+        if let info {
             let known = Set(info.knobs.map(\.key))
             let unknown = values.keys.filter { !known.contains($0) && !(values[$0] is NSNull) }.sorted()
             if !unknown.isEmpty {
@@ -461,7 +560,7 @@ final class ToolBox {
 
     private func renderVideo(_ a: Args) throws -> ToolResult {
         let (project, cli) = try requireProject()
-        let scene = try a.string("scene")
+        let scene = try a.scene()
         let preview = a.bool("preview") ?? false
         let rel = "out/\(scene)\(preview ? "-preview" : "").mp4"
         let started = Date()
@@ -485,6 +584,16 @@ struct Args {
         return s
     }
 
+    /// A scene name: a Swift type name (letters, digits, `_`). Anything else — a path,
+    /// "../x" — is refused before it can reach a file name.
+    func scene(_ k: String = "scene") throws -> String {
+        let s = try string(k)
+        guard Project.isValidSceneName(s) else {
+            throw ToolError("'\(s.prefix(80))' is not a scene name (Swift type names only — see list_scenes)")
+        }
+        return s
+    }
+
     func optionalString(_ k: String) -> String? {
         if let s = raw[k] as? String { return s.isEmpty ? nil : s }
         if let n = raw[k] as? NSNumber { return n.stringValue }
@@ -502,18 +611,28 @@ struct Args {
         return nil
     }
 
+    /// Largest time in seconds a tool accepts (a day).
+    static let maxSeconds = 86_400.0
+
     /// A number array — also tolerates a single number or "1, 2.5" (models sometimes send those).
+    /// Every value must be a finite time in 0…86400 s ("nan", "inf", 1e400 are refused).
     func doubles(_ k: String) throws -> [Double] {
+        func seconds(_ d: Double?) throws -> Double {
+            guard let d, d.isFinite, d >= 0, d <= Self.maxSeconds else {
+                throw ToolError("\(k) must be finite times in seconds, 0…\(Int(Self.maxSeconds))")
+            }
+            return d
+        }
         switch raw[k] {
         case let list as [Any]:
             return try list.map {
-                if let n = $0 as? NSNumber { return n.doubleValue }
-                if let s = $0 as? String, let d = Double(s) { return d }
+                if let n = $0 as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return try seconds(n.doubleValue) }
+                if let s = $0 as? String { return try seconds(Double(s.trimmingCharacters(in: .whitespaces))) }
                 throw ToolError("\(k) must be numbers (seconds)")
             }
-        case let n as NSNumber: return [n.doubleValue]
+        case let n as NSNumber: return [try seconds(n.doubleValue)]
         case let s as String:
-            return s.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            return try s.split(separator: ",").map { try seconds(Double($0.trimmingCharacters(in: .whitespaces))) }
         default: throw ToolError("missing required argument '\(k)'")
         }
     }

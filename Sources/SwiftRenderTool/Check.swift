@@ -253,6 +253,7 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
     let project = Project.discover()
     let root = project?.root ?? packageRoot
     let dir = project?.config.scenesDir ?? "Sources/SwiftRenderScenes"
+    let cli = project?.config.product ?? "swift-render"     // `launch` in a Launch/ package
     let url = root.appendingPathComponent(dir).appendingPathComponent("\(name).swift")
     if FileManager.default.fileExists(atPath: url.path) {
         throw NSError(domain: "new", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(url.path) already exists"])
@@ -266,9 +267,9 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
 
     /// \(name) — one line on what this piece is.
     ///
-    ///   swift run swift-render check \(name)             # contact sheet + audio report
-    ///   swift run swift-render render \(name) --preview --open
-    ///   swift run swift-render render \(name) --out out/\(name.lowercased()).mp4
+    ///   swift run \(cli) check \(name)             # contact sheet + audio report
+    ///   swift run \(cli) render \(name) --preview --open
+    ///   swift run \(cli) render \(name) --out out/\(name.lowercased()).mp4
     public struct \(name): \(proto) {
         public static let defaultDuration: Double = 8.0
 
@@ -283,8 +284,8 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
                 chordPad(.minor7(.a3), at: 0, duration: bar * 2)
                 chordPad(.major7(.f3), at: bar * 2, duration: duration - bar * 2)
                 arpeggio(.minor7(.a4), from: bar, to: bar * 2, step: beat / 2)
-                crashes(at: cuts)
-                boom(at: cuts[2], amp: 0.6)
+                cuts.flatMap { thump(at: $0, amp: 0.45) }   // hard cuts on the bar
+                swell(.a3, at: cuts[2] - 1.5, duration: 1.5)
             }
         }
 
@@ -296,7 +297,7 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
                     Clip(bar) { l in card("\(name.uppercased())", l) }
                     Clip(bar) { l in card("every frame", l) }.transition(.fade(0.3))
                     Clip(bar) { l in card("is a function of t", l) }.transition(.slide(0.4, from: .trailing))
-                    Clip(duration) { l in card("render it.", l) }.transition(.flash())   // runs to the end; Timeline trims
+                    Clip(duration) { l in card("render it.", l) }.transition(.fade(0.5))   // runs to the end; Timeline trims
                 }
             }
             .opacity(1 - fade)

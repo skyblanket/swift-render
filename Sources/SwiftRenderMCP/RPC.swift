@@ -1,9 +1,13 @@
 import Foundation
+import SwiftRenderKit
 
 // MARK: - MCP over stdio (JSON-RPC 2.0, one message per line)
 //
 // Hand-written on purpose: the surface is four methods, and a dependency-free
-// server builds in seconds. Requests are handled one at a time, in order.
+// server builds in seconds. `tools/call` (and anything unusual) runs one at a time,
+// in order, on a worker (see main.swift); `initialize`, `ping` and `tools/list` are
+// answered at once, and `notifications/cancelled` stops the matching call — so a
+// hung render never makes the server unresponsive.
 
 typealias JSONObject = [String: Any]
 
@@ -48,8 +52,11 @@ final class MCPServer {
 
     init(tools: ToolBox, version: String) { self.tools = tools; self.version = version }
 
+    /// Answered on the reader thread, never queued behind a running tool call.
+    static let immediateMethods: Set<String> = ["initialize", "ping", "tools/list"]
+
     /// One input line → the response to write (object or batch array), or nil for notifications.
-    func handle(line: String) -> Any? {
+    func handle(line: String, cancel: ProcessCancel? = nil) -> Any? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
             return errorResponse(id: NSNull(), code: RPCCode.parseError, message: "Parse error")
@@ -58,13 +65,13 @@ final class MCPServer {
             guard !batch.isEmpty else {
                 return errorResponse(id: NSNull(), code: RPCCode.invalidRequest, message: "Invalid Request: empty batch")
             }
-            let replies = batch.compactMap { handle(message: $0) }
+            let replies = batch.compactMap { handle(message: $0, cancel: cancel) }
             return replies.isEmpty ? nil : replies
         }
-        return handle(message: obj)
+        return handle(message: obj, cancel: cancel)
     }
 
-    func handle(message: Any) -> JSONObject? {
+    func handle(message: Any, cancel: ProcessCancel? = nil) -> JSONObject? {
         guard let msg = message as? JSONObject else {
             return errorResponse(id: NSNull(), code: RPCCode.invalidRequest, message: "Invalid Request")
         }
@@ -79,6 +86,9 @@ final class MCPServer {
         // Notifications (no id) never get a response, whatever the method.
         guard let id else {
             if method == "notifications/initialized" { log("client initialized") }
+            if method == "notifications/cancelled" {
+                log("cancel requested for \((params["requestId"]).map { "\($0)" } ?? "?")")
+            }
             return nil
         }
 
@@ -98,7 +108,7 @@ final class MCPServer {
             }
             let args = params["arguments"] as? JSONObject ?? [:]
             let started = Date()
-            let result = tools.call(name, args)
+            let result = tools.call(name, args, cancel: cancel)
             log(String(format: "%@ %@ in %.2fs", name, result.isError ? "failed" : "ok", Date().timeIntervalSince(started)))
             return response(id: id, result: result.json)
         default:
@@ -120,7 +130,9 @@ final class MCPServer {
             swift-render renders SwiftUI scenes (pure functions of time) to video. Reviewers leave \
             timecoded, optionally region-boxed comments; you address them: list_comments → get_comment \
             (frame + region + clip source) → claim_comment → edit the scene's Swift → build → render_frames \
-            to look at the result → resolve_comment (or reply_comment with a question and leave it open).
+            with the comment id (same canvas as the note) to look at the result → resolve_comment (or \
+            reply_comment with a question and leave it open).
+            \(HouseRules.text)
             """,
         ]
     }

@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import SwiftRenderKit
 import SwiftUI
 
 /// Custom recorder built on AVAssetWriter + ImageRenderer.
@@ -88,12 +89,12 @@ public final class Recorder {
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) async throws {
         let applyFX = config.postFX && postFX
-        // Make sure parent dir exists, remove stale file
+        // Make sure parent dir exists, remove the stale file — never a directory.
+        try OutputPath.removeExistingFile(at: outputURL)
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try? FileManager.default.removeItem(at: outputURL)
 
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         let width = Int(config.outputSize.width), height = Int(config.outputSize.height)

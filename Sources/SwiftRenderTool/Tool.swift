@@ -66,10 +66,38 @@ struct CLIArgs {
     var json = false                // `list --json`
 }
 
+/// A command-line mistake: printed (with usage when `showUsage`) and exited with `code`.
+struct CLIUsageError: Error, CustomStringConvertible, Equatable {
+    var description: String
+    var code: Int32 = 64
+    var showUsage = false
+}
+
 func parseArgs(_ argv: [String]) -> CLIArgs {
+    do {
+        return try parseCLIArgs(argv)
+    } catch let e as CLIUsageError {
+        fputs(e.description + (e.description.hasSuffix("\n") ? "" : "\n"), stderr)
+        if e.showUsage { fputs("\n", stderr); printUsage() }
+        exit(e.code)
+    } catch {
+        fputs("\(error)\n", stderr)
+        exit(64)
+    }
+}
+
+/// Valued options of the scene subcommands. A valued option must be followed by its
+/// value: `render X --out` (a typo) is an error, never "--out = the working directory".
+let cliValuedOptions: Set<String> = [
+    "--duration", "--fps", "--aspect", "--width", "--height", "--scale", "--out", "--audio", "--at",
+    "--jobs", "--kind", "--props", "--cols", "--rows", "--snapshot", "--progress", "--knobs", "--range",
+]
+
+/// Parses and validates scene-subcommand arguments. Throws `CLIUsageError` (exit 64)
+/// for a missing or malformed value instead of guessing.
+func parseCLIArgs(_ argv: [String]) throws -> CLIArgs {
     if argv.count < 2 {
-        printUsage()
-        exit(1)
+        throw CLIUsageError(description: "Missing subcommand.", code: 1, showUsage: true)
     }
 
     let sub = argv[1]
@@ -80,59 +108,100 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
         return args
     }
 
-    guard argv.count >= 3 else {
-        fputs("Missing scene name. Try: swift-render list\n", stderr)
-        exit(1)
+    guard argv.count >= 3, !argv[2].hasPrefix("--") else {
+        throw CLIUsageError(description: "Missing scene name. Try: swift-render list", code: 1)
     }
     args.sceneName = argv[2]
+
+    func number(_ k: String, _ v: String) throws -> Double {
+        guard let d = Double(v), d.isFinite else { throw CLIUsageError(description: "\(k) expects a number, got '\(v)'") }
+        return d
+    }
+    func integer(_ k: String, _ v: String, _ range: ClosedRange<Int>) throws -> Int {
+        guard let n = Int(v), range.contains(n) else {
+            throw CLIUsageError(description: "\(k) expects a whole number in \(range.lowerBound)…\(range.upperBound), got '\(v)'")
+        }
+        return n
+    }
 
     var i = 3
     while i < argv.count {
         let k = argv[i]
-        let v = i + 1 < argv.count ? argv[i + 1] : ""
+        var v = ""
+        if cliValuedOptions.contains(k) {
+            guard i + 1 < argv.count, !argv[i + 1].hasPrefix("--") else {
+                throw CLIUsageError(description: "\(k) needs a value")
+            }
+            v = argv[i + 1]
+        }
         switch k {
-        case "--duration": args.duration = Double(v); i += 2
-        case "--fps":      args.fps = Int(v) ?? args.fps; i += 2
-        case "--aspect":   args.aspect = AspectPreset(rawValue: v) ?? args.aspect; i += 2
+        case "--duration":
+            let d = try number(k, v)
+            guard d > 0 else { throw CLIUsageError(description: "--duration must be > 0 seconds, got '\(v)'") }
+            args.duration = d; i += 2
+        case "--fps":      args.fps = try integer(k, v, 1...240); i += 2
+        case "--aspect":
+            guard let a = AspectPreset(rawValue: v) else {
+                throw CLIUsageError(description: "--aspect expects one of \(AspectPreset.allCases.map(\.rawValue).joined(separator: ", ")), got '\(v)'")
+            }
+            args.aspect = a; i += 2
         case "--width":
-            let w = max(16, Int(v) ?? 0)
+            let w = try integer(k, v, 16...16384)
             let curH = Int(args.size?.height ?? 1080)
             args.size = CGSize(width: w, height: curH)
             i += 2
         case "--height":
-            let h = max(16, Int(v) ?? 0)
+            let h = try integer(k, v, 16...16384)
             let curW = Int(args.size?.width ?? 1920)
             args.size = CGSize(width: curW, height: h)
             i += 2
-        case "--scale":    args.scale = CGFloat(Double(v) ?? Double(args.scale)); i += 2
-        case "--out":      args.out = v; i += 2
+        case "--scale":
+            let sc = try number(k, v)
+            guard sc > 0, sc <= 16 else { throw CLIUsageError(description: "--scale must be in (0, 16], got '\(v)'") }
+            args.scale = CGFloat(sc); i += 2
+        case "--out":
+            do { try OutputPath.validate(v, flag: "--out") } catch { throw CLIUsageError(description: "\(error)") }
+            args.out = v; i += 2
         case "--audio":    args.audio = v; i += 2
         case "--at":
-            let ts = v.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-            args.at = ts.isEmpty ? [0] : ts; i += 2
+            let parts = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            var ts: [Double] = []
+            for p in parts {
+                guard let d = Double(p), d.isFinite, d >= 0 else {
+                    throw CLIUsageError(description: "--at expects seconds ≥ 0 (e.g. 1,2.5), got '\(v)'")
+                }
+                ts.append(d)
+            }
+            guard !ts.isEmpty else { throw CLIUsageError(description: "--at needs a value") }
+            args.at = ts; i += 2
         case "--preview":  args.preview = true; i += 1
-        case "--jobs":     args.jobs = resolveJobs(v); i += 2
+        case "--jobs":
+            guard v == "auto" || (Int(v).map { $0 >= 1 } ?? false) else {
+                throw CLIUsageError(description: "--jobs expects a count ≥ 1 or 'auto', got '\(v)'")
+            }
+            args.jobs = resolveJobs(v); i += 2
         case "--open":     args.open = true; i += 1
         case "--kind":     args.kind = v; i += 2
         case "--props":    args.props = v; i += 2
         case "--no-postfx": args.postFX = false; i += 1
-        case "--cols":     args.cols = max(1, Int(v) ?? 5); i += 2
-        case "--rows":     args.rows = max(1, Int(v) ?? 3); i += 2
-        case "--snapshot": args.snapshot = v; i += 2
+        case "--cols":     args.cols = try integer(k, v, 1...64); i += 2
+        case "--rows":     args.rows = try integer(k, v, 1...64); i += 2
+        case "--snapshot":
+            do { try OutputPath.validate(v, flag: "--snapshot") } catch { throw CLIUsageError(description: "\(error)") }
+            args.snapshot = v; i += 2
         case "--progress":
-            guard v == "json" else {
-                fputs("--progress takes 'json'\n", stderr); exit(64)
-            }
+            guard v == "json" else { throw CLIUsageError(description: "--progress takes 'json'") }
             args.progress = v; i += 2
         case "--knobs":    args.knobs = v; i += 2
         case "--range":
-            let parts = v.split(separator: ":").compactMap { Double($0) }
-            if parts.count == 2 { args.rangeStart = parts[0]; args.rangeEnd = parts[1] }
+            let parts = v.split(separator: ":", omittingEmptySubsequences: false).map { Double($0) }
+            guard parts.count == 2, let a = parts[0], let b = parts[1], a.isFinite, b.isFinite, a >= 0, b > a else {
+                throw CLIUsageError(description: "--range expects a:b seconds with 0 ≤ a < b, got '\(v)'")
+            }
+            args.rangeStart = a; args.rangeEnd = b
             i += 2
         default:
-            fputs("Unknown option: \(k)\n\n", stderr)
-            printUsage()
-            exit(64)
+            throw CLIUsageError(description: "Unknown option: \(k)", showUsage: true)
         }
     }
     return args
@@ -255,7 +324,8 @@ func run(_ argv: [String]) async throws {
         do {
             let url = try scaffoldScene(name: args.sceneName, kind: args.kind)
             print("[swift-render] created \(url.path)")
-            print("[swift-render] it is auto-registered — next: swift run swift-render check \(args.sceneName)")
+            let cli = Project.discover()?.config.product ?? "swift-render"
+            print("[swift-render] it is auto-registered — next: swift run \(cli) check \(args.sceneName)")
         } catch {
             fputs("[swift-render] \(error.localizedDescription)\n", stderr); exit(1)
         }
@@ -270,7 +340,7 @@ func run(_ argv: [String]) async throws {
 
     guard let runner = sceneRunners[args.sceneName] else {
         fputs("Unknown scene: \(args.sceneName)\n", stderr)
-        fputs("Try: swift-render list\n", stderr)
+        fputs("Try: swift run \(Project.discover()?.config.product ?? "swift-render") list\n", stderr)
         exit(1)
     }
     // Knob overrides from .swift-render/knobs/<Scene>.json apply to every render path;
@@ -300,6 +370,11 @@ func run(_ argv: [String]) async throws {
     let size = args.size ?? args.aspect.size
     let audioURL = args.audio.map { URL(fileURLWithPath: $0) }
     let propsURL = args.props.map { URL(fileURLWithPath: $0) }
+    // Props from `launch <app>` keep icon/screenshot paths relative to the scanned app root.
+    if let propsURL, let root = PropsAssets.scannedRoot(forPropsFile: propsURL),
+       !AssetPaths.extraSearchPaths.contains(root) {
+        AssetPaths.extraSearchPaths.append(root)
+    }
 
     // Precedence: explicit --audio > scene-declared Score > silence.
     let audioSource: AudioSource
@@ -434,7 +509,7 @@ func run(_ argv: [String]) async throws {
     }
     if args.jobs > 1 && args.rangeStart == nil {
         try await renderParallel(jobs: args.jobs, scene: args.sceneName, duration: duration, fps: config.fps,
-                                 audio: audioSource, out: outURL)
+                                 audio: audioSource, out: outURL, argv: argv, progressJSON: args.progress == "json")
     } else {
         // Range renders are picture-only but still feed audio-reactive scenes their track.
         try await runner.render(recorder, outURL, span, audioSource, propsURL)
