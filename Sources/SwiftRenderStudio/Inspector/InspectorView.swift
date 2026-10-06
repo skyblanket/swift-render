@@ -23,6 +23,8 @@ struct InspectorView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Knobs, props and info come with the scene being opened; comments are already its own.
+            .overlay { LoadingVeil(active: model.isSceneLoading && model.ui.inspectorTab != .comments, rows: 4) }
         }
         .task(id: model.info?.name) { await model.inspector.sceneOpened() }
     }

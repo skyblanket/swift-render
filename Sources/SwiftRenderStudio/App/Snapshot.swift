@@ -79,6 +79,17 @@ enum SnapshotRunner {
         }
         // Inspector launch work (--knob / --props / --check) lands before the capture.
         while model.inspector.isBusy, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        // `--switch-to X`: a scene switch after the first scene showed; `--switch-hold` captures
+        // its loading state (the open is never sent), otherwise the settled result.
+        if let target = options.switchTo {
+            if options.switchHold {
+                model.previewOpening(target)
+                try? await Task.sleep(for: .milliseconds(300))
+            } else {
+                await model.select(scene: target)
+                while model.isSceneLoading, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+        }
         if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
         await TimelineSnapshot.prepare(model)
         if let path = options.agentReplay { await replayAgent(model, path: path, deadline: deadline) }

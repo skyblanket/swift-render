@@ -30,6 +30,12 @@ struct ViewerView: View {
                         .position(x: canvas.midX, y: canvas.midY)
                         .allowsHitTesting(false)
                     if !model.playback.hasFrame { placeholder }
+                    else if let failure = model.openFailure, failure.scene == model.selectedScene {
+                        openFailed(failure, canvas: canvas)
+                    } else if let opening = model.playback.opening {
+                        SceneLoadingCover(opening: opening, canvas: canvas)
+                            .transition(.opacity.animation(StudioStyle.isSnapshot ? nil : .easeOut(duration: 0.18)))
+                    }
                     SafeAreaOverlay(mode: model.ui.guides, canvas: canvas)
                     PinsOverlay(model: model, canvas: canvas)
                     if let mode = model.ui.compare { CompareView(model: model, mode: mode, canvas: canvas) }
@@ -92,8 +98,25 @@ struct ViewerView: View {
 
     private var placeholderText: String {
         if model.build.isBuilding && model.host.active == nil { return "Building…" }
-        if case .ready = model.host.state { return model.selectedScene == nil ? "Pick a scene on the left" : "Loading…" }
+        if case .ready = model.host.state {
+            return model.selectedScene.map { "Opening \($0)…" } ?? "Pick a scene on the left"
+        }
         return "Warming up…"
+    }
+
+    /// The pick didn't open: say so over the canvas (the old picture underneath isn't this scene).
+    private func openFailed(_ failure: ProjectModel.OpenFailure, canvas: CGRect) -> some View {
+        ZStack {
+            Rectangle().fill(StudioStyle.canvas)
+                .frame(width: canvas.width, height: canvas.height)
+                .position(x: canvas.midX, y: canvas.midY)
+            StudioEmptyState(title: "Couldn't open \(failure.scene)", symbol: "exclamationmark.triangle",
+                             message: failure.message, actionTitle: "Try Again") {
+                Task { await model.select(scene: failure.scene, retry: true) }
+            }
+            .frame(maxWidth: min(420, canvas.width))
+            .position(x: canvas.midX, y: canvas.midY)
+        }
     }
 
     private func hint(_ text: String) -> some View {
@@ -214,5 +237,92 @@ struct PlaybackStatsOverlay: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(StudioStyle.Space.m)
         .allowsHitTesting(false)
+    }
+}
+
+/// A scene switch in progress, over the canvas: the poster (the scene's last frame) under a
+/// light veil, or the blurred old picture under a heavier one, and — once the open takes
+/// longer than a blink — a small "Opening StyleLab…" capsule. Fast switches never flash it.
+struct SceneLoadingCover: View {
+    let opening: PlaybackEngine.Opening
+    let canvas: CGRect
+    @State private var showLabel = StudioStyle.isSnapshot
+    @State private var slow = false
+
+    static let labelDelay: Duration = .milliseconds(150)
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(StudioStyle.canvas.opacity(opening.hasPoster ? 0.25 : 0.4))
+                .frame(width: canvas.width, height: canvas.height)
+                .position(x: canvas.midX, y: canvas.midY)
+            if showLabel {
+                VStack(spacing: 2) {
+                    HStack(spacing: StudioStyle.Space.s) {
+                        ProgressView().controlSize(.small)
+                        Text("Opening \(opening.scene)…").font(StudioStyle.Fonts.callout)
+                    }
+                    if slow {
+                        Text("Big scenes take a moment the first time.")
+                            .font(StudioStyle.Fonts.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 7)
+                .studioGlass(cornerRadius: 16)
+                .position(x: canvas.midX, y: canvas.midY)
+                .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Opening \(opening.scene)")
+        .task(id: opening.scene) {
+            guard !StudioStyle.isSnapshot else { return }
+            slow = false
+            try? await Task.sleep(for: Self.labelDelay)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.15)) { showLabel = true }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { slow = true }
+        }
+    }
+}
+
+/// Covers a panel whose content belongs to the scene being left (timeline lanes, knobs):
+/// a quiet skeleton that fades in only if loading takes a moment, so quick switches don't flicker.
+struct LoadingVeil: View {
+    var active: Bool
+    var rows = 3
+    @State private var shown = false
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if shown {
+                StudioStyle.chrome
+                VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+                    ForEach(0..<rows, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(StudioStyle.well)
+                            .frame(maxWidth: i == rows - 1 ? 180 : .infinity)
+                            .frame(height: 14)
+                    }
+                }
+                .padding(StudioStyle.Space.l)
+                .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(shown)
+        .task(id: active) {
+            guard active else {
+                withAnimation(StudioStyle.isSnapshot ? nil : .easeOut(duration: 0.15)) { shown = false }
+                return
+            }
+            if !StudioStyle.isSnapshot { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled, active else { return }
+            withAnimation(StudioStyle.isSnapshot ? nil : .easeIn(duration: 0.15)) { shown = true }
+        }
     }
 }

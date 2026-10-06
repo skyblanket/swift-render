@@ -203,6 +203,7 @@ The other panels have snapshot options too:
 | Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
 | Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
 | Launch | `--new-launch-film` runs **New Launch Film…**: the project CLI's `launch --no-render` scan, then AppleLaunch opens with those props |
+| Scene switch | `--switch-to X` picks scene X once the first scene shows and captures the settled result; add `--switch-hold` to capture the loading state mid-switch (the open is never sent) |
 
 `--knob`, `--props` and `--check` apply as soon as the first scene's info arrives, whether or not
 an inspector tab is shown (no `--tab` needed). `--scene X` loads X's saved knobs, props and
@@ -217,6 +218,19 @@ icon and screenshots (their paths are made absolute for the host).
 
 **Settings › Playback.** *Frame cache* and *Default quality* take effect when a project window
 opens.
+
+**Switching scenes.** Picking a scene stops playback and covers the picture at once: a scene
+you've visited shows its last frame under a light veil, a new one a blurred version of the old
+picture, and after 150 ms a small "Opening StyleLab…" label. The timeline and the Knobs, Props
+and Info tabs show placeholders until the scene's clips and knobs arrive. The host answers `open`
+with the first frame (full display size, lossless) before it probes the scene, so picture,
+transport and timeline length change together; clips, knobs and score events follow a moment
+later. Clicking through several scenes quickly opens only the last one. Each scene remembers its
+playhead and playback quality, and the host keeps its probe and analyzed soundtrack in memory,
+so going back is quick. Paused frames are always rendered at the canvas's pixel size (Retina,
+portrait included) and re-sharpen when the canvas grows; Auto playback quality drops to 50% size,
+then lowers the frame rate, before going any softer. A fitted timeline takes at most 35% of the
+column so the picture fills most of the window.
 
 ```
 swift run swift-render-studio . --scene KnobLab --tab knobs --knob title.scale=1.3 --knob debug.safe=true --snapshot out/knobs.png

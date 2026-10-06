@@ -27,6 +27,16 @@ struct DecodedFrame: @unchecked Sendable {
     let format: FrameFormat
     /// Approximate resident cost (decoded pixels).
     var byteCost: Int { width * height * 4 }
+    /// Longest edge in pixels: what `maxWidth` caps on the wire (portrait scenes too).
+    var edge: Int { max(width, height) }
+}
+
+/// `open`'s answer: the scene, plus its first frame when the host rendered one with the
+/// reply, and whether clips/knobs/events still follow in an "info" event (`deferProbe`).
+struct OpenedScene: Sendable {
+    var info: SceneInfo
+    var frame: DecodedFrame?
+    var probing: Bool
 }
 
 /// A response: the result plus the raw payload that followed it (binary frames).
@@ -130,6 +140,15 @@ extension RenderHost {
         let reply = try await call(.open, params)
         guard let info = reply.result.info else { throw HostClientError.protocolError("open returned no info") }
         return info
+    }
+
+    /// `open` that may carry the first frame (`t` set) and a deferred probe. A host that
+    /// predates both answers with the full info and no frame; callers fall back to `frame`.
+    func openScene(_ params: HostParams) async throws -> OpenedScene {
+        let reply = try await call(.open, params)
+        guard let info = reply.result.info else { throw HostClientError.protocolError("open returned no info") }
+        let frame = reply.result.frame.flatMap { try? FrameDecoder.decode($0, payload: reply.payload, fps: info.fps) }
+        return OpenedScene(info: info, frame: frame, probing: reply.result.probing == true)
     }
 }
 

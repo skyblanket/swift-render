@@ -25,6 +25,11 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         /// `open` fails with this message (renamed scene, props decode error…).
         var failOpen: String? = nil
         var startupDelay: Double = 0.05
+        /// Simulated `open` cost (the real host's scene build), so tests can switch scenes
+        /// while an open is in flight.
+        var openMs: Double = 0
+        /// `open` with `deferProbe`: the probe's "info" event follows after this long.
+        var probeMs: Double = 20
         var projectRoot: URL = URL(fileURLWithPath: "/tmp/FakeProject")
     }
 
@@ -36,6 +41,9 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         var streamFrames = 0
         var streamsOpened = 0
         var creditsGranted = 0
+        var opens = 0
+        /// Scenes in the order `open` was asked for them.
+        var opened: [String] = []
         /// Most stream frames ever sent but not yet credited back (bounded by the window).
         var maxOutstanding = 0
     }
@@ -207,13 +215,37 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
             guard let scene = p.scene, Self.scenes.contains(where: { $0.name == scene }) else {
                 throw HostClientError.host(HostError(code: "unknownScene", message: "no scene \(p.scene ?? "nil")"))
             }
+            if options.openMs > 0 { try await Task.sleep(for: .milliseconds(Int(options.openMs))) }
             let d = p.duration ?? Self.scenes.first { $0.name == scene }!.defaultDuration
+            let sess = Session(scene: scene, width: p.width ?? 1920, height: p.height ?? 1080, fps: p.fps ?? 60,
+                               duration: d, propsJSON: p.propsJSON)
             lock.withLock {
-                session = Session(scene: scene, width: p.width ?? 1920, height: p.height ?? 1080, fps: p.fps ?? 60,
-                                  duration: d, propsJSON: p.propsJSON)
+                session = sess
                 knobOverrides = p.knobs ?? [:]
+                _stats.opens += 1
+                _stats.opened.append(scene)
             }
-            return HostReply(result: HostResult(info: currentInfo()))
+            guard var info = currentInfo() else { throw HostClientError.protocolError("no session") }
+            // Like the real host: `deferProbe` replies with the cheap part, the rest follows as "info".
+            if p.deferProbe == true {
+                let full = info
+                info.clips = []; info.knobs = []; info.events = []
+                let delay = options.probeMs, cont = eventsCont
+                Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(Int(delay)))
+                    guard let self, self.lock.withLock({ self.session?.scene == scene }) else { return }
+                    cont.yield(.infoChanged(full))
+                }
+            }
+            // `t` on open: the first frame rides on the reply.
+            var frame: HostFrame?, payload: Data?
+            if let t = p.t {
+                let fmt = FrameFormat(rawValue: p.format ?? "jpeg") ?? .jpeg
+                (frame, payload) = render(t: max(0, min(d, t)), maxWidth: p.maxWidth ?? 1920, format: fmt, session: sess)
+                lock.withLock { _stats.rendered += 1 }
+            }
+            return HostReply(result: HostResult(info: info, frame: frame, probing: p.deferProbe == true ? true : nil),
+                             payload: payload)
         case .setKnobs:
             lock.withLock { knobOverrides = p.knobs ?? [:] }        // the complete set, like the real host
             return HostReply(result: HostResult(info: currentInfo()))
@@ -415,8 +447,10 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
     private func render(t: Double, maxWidth: Int, format: FrameFormat, session: Session?) -> (HostFrame, Data?) {
         let start = DispatchTime.now()
         let sw = session?.width ?? 1920, sh = session?.height ?? 1080
-        let w = max(16, min(maxWidth, sw))
-        let h = max(9, Int((Double(w) * Double(sh) / Double(sw)).rounded()))
+        // `maxWidth` caps the longest edge, like the real host (portrait scenes included).
+        let scale = min(1, Double(maxWidth) / Double(max(sw, sh)))
+        let w = max(9, Int((Double(sw) * scale).rounded()))
+        let h = max(9, Int((Double(sh) * scale).rounded()))
         let img = FakeFrameArt.draw(t: t, width: w, height: h, scene: session?.scene ?? "—",
                                     duration: session?.duration ?? 10, generation: options.generation)
         let cost = options.renderMs * (session?.scene == "StyleLab" ? 6 : 1)

@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import QuartzCore
 import SwiftUI
 
@@ -60,8 +61,8 @@ final class FrameLayerView: NSView {
     private func reportDisplayWidth() {
         guard let engine else { return }
         let scale = window?.backingScaleFactor ?? 2
-        engine.displayWidth = ViewerGeometry.pixelWidth(canvas: canvasRect, backingScale: scale,
-                                                        sceneWidth: Int(sceneSize.width))
+        let edge = ViewerGeometry.pixelEdge(canvas: canvasRect, backingScale: scale, sceneSize: sceneSize)
+        if engine.displayWidth != edge { engine.displayWidth = edge }
     }
 
     func show(_ img: CGImage?) {
@@ -72,9 +73,28 @@ final class FrameLayerView: NSView {
         CATransaction.commit()
     }
 
+    /// Scene switch without a poster: the old picture, small, blurred and desaturated, so it
+    /// reads as "on its way" and never as the new scene. A real frame replaces it.
+    func showCover() {
+        guard let img = image, let cover = Self.cover(img) else { return }
+        show(cover)
+    }
+
+    private static let ciContext = CIContext(options: [.cacheIntermediates: false])
+
+    static func cover(_ img: CGImage) -> CGImage? {
+        let s = min(1, 320 / CGFloat(max(img.width, img.height)))
+        let small = CIImage(cgImage: img).transformed(by: CGAffineTransform(scaleX: s, y: s))
+        let blurred = small.clampedToExtent().applyingGaussianBlur(sigma: 10)
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.5])
+            .cropped(to: small.extent)
+        return ciContext.createCGImage(blurred, from: small.extent)
+    }
+
     private func attachEngine() {
         guard let engine else { return }
         engine.onFrame = { [weak self] f in self?.show(f.image) }
+        engine.onCover = { [weak self] in self?.showCover() }
         engine.onPlayStateChange = { [weak self] playing in self?.link?.isPaused = !playing }
         if let f = engine.currentFrame { show(f.image) }
         link?.isPaused = !engine.isPlaying

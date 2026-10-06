@@ -54,9 +54,13 @@ final class HostSupervisor {
     private(set) var restarts = 0
     /// Recent host log lines (stderr is separate; these are `log`/`warning` events).
     private(set) var log: [String] = []
+    /// The open scene's clips/knobs/score events are still being probed (an "info" event follows).
+    private(set) var probing = false
 
     /// Current open params; `reopen` updates them.
     @ObservationIgnored private(set) var openParams = HostParams()
+    /// Bumped by every `reopen`: an older reply that lands after a newer one was sent is dropped.
+    @ObservationIgnored private var reopenSeq = 0
     @ObservationIgnored var makeHost: Factory
     @ObservationIgnored private var executable: URL?
     @ObservationIgnored private var crashAttempts = 0
@@ -171,23 +175,58 @@ final class HostSupervisor {
         else if state == .starting || state == .swapping { state = .idle }
     }
 
-    /// Open another scene / params on the active host.
+    /// Open another scene / params on the active host, its first frame (at `currentTime()`,
+    /// `warmWidth()`, lossless when the host can) riding on the reply, and the structure probe
+    /// deferred to an "info" event. Playback attaches with that frame, so picture, timeline
+    /// and transport change together. Returns nil — and attaches nothing — when the reply is
+    /// no longer wanted: a newer `reopen`, a host swap (the new host replays `openParams`),
+    /// or `isCurrent` turned false (a newer scene pick).
     @discardableResult
-    func reopen(_ p: HostParams) async throws -> SceneInfo? {
+    func reopen(_ p: HostParams, isCurrent: (() -> Bool)? = nil) async throws -> SceneInfo? {
         openParams = p                                       // a host launching now replays these
+        reopenSeq += 1
+        let seq = reopenSeq
         guard let host = active, p.scene != nil else { return nil }
+        func wanted() -> Bool { seq == reopenSeq && host === active && (isCurrent?() ?? true) }
+        // Swapped out while in flight: the new host opened `openParams` before it went live,
+        // so its info is current and it is attached already. Never re-attach the retired one.
+        func swappedInfo() -> SceneInfo? { active == nil ? nil : self.info }
+        var wire = p
+        wire.deferProbe = true
+        // On the frame grid, so the reply's frame index is exactly the playhead's.
+        let gridFPS = Double(p.fps ?? 60)
+        let t = Double(frameIndex(max(0, currentTime()), fps: Int(gridFPS))) / gridFPS, width = warmWidth()
+        let format: FrameFormat = host.supportsBinaryFrames ? .bgra8 : .jpeg
+        let wantsFrame = !poisoned.contains(frameIndex(t, fps: p.fps ?? 60))
+        if wantsFrame { wire.t = t; wire.maxWidth = width; wire.format = format.rawValue }
         do {
-            let info = try await host.open(p)
-            // Swapped out while this was in flight: the new host opened with `openParams`
-            // before it went live, and its info is current. Never re-attach the retired one.
-            guard host === active else { return active == nil ? nil : self.info }
-            self.info = info
-            onActiveHost?(host, info, nil)
-            return info
+            let opened = try await host.openScene(wire)
+            if host !== active { return swappedInfo() }
+            guard wanted() else { return nil }
+            var warm = opened.frame
+            if warm == nil, wantsFrame {
+                // A host that predates frames on `open`: one more round trip, same result.
+                let ft = min(t, opened.info.duration)
+                warm = try? await withTimeout(5, "first frame") { try await host.frame(t: ft, maxWidth: width, format: format) }
+                if host !== active { return swappedInfo() }
+                guard wanted() else { return nil }
+            }
+            self.info = opened.info
+            probing = opened.probing
+            onActiveHost?(host, opened.info, warm)
+            return opened.info
         } catch {
             if host !== active, active != nil { return self.info }
+            if let e = error as? HostClientError, e.isSuperseded { return nil }
+            if !wanted() { return nil }
             throw error
         }
+    }
+
+    /// `i` describes the scene and shape currently asked for (not an older pick).
+    func isCurrent(_ i: SceneInfo) -> Bool {
+        guard let scene = openParams.scene else { return true }
+        return i.name == scene && (openParams.width ?? i.width) == i.width && (openParams.height ?? i.height) == i.height
     }
 
     /// Re-probe after a knob/props change (the engine invalidates its frames).
@@ -298,7 +337,7 @@ final class HostSupervisor {
         hostVersion = launched.ready.version
         active = host
         generation = gen
-        if let info = launched.info { self.info = info }
+        if let info = launched.info { self.info = info; probing = false }
         state = .ready(pid: host.pid)
         onActiveHost?(host, launched.info ?? self.info, launched.warm)
         watch(host)
@@ -313,7 +352,12 @@ final class HostSupervisor {
                     self.log.append(m)
                     if self.log.count > 500 { self.log.removeFirst(self.log.count - 500) }
                 }
-                if msg.event == "info", let i = msg.info { self.info = i }
+                if msg.event == "info", let i = msg.info {
+                    // The probe of a scene the person already left (it raced the newer reply).
+                    guard self.isCurrent(i) else { continue }
+                    self.info = i
+                    self.probing = false
+                }
                 self.onEvent?(msg)
             }
         }

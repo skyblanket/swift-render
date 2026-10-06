@@ -89,10 +89,12 @@ struct TransportTimecode: View {
             Text(StudioTime.transport(engine.t, fps: engine.fps))
                 .font(StudioStyle.Fonts.timecodeLarge)
                 .foregroundStyle(.primary)
-            Text("/ \(StudioTime.transport(engine.duration, fps: engine.fps))")
+            // The scene being left's length is not the new one's: no number until it opens.
+            Text(engine.opening == nil ? "/ \(StudioTime.transport(engine.duration, fps: engine.fps))" : "/ –:––.––")
                 .font(StudioStyle.Fonts.callout)
                 .foregroundStyle(.secondary)
         }
+        .opacity(engine.opening == nil ? 1 : 0.5)
         .monospacedDigit()
         .help("\(StudioTime.frameHelp(engine.t, fps: engine.fps)). Press I and O to set a range.")
     }

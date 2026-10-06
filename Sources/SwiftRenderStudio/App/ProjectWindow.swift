@@ -110,42 +110,62 @@ struct SceneSwitcherMenu: View {
 }
 
 /// Viewer + transport over timeline over the Claude panel. A hand-rolled split (NSSplitView
-/// via VSplitView ignores ideal heights). The timeline fits its lanes until it is dragged;
-/// double-click the divider to fit it again.
+/// via VSplitView ignores ideal heights). The timeline fits its lanes until it is dragged —
+/// but never takes more than `autoShare` of the column, so the picture keeps most of the
+/// window — and double-click the divider to fit it again. While a scene opens, the fitted
+/// height holds still (lanes arrive with the probe) so the picture doesn't jump mid-switch.
 struct DetailSplit: View {
     @Bindable var model: ProjectModel
     /// 0 = fit the lanes.
     @AppStorage("layout.timelineHeightManual") private var timelineHeight = 0.0
     @AppStorage("layout.claudePanelHeight") private var agentHeight = 200.0
+    /// The last fitted height of a settled scene (held while the next one loads).
+    @State private var heldFit: Double = 0
 
     private static let timelineRange: ClosedRange<Double> = 140...560
+    /// Most of the column a fitted (not dragged) timeline may take.
+    static let autoShare = 0.35
 
     var body: some View {
-        VStack(spacing: 0) {
+        GeometryReader { geo in
+            let column = geo.size.height - (model.ui.showAgentPanel ? agentHeight + 1 : 0)
+            let timeline = effectiveTimelineHeight(column: column)
             VStack(spacing: 0) {
-                ViewerView(model: model)
-                TransportBar(model: model)
-            }
-            .frame(minHeight: 260, maxHeight: .infinity)
-            SplitHandle(height: Binding(get: { effectiveTimelineHeight }, set: { timelineHeight = $0 }),
-                        range: Self.timelineRange, onReset: { timelineHeight = 0 })
-            TimelineView(model: model)
-                .frame(height: effectiveTimelineHeight)
-            if model.ui.showAgentPanel {
-                SplitHandle(height: $agentHeight, range: 120...420)
-                AgentPanel(model: model)
-                    .frame(height: agentHeight)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                VStack(spacing: 0) {
+                    ViewerView(model: model)
+                    TransportBar(model: model)
+                }
+                .frame(minHeight: 260, maxHeight: .infinity)
+                SplitHandle(height: Binding(get: { timeline }, set: { timelineHeight = $0 }),
+                            range: Self.timelineRange, onReset: { timelineHeight = 0 })
+                TimelineView(model: model)
+                    .overlay { LoadingVeil(active: model.isSceneLoading, rows: 3) }
+                    .frame(height: timeline)
+                if model.ui.showAgentPanel {
+                    SplitHandle(height: $agentHeight, range: 120...420)
+                    AgentPanel(model: model)
+                        .frame(height: agentHeight)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
         .animation(.smooth(duration: 0.25), value: model.ui.showAgentPanel)
         .background(StudioStyle.chrome)
+        .onChange(of: fitHeight, initial: true) { _, h in if !model.isSceneLoading { heldFit = h } }
+        .onChange(of: model.isSceneLoading) { _, loading in if !loading { heldFit = fitHeight } }
     }
 
-    private var effectiveTimelineHeight: Double {
-        if timelineHeight > 0 { return min(Self.timelineRange.upperBound, max(Self.timelineRange.lowerBound, timelineHeight)) }
+    /// Lanes' natural height for the current scene.
+    private var fitHeight: Double {
         let content = Double(TimelineLayout(info: model.info).contentHeight + TimelineLayout.rulerHeight + TimelineLayout.scrollerHeight)
         return min(Self.timelineRange.upperBound, max(Self.timelineRange.lowerBound, content + 2))
+    }
+
+    private func effectiveTimelineHeight(column: Double) -> Double {
+        if timelineHeight > 0 { return min(Self.timelineRange.upperBound, max(Self.timelineRange.lowerBound, timelineHeight)) }
+        let fit = model.isSceneLoading && heldFit > 0 ? heldFit : fitHeight
+        let cap = max(Self.timelineRange.lowerBound, column * Self.autoShare)
+        return min(fit, cap)
     }
 }
 

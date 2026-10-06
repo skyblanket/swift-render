@@ -51,6 +51,14 @@ enum ViewerGeometry {
     static func pixelWidth(canvas: CGRect, backingScale: CGFloat, sceneWidth: Int) -> Int {
         max(16, min(sceneWidth, Int((canvas.width * backingScale).rounded())))
     }
+
+    /// Longest edge, in device pixels, to request so the canvas is sharp on this display
+    /// (Retina aware, capped at the scene's native size). The host's `maxWidth` caps the
+    /// longest edge, so a portrait canvas asks for its height, not its width.
+    static func pixelEdge(canvas: CGRect, backingScale: CGFloat, sceneSize: CGSize) -> Int {
+        let native = Int(max(sceneSize.width, sceneSize.height).rounded())
+        return max(16, min(native, Int((max(canvas.width, canvas.height) * backingScale).rounded())))
+    }
 }
 
 enum RegionMath {

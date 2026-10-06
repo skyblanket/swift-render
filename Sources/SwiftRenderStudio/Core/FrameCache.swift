@@ -66,12 +66,13 @@ final class FrameCache: @unchecked Sendable {
         put(Key(generation: generation, frame: f.index, widthBucket: Self.bucket(f.width)), f)
     }
 
-    /// Widest cached copy of `frame`, optionally at least `minWidth` wide.
+    /// Widest cached copy of `frame`, optionally with a longest edge of at least `minWidth`
+    /// (the wire's `maxWidth` is a longest-edge cap).
     func best(generation: Int, frame: Int, minWidth: Int = 0) -> DecodedFrame? {
         lock.lock(); defer { lock.unlock() }
         guard let widths = index[generation]?[frame], let w = widths.max() else { return nil }
         guard let n = map[Key(generation: generation, frame: frame, widthBucket: w)] else { return nil }
-        if n.frame.width < minWidth { return nil }
+        if n.frame.edge < minWidth { return nil }
         touch(n)
         return n.frame
     }

@@ -20,11 +20,19 @@ import SwiftRenderKit
 // lookahead and Studio memory stay bounded. A stream > 250 ms behind the clock is
 // cancelled and restarted ahead of it by ewma(ms) × window.
 //
-// Quality ladder (auto): budget = 0.8 × 1000 / playback fps. Over budget, step the
-// requested width 100% → 50% → 33% → 25% of the viewer, then the fps 30 → 20 → 15.
+// Quality ladder (auto): budget = 0.8 × 1000 / playback fps. Over budget, step down
+// 100% → 50% of the viewer, then 30 → 20 → 15 fps, and only then 33% → 25% (sharpness
+// first). The ladder is remembered per scene; a scene seen for the first time starts at
+// the top, or at 50% when its first full-size frame already blew the budget. Paused
+// frames are always full display resolution (lossless), and re-sharpen when the canvas grows.
 //
-// Generations bump on attach (open, host swap) and `invalidate()` (knobs/props);
-// frames from an older generation are dropped on arrival. SwiftUI only observes
+// Scene switch: `beginOpening` stops playback, detaches from the host and bumps the
+// generation at once, so nothing rendered for the old scene can be shown afterwards;
+// the viewer shows the target's poster (its last frame, if visited) or a blurred cover
+// with "Opening …" until `attach` delivers the new scene's first frame.
+//
+// Generations bump on attach (open, host swap), `beginOpening` and `invalidate()`
+// (knobs/props); frames from an older generation are dropped on arrival. SwiftUI only observes
 // `t`, `isPlaying`, `rate`, throttled `stats`/`cachedRanges` and
 // `visibleCommentIDs` (republished only when the set changes) — the pixels go
 // straight to a CALayer through `onFrame`.
@@ -71,6 +79,13 @@ struct PlaybackStats: Equatable, Sendable {
 
 @MainActor @Observable
 final class PlaybackEngine {
+    /// A scene switch in progress (see the header).
+    struct Opening: Equatable, Sendable {
+        var scene: String
+        /// The viewer shows this scene's poster (its last frame), not a cover.
+        var hasPoster: Bool
+    }
+
     // Observed state.
     private(set) var t: Double = 0
     private(set) var isPlaying = false
@@ -87,13 +102,23 @@ final class PlaybackEngine {
     private(set) var generation = 0
     private(set) var hasFrame = false
     private(set) var lastError: String?
+    /// Non-nil from `beginOpening` until the new scene's first frame is on screen.
+    private(set) var opening: Opening?
 
     // Unobserved plumbing.
     @ObservationIgnored let cache: FrameCache
     @ObservationIgnored let audio = AudioPlayback()
     @ObservationIgnored var now: () -> Double = { CACurrentMediaTime() }
-    /// Pixel width the viewer wants for a sharp image (set by the viewer on layout/zoom).
-    @ObservationIgnored var displayWidth = 1920
+    /// Longest edge, in device pixels, the viewer wants for a sharp image (set by the viewer
+    /// on layout/zoom). Growing it re-sharpens a paused frame.
+    @ObservationIgnored var displayWidth = 1920 {
+        didSet {
+            guard !isPlaying, opening == nil, host != nil, let c = currentFrame, displayWidth > c.edge + 32 else { return }
+            scheduleSharpen()
+        }
+    }
+    /// Scene switch without a poster: the viewer covers the old picture (FrameLayerView blurs it).
+    @ObservationIgnored var onCover: (() -> Void)?
     /// Where pixels go (FrameLayerView). Called on the main actor.
     @ObservationIgnored var onFrame: ((DecodedFrame) -> Void)?
     @ObservationIgnored var onPlayStateChange: ((Bool) -> Void)?
@@ -131,14 +156,32 @@ final class PlaybackEngine {
     @ObservationIgnored private var lastLadderCheck = 0.0
     @ObservationIgnored private var underBudgetSince: Double?
     @ObservationIgnored private var shownWindow: (count: Int, since: Double) = (0, 0)
-    @ObservationIgnored private var widthStep = 0
-    @ObservationIgnored private var fpsStep = 0
+    /// Index into `ladder` (auto quality).
+    @ObservationIgnored private(set) var rung = 0
+    /// The first play of a scene may start lower when its first frame was over budget.
+    @ObservationIgnored private var seedLadder = true
+    /// Per scene: where playback was, the ladder it settled on, its last frame.
+    @ObservationIgnored private var memory: [String: SceneMemory] = [:]
+    @ObservationIgnored private var memoryOrder: [String] = []
+    /// `name|w×h` of the attached scene (posters are per shape).
+    @ObservationIgnored private(set) var sceneKey = ""
+
+    private struct SceneMemory {
+        var t: Double
+        var rung: Int
+        var msPerFrame: Double
+        var poster: DecodedFrame?
+    }
 
     static let creditWindow = 4
     static let lookahead = 1.0
     static let restartLag = 0.25
-    static let ladderScales: [Double] = [1, 0.5, 1.0 / 3, 0.25]
-    static let ladderFPS = [30, 20, 15]
+    /// Auto quality rungs: width scale and playback fps.
+    static let ladder: [(scale: Double, fps: Int)] = [(1, 30), (0.5, 30), (0.5, 20), (0.5, 15), (1.0 / 3, 15), (0.25, 15)]
+    /// Scenes whose poster and ladder are remembered.
+    static let memoryLimit = 8
+
+    static func sceneKey(_ name: String, width: Int, height: Int) -> String { "\(name)|\(width)x\(height)" }
 
     private struct FrameAsk { var t: Double; var width: Int; var format: FrameFormat }
 
@@ -175,6 +218,8 @@ final class PlaybackEngine {
         stopStream()
         self.host = host
         if let info {
+            let key = Self.sceneKey(info.name, width: info.width, height: info.height)
+            if key != sceneKey { enterScene(key) }
             duration = info.duration
             fps = max(1, info.fps)
             sceneName = info.name
@@ -182,26 +227,99 @@ final class PlaybackEngine {
             audio.load(info.audioPath.map { URL(fileURLWithPath: $0) }, at: t)
         }
         bumpGeneration()
-        t = min(t, duration)
+        setT(min(t, duration))
         if let warmFrame, warmFrame.index == frameIndex(t, fps: fps) {
             cache.put(warmFrame, generation: generation)
+            noteRender(ms: warmFrame.ms)
             show(warmFrame)
         }
         if wasPlaying {
             reanchor()
+        } else {
+            requestSharpFrame()
+        }
+    }
+
+    /// Paused: the playhead's frame at full display size, lossless when the host can send
+    /// raw pixels (one render; nothing to sharpen afterwards). Skipped when already cached.
+    private func requestSharpFrame() {
+        let target = frameIndex(t, fps: fps)
+        if let have = cache.best(generation: generation, frame: target, minWidth: displayWidth), have.format != .jpeg {
+            show(have)
+            return
+        }
+        if host?.supportsBinaryFrames ?? false {
+            requestFrame(FrameAsk(t: t, width: scrubWidth(precise: true), format: .bgra8))
         } else {
             requestFrame(FrameAsk(t: t, width: scrubWidth(precise: true), format: .jpeg))
             scheduleSharpen()
         }
     }
 
+    /// The attached scene changes: restore what we remember of the new one (or start fresh).
+    private func enterScene(_ key: String) {
+        sceneKey = key
+        let m = memory[key]
+        rung = m?.rung ?? 0
+        live.msPerFrame = m?.msPerFrame ?? 0
+        live.note = nil
+        seedLadder = m == nil
+        underBudgetSince = nil
+    }
+
+    /// Remember the attached scene's playhead, ladder and last frame (its poster).
+    private func rememberScene() {
+        guard !sceneKey.isEmpty else { return }
+        memory[sceneKey] = SceneMemory(t: t, rung: rung, msPerFrame: live.msPerFrame, poster: currentFrame)
+        memoryOrder.removeAll { $0 == sceneKey }
+        memoryOrder.append(sceneKey)
+        while memoryOrder.count > Self.memoryLimit { memory[memoryOrder.removeFirst()] = nil }
+    }
+
+    /// The person picked another scene (`key` from `sceneKey(_:width:height:)`): stop, detach
+    /// and invalidate at once so no frame of the old scene is presented as the new one. Shows
+    /// the target's poster when it has one, else asks the viewer to cover the old picture.
+    /// `attach` (with the new host reply) ends it on the first frame shown.
+    func beginOpening(scene: String, key: String) {
+        // Only the attached scene is remembered: during rapid switching the picture is a
+        // poster or a cover, not that scene's frame.
+        if opening == nil { rememberScene() }
+        if isPlaying {
+            isPlaying = false
+            audio.pause()
+            onPlayStateChange?(false)
+            publishStats(force: true)
+        }
+        stopStream()
+        sharpenTask?.cancel()
+        scrubPending = nil
+        host = nil                       // nothing renders until the new scene attaches
+        sceneKey = ""                    // the next attach always enters a scene
+        bumpGeneration()                 // answers in flight for the old scene are dropped
+        let m = memory[key]
+        if let mt = m?.t { setT(mt) }
+        let poster = m?.poster
+        opening = Opening(scene: scene, hasPoster: poster != nil)
+        if let poster { show(poster, isPoster: true) } else { onCover?() }
+    }
+
+    /// The open failed: stop waiting (the viewer shows the error).
+    func openingFailed() {
+        opening = nil
+    }
+
+    /// Score audio arrived while playing: hand the clock to the audio device from here.
+    func resyncAudio() {
+        guard isPlaying, rate > 0 else { return }
+        anchorT = t
+        anchorWall = now()
+        if !audio.play(from: t, rate: rate) { audio.pause() }
+    }
+
     /// Knobs/props changed: same host, new pixels.
     func invalidate() {
         bumpGeneration()
-        if isPlaying { reanchor() } else {
-            requestFrame(FrameAsk(t: t, width: scrubWidth(precise: true), format: .jpeg))
-            scheduleSharpen()
-        }
+        if isPlaying { reanchor() } else { requestSharpFrame() }
     }
 
     private func bumpGeneration() {
@@ -234,6 +352,7 @@ final class PlaybackEngine {
         if rate < 0 && t <= lo + 0.5 / Double(fps) { t = hi }
         isPlaying = true
         sharpenTask?.cancel()
+        seedLadderIfNew()
         live.dropped = 0; live.shown = 0
         shownWindow = (0, now())
         reanchor()
@@ -360,12 +479,12 @@ final class PlaybackEngine {
 
     /// Scene frames per scene-second requested from the host at the current rate.
     var sampleFPS: Int {
-        let target = Self.ladderFPS[min(fpsStep, Self.ladderFPS.count - 1)]
+        let target = Self.ladder[min(rung, Self.ladder.count - 1)].fps
         return max(1, min(fps, Int((Double(target) / max(1, abs(rate))).rounded())))
     }
 
     var playWidth: Int {
-        let scale = quality.fixedScale ?? Self.ladderScales[min(widthStep, Self.ladderScales.count - 1)]
+        let scale = quality.fixedScale ?? Self.ladder[min(rung, Self.ladder.count - 1)].scale
         return max(160, Int(Double(displayWidth) * scale))
     }
 
@@ -540,7 +659,7 @@ final class PlaybackEngine {
             guard let self, !Task.isCancelled, !self.isPlaying else { return }
             let target = frameIndex(self.t, fps: self.fps)
             if let have = self.cache.best(generation: self.generation, frame: target),
-               have.width >= min(self.displayWidth, have.width + 1), have.format != .jpeg { return }
+               have.edge >= self.displayWidth, have.format != .jpeg { return }
             self.requestFrame(FrameAsk(t: Double(target) / Double(self.fps), width: self.displayWidth, format: format))
         }
     }
@@ -554,7 +673,9 @@ final class PlaybackEngine {
         }
     }
 
-    private func show(_ f: DecodedFrame) {
+    private func show(_ f: DecodedFrame, isPoster: Bool = false) {
+        // Any real frame shown is the attached scene's (generations guarantee it): the switch is done.
+        if !isPoster, opening != nil { opening = nil }
         if let c = currentFrame, c.index == f.index, c.width == f.width, c.image === f.image { return }
         currentFrame = f
         if !hasFrame { hasFrame = true }
@@ -573,27 +694,42 @@ final class PlaybackEngine {
     }
 
     private func applyQualityChoice() {
-        widthStep = 0; fpsStep = 0
+        rung = 0
+        seedLadder = false
         live.note = nil
         if isPlaying { reanchor() }
     }
 
+    /// First play of a scene in auto: a first full-size frame already over budget starts at 50%.
+    private func seedLadderIfNew() {
+        guard seedLadder, quality == .auto else { return }
+        seedLadder = false
+        let ms = live.msPerFrame
+        guard rung == 0, ms > 0 else { return }
+        let budget = 0.8 * 1000 / Double(Self.ladder[0].fps)
+        if ms > budget { rung = 1; live.note = ladderNote(ms) }
+    }
+
+    private func ladderNote(_ ms: Double) -> String {
+        let r = Self.ladder[rung]
+        return "\(sceneName) ~\(Int(ms.rounded())) ms/frame → \(Int(r.scale * 100))% at \(r.fps) fps"
+    }
+
     private func runLadder(wall: Double) {
-        let budget = 0.8 * 1000 / Double(Self.ladderFPS[fpsStep])
+        let budget = 0.8 * 1000 / Double(Self.ladder[rung].fps)
         let ms = live.msPerFrame
         guard ms > 0 else { return }
         if ms > budget {
             underBudgetSince = nil
-            if widthStep < Self.ladderScales.count - 1 { widthStep += 1 }
-            else if fpsStep < Self.ladderFPS.count - 1 { fpsStep += 1 }
-            else { return }
-            live.note = "\(sceneName) ~\(Int(ms.rounded())) ms/frame → \(Self.ladderFPS[fpsStep]) fps preview"
-        } else if ms < budget * 0.5, widthStep > 0 || fpsStep > 0 {
+            guard rung < Self.ladder.count - 1 else { return }
+            rung += 1
+            live.note = ladderNote(ms)
+        } else if ms < budget * 0.5, rung > 0 {
             if underBudgetSince == nil { underBudgetSince = wall }
             if wall - underBudgetSince! > 2 {
-                if fpsStep > 0 { fpsStep -= 1 } else { widthStep -= 1 }
+                rung -= 1
                 underBudgetSince = nil
-                if widthStep == 0 && fpsStep == 0 { live.note = nil }
+                live.note = rung == 0 ? nil : ladderNote(ms)
             }
         }
     }
@@ -606,8 +742,8 @@ final class PlaybackEngine {
             live.shownFPS = Double(shownWindow.count) / elapsed
             shownWindow = (0, wall)
         }
-        live.targetFPS = Self.ladderFPS[fpsStep]
-        live.widthScale = quality.fixedScale ?? Self.ladderScales[widthStep]
+        live.targetFPS = Self.ladder[rung].fps
+        live.widthScale = quality.fixedScale ?? Self.ladder[rung].scale
         lastPublish = wall
         if stats != live { stats = live }
         updateCachedRanges(force: false)
