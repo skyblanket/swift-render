@@ -35,6 +35,8 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// Inspector tab to show first (`--tab knobs`), e.g. to snapshot a tab.
+    var tab: InspectorTab?
     /// Snapshot mode: play this many seconds before capturing (prints playback stats).
     var playFor: Double?
     /// Run as a protocol-speaking fake host on stdio (`FakeServe`), not as an app.
@@ -55,6 +57,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--fake-process-host": o.fakeProcessHost = true; i += 1
             case "--snapshot": o.snapshot = v; i += 2
             case "--play-for": o.playFor = v.flatMap(Double.init); i += 2
+            case "--tab": o.tab = v.flatMap(InspectorTab.init(rawValue:)); i += 2
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
             default:
@@ -192,6 +195,7 @@ final class ProjectModel {
         guard !started else { return }
         started = true
         selectedScene = options.scene
+        if let tab = options.tab { ui.inspectorTab = tab }
         if let at = options.at { playback.seek(at) }
         review.load(scene: options.scene)
         startWatching()
