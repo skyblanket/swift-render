@@ -32,7 +32,8 @@ public struct SourceLocation: Codable, Sendable, Equatable, Hashable {
 
 /// One clip as placed on the (possibly nested) timeline.
 public struct ClipInfo: Codable, Sendable, Equatable, Hashable {
-    /// Stable within one probe: "<depth>:<start>:<line>".
+    /// Stable across probes of the same code: "<depth>:<start>:<line>" (start to the
+    /// millisecond; a "~n" suffix separates clips that would otherwise collide).
     public var id: String
     /// `Clip(...).named("Hero")`, else nil (editors show "Clip · File.swift:42").
     public var label: String?
@@ -45,12 +46,30 @@ public struct ClipInfo: Codable, Sendable, Equatable, Hashable {
     public var transitionIn: String
     public var transitionDuration: Double
     public var source: SourceLocation?
+    /// `id` of the clip whose content holds this clip's Timeline; nil at depth 0.
+    public var parentID: String?
+    /// The enclosing Timeline's `label:`, if any.
+    public var timelineLabel: String?
+    /// Where the enclosing `Timeline(…)` was written.
+    public var timelineSource: SourceLocation?
 
     public init(id: String, label: String?, start: Double, end: Double, depth: Int, pinned: Bool,
-                transitionIn: String, transitionDuration: Double, source: SourceLocation?) {
+                transitionIn: String, transitionDuration: Double, source: SourceLocation?,
+                parentID: String? = nil, timelineLabel: String? = nil, timelineSource: SourceLocation? = nil) {
         self.id = id; self.label = label; self.start = start; self.end = end; self.depth = depth
         self.pinned = pinned; self.transitionIn = transitionIn
         self.transitionDuration = transitionDuration; self.source = source
+        self.parentID = parentID; self.timelineLabel = timelineLabel; self.timelineSource = timelineSource
+    }
+
+    /// The id format: `ClipInfo.id(depth: 1, start: 21.26, line: 284)` → "1:21.260:284".
+    public static func id(depth: Int, start: Double, line: Int) -> String {
+        String(format: "%d:%.3f:%d", depth, start + 0, line)   // + 0 turns -0 into 0
+    }
+
+    /// What an editor shows: the label, else "File.swift:42", else the id.
+    public var displayName: String {
+        label ?? source.map { "\(($0.file as NSString).lastPathComponent):\($0.line)" } ?? id
     }
 
     public var duration: Double { end - start }

@@ -8,17 +8,27 @@ import SwiftUI
 public struct Transition {
     public enum Phase { case `in`, out }
     public var duration: Double
+    /// What editors and `info` show: "cut", "fade", "slide", "flash", "overlap",
+    /// or a custom transition's name. Never affects pixels.
+    public var name: String
     var apply: (AnyView, _ p: Double, _ phase: Phase) -> AnyView
 
-    public static let cut = Transition(duration: 0) { v, _, _ in v }
+    /// A custom transition. `apply` receives the clip's view, progress 0 → 1 and
+    /// the phase (`.in` for the incoming clip, `.out` for the outgoing one).
+    public init(_ name: String, duration: Double,
+                apply: @escaping (AnyView, _ p: Double, _ phase: Phase) -> AnyView) {
+        self.name = name; self.duration = duration; self.apply = apply
+    }
+
+    public static let cut = Transition("cut", duration: 0) { v, _, _ in v }
 
     /// Hold both clips on screen for `d` seconds with no visual blend.
     public static func overlap(_ d: Double) -> Transition {
-        Transition(duration: d) { v, _, _ in v }
+        Transition("overlap", duration: d) { v, _, _ in v }
     }
 
     public static func fade(_ d: Double = 0.35) -> Transition {
-        Transition(duration: d) { v, p, phase in
+        Transition("fade", duration: d) { v, p, phase in
             AnyView(v.opacity(phase == .in ? Ease.easeInOut(p) : 1 - Ease.easeInOut(p)))
         }
     }
@@ -26,7 +36,7 @@ public struct Transition {
     /// Push: incoming slides in from `edge`, outgoing slides out the far side.
     public static func slide(_ d: Double = 0.45, from edge: Edge = .trailing,
                              distance: CGFloat = 1920) -> Transition {
-        Transition(duration: d) { v, p, phase in
+        Transition("slide", duration: d) { v, p, phase in
             let e = Ease.easeInOut(p)
             let dir: CGFloat = (edge == .trailing || edge == .bottom) ? 1 : -1
             let off = phase == .in ? (1 - e) * distance * dir : -e * distance * dir
@@ -37,7 +47,7 @@ public struct Transition {
 
     /// Hard cut hidden under a 2-ish-frame burst drawn by the incoming clip.
     public static func flash(_ d: Double = 0.14, color: Color = .white) -> Transition {
-        Transition(duration: d) { v, p, phase in
+        Transition("flash", duration: d) { v, p, phase in
             guard phase == .in else { return v }
             return AnyView(v.overlay(color.opacity(pow(1 - p, 2)).ignoresSafeArea()))
         }
@@ -54,22 +64,36 @@ public struct Clip {
     var pinnedStart: Double?
     var transition: Transition = .cut
     var content: (Double) -> AnyView
+    /// Editor label from `.named(_:)`; nil shows as "File.swift:line".
+    var label: String?
+    // Where the clip was written, for editors and agents. `#filePath` literals
+    // are immortal strings, so recording them allocates nothing per frame.
+    let file: String
+    let line: Int
 
-    public init<V: View>(_ duration: Double,
+    public init<V: View>(_ duration: Double, file: String = #filePath, line: Int = #line,
                          @ViewBuilder _ content: @escaping (Double) -> V) {
         self.duration = duration
         self.content = { AnyView(content($0)) }
+        self.file = file
+        self.line = line
     }
 
-    public init<V: View>(at start: Double, for duration: Double,
+    public init<V: View>(at start: Double, for duration: Double, file: String = #filePath, line: Int = #line,
                          @ViewBuilder _ content: @escaping (Double) -> V) {
-        self.init(duration, content)
+        self.init(duration, file: file, line: line, content)
         self.pinnedStart = start
     }
 
     /// Cross-transition *into* this clip (from whatever precedes it).
     public func transition(_ tr: Transition) -> Clip {
         var c = self; c.transition = tr; return c
+    }
+
+    /// Name the clip for editors, review comments and agents ("Hero", "Outro").
+    /// Purely descriptive: never changes timing or pixels.
+    public func named(_ label: String) -> Clip {
+        var c = self; c.label = label; return c
     }
 }
 
@@ -101,8 +125,13 @@ public struct Timeline: View {
     let placed: [Placed]
     /// End of the last sequential clip — handy for sizing `defaultDuration`.
     public let duration: Double
+    /// Editor label for the whole lane ("Outro"); nil shows as "File.swift:line".
+    let label: String?
+    let file: String
+    let line: Int
 
-    public init(_ t: Double, @TimelineBuilder _ content: () -> [Clip]) {
+    public init(_ t: Double, label: String? = nil, file: String = #filePath, line: Int = #line,
+                @TimelineBuilder _ content: () -> [Clip]) {
         self.t = t
         let clips = content()
         var cursor = 0.0, starts: [Double] = [], seq: [Int] = []
@@ -126,21 +155,36 @@ public struct Timeline: View {
         }
         self.placed = placed
         self.duration = cursor
+        self.label = label
+        self.file = file
+        self.line = line
+        // Introspection's whole hot-path cost: one task-local read, nil unless probing.
+        ProbeCollector.current?.timelineBuilt(self)
     }
 
     public var body: some View {
+        if let probe = ProbeCollector.current, probe.isRendering {
+            ProbeReporter(timeline: self, probe: probe)
+        } else {
+            clips(scopes: nil)
+        }
+    }
+
+    /// The clips active at `t`. `scopes` (probe renders only) tags each clip's
+    /// subtree so a Timeline nested inside it knows its parent.
+    func clips(scopes: [ProbeScope]?) -> some View {
         ZStack {
             ForEach(placed.indices, id: \.self) { i in
                 let p = placed[i]
                 let local = t - p.start
                 if local >= 0 && local < p.clip.duration {
-                    render(p, local: local)
+                    render(p, local: local, scope: scopes?[i])
                 }
             }
         }
     }
 
-    private func render(_ p: Placed, local: Double) -> AnyView {
+    private func render(_ p: Placed, local: Double, scope: ProbeScope?) -> AnyView {
         var v = p.clip.content(local)
         if p.clip.transition.duration > 0, local < p.clip.transition.duration {
             v = p.clip.transition.apply(v, local / p.clip.transition.duration, .in)
@@ -148,6 +192,7 @@ public struct Timeline: View {
         if let outT = p.outT, t >= p.outStart {
             v = outT.apply(v, min(1, (t - p.outStart) / outT.duration), .out)
         }
+        if let scope { v = AnyView(v.environment(\.probeScope, scope)) }
         return v
     }
 }
