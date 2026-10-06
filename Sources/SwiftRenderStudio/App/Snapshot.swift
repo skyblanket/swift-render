@@ -64,6 +64,8 @@ enum SnapshotRunner {
             let tail = log.split(separator: "\n").suffix(15).joined(separator: "\n")
             FileHandle.standardError.write(Data("[studio] build failed:\n\(rows.joined(separator: "\n"))\n\(tail)\n".utf8))
         }
+        // Inspector launch work (--knob / --props / --check) lands before the capture.
+        while model.inspector.isBusy, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
         if let seconds = options.playFor, model.playback.hasFrame { await play(model, seconds: seconds) }
         await TimelineSnapshot.prepare(model)
         // Let the sharpen pass land and SwiftUI settle.

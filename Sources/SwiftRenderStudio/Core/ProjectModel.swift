@@ -41,6 +41,12 @@ struct LaunchOptions: Equatable, Sendable {
     var tab: InspectorTab?
     /// Snapshot mode: play this many seconds before capturing (prints playback stats).
     var playFor: Double?
+    /// `--knob key=value` (repeatable): live knob overrides applied once the scene opens.
+    var knobs: [String: String] = [:]
+    /// `--props file.json`: props applied once the scene opens (errors land in the Props tab).
+    var propsFile: String?
+    /// `--check`: run the host `check` once the scene opens (Info tab contact sheet).
+    var runCheck = false
     /// Run as a protocol-speaking fake host on stdio (`FakeServe`), not as an app.
     var fakeServe = false
     /// Fake host in a child process through the real `HostClient` (implies simulated builds).
@@ -67,6 +73,11 @@ struct LaunchOptions: Equatable, Sendable {
             case "--snapshot": o.snapshot = v; i += 2
             case "--play-for": o.playFor = v.flatMap(Double.init); i += 2
             case "--tab": o.tab = v.flatMap(InspectorTab.init(rawValue:)); i += 2
+            case "--knob":
+                if let v, let eq = v.firstIndex(of: "=") { o.knobs[String(v[..<eq])] = String(v[v.index(after: eq)...]) }
+                i += 2
+            case "--props": o.propsFile = v; i += 2
+            case "--check": o.runCheck = true; i += 1
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
             case "--comment": o.commentSelection = v; i += 2
             case "--compare": o.compareMode = v.flatMap(CompareMode.init(rawValue:)); i += 2
@@ -126,6 +137,8 @@ final class ProjectModel {
     let review: ReviewController
     let agent: AgentController
     let renders: RenderQueue
+    /// Knobs / Props / Info tab state (S7).
+    @ObservationIgnored private(set) lazy var inspector = InspectorController(model: self)
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
@@ -272,7 +285,7 @@ final class ProjectModel {
                       c.paths.contains(where: { $0.hasSuffix("/\(scene).json") }),
                       Date().timeIntervalSince(lastKnobWrite ?? .distantPast) > 1 else { continue }
                 let values = KnobFile.load(project.knobsURL(scene: scene))
-                Task { await setKnobs(values, dragging: false) }
+                Task { await setKnobs(values, dragging: false, replacing: true) }
             }
         }
     }
@@ -332,9 +345,12 @@ final class ProjectModel {
     // MARK: Knobs / props (S7 builds the UI on these)
 
     /// `dragging`: skip the structure re-probe (`reprobe: false`) while a slider moves.
-    func setKnobs(_ values: [String: KnobValue], dragging: Bool) async {
-        knobValues.merge(values) { $1 }
-        _ = try? await host.apply(.setKnobs, HostParams(knobs: values, reprobe: !dragging))
+    /// `replacing`: `values` is the whole live set, else it's merged in. Either way the
+    /// host gets the complete set: `setKnobs` treats missing keys as back-to-default.
+    func setKnobs(_ values: [String: KnobValue], dragging: Bool, replacing: Bool = false) async {
+        if replacing { knobValues = values } else { knobValues.merge(values) { $1 } }
+        let info = try? await host.apply(.setKnobs, HostParams(knobs: knobValues, reprobe: !dragging))
+        if !dragging, let info { adopt(info) }      // a re-probe may have found knobs behind the change
         playback.invalidate()
     }
 
@@ -344,9 +360,11 @@ final class ProjectModel {
         try? KnobFile.save(knobValues, to: project.knobsURL(scene: scene))
     }
 
-    func setProps(_ json: String) async throws {
-        propsJSON = json
-        _ = try await host.apply(.setProps, HostParams(propsJSON: json))
+    /// nil = the scene's `defaultProps`. Props may change the duration, so the new info is adopted.
+    func setProps(_ json: String?) async throws {
+        let info = try await host.apply(.setProps, HostParams(propsJSON: json))
+        propsJSON = json ?? info?.propsJSON
+        if let info { adopt(info) }
         playback.invalidate()
     }
 

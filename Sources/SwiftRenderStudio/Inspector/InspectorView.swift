@@ -30,6 +30,7 @@ struct InspectorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .task(id: model.info?.name) { await model.inspector.sceneOpened() }
     }
 
     private func label(_ tab: InspectorTab) -> String {
