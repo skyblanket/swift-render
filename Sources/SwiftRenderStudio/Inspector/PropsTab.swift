@@ -223,10 +223,9 @@ struct PropsForm: View {
                 let p = path.appending(.index(i))
                 if item.isContainer {
                     disclosure(p, item, title: Self.itemTitle(item, index: i), depth: depth + 1)
-                        .contextMenu { Button("Remove Item", role: .destructive) { insp.removeElement(p) } }
+                        .studioContextMenu(ContextMenus.contentField(p, value: item, removable: true, insp: insp, model: model))
                 } else {
-                    field(p, item, label: nil)
-                        .contextMenu { Button("Remove Item", role: .destructive) { insp.removeElement(p) } }
+                    field(p, item, label: nil, removable: true)
                 }
             })
         default:
@@ -270,7 +269,7 @@ struct PropsForm: View {
     }
 
     @ViewBuilder
-    private func field(_ path: PropsPath, _ value: JSONValue, label explicit: String?? = .none) -> some View {
+    private func field(_ path: PropsPath, _ value: JSONValue, label explicit: String?? = .none, removable: Bool = false) -> some View {
         let label: String? = explicit ?? path.last.map {
             switch $0 { case .key(let k): return KnobNames.humanize(k); case .index(let i): return "Item \(i + 1)" }
         }
@@ -284,6 +283,8 @@ struct PropsForm: View {
         }
         .id(path)
         .help(path.description)
+        .contentShape(Rectangle())
+        .studioContextMenu(ContextMenus.contentField(path, value: value, removable: removable, insp: insp, model: model))
     }
 
     @ViewBuilder

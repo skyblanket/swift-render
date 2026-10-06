@@ -146,6 +146,8 @@ struct RenderJobRow: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .modifier(FinishedExportMenu(model: model, job: job))
     }
 
     private var tint: AnyShapeStyle {
@@ -259,5 +261,19 @@ struct ProgressBar: View {
             }
         }
         .frame(height: 5)
+    }
+}
+
+/// A finished export's row: the same right-click menu as its row in the sidebar.
+private struct FinishedExportMenu: ViewModifier {
+    let model: ProjectModel
+    let job: RenderJob
+
+    func body(content: Content) -> some View {
+        if case .finished = job.state, FileManager.default.fileExists(atPath: job.output.path) {
+            content.studioContextMenu(ContextMenus.export(job.output, model: model))
+        } else {
+            content
+        }
     }
 }

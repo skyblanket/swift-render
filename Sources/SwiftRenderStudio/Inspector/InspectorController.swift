@@ -15,6 +15,9 @@ import SwiftRenderKit
 final class InspectorController {
     @ObservationIgnored private unowned let model: ProjectModel
 
+    /// The window's model, for views that only hold the inspector (menus).
+    var projectModel: ProjectModel { model }
+
     init(model: ProjectModel) {
         self.model = model
         launchPending = model.options.runCheck || !model.options.knobs.isEmpty || model.options.propsFile != nil

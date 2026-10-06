@@ -357,7 +357,11 @@ struct TimelineInput {
     }
 }
 
+
 // MARK: - Context menu
+//
+// Whatever is under the pointer: a clip, a comment marker (the same menu as its list row
+// and pin), a score event or caption, or a bare spot on the ruler or a lane (a time).
 
 struct TimelineContextMenu: View {
     let model: ProjectModel
@@ -365,41 +369,34 @@ struct TimelineContextMenu: View {
     @AppStorage(TimelinePrefs.follow) private var follow = true
 
     var body: some View {
-        let h = state.hover?.hit
+        let hover = state.hover
+        let h = hover?.hit
         if let h, h.kind == .clip, let c = model.info?.clips.first(where: { $0.id == h.id }) {
-            Button("Comment on This Clip") {
-                model.playback.pause()
-                model.review.beginComment(t: c.start, end: c.end)
-                model.ui.inspectorTab = .comments
-                model.ui.showInspector = true
-            }
-            Button("Set In/Out to Clip") { model.playback.setInOut(c.start...c.end) }
-            Button("Go to Clip Start") { model.playback.seek(c.start, precise: true) }
-            if let src = c.source {
-                Button("Open \((src.file as NSString).lastPathComponent)") {
-                    model.ui.selectedClipID = c.id
-                    SourceOpener.open(src)
-                }
-            }
+            StudioMenuContent(entries: ContextMenus.clip(c, model: model))
             Divider()
-        } else if let h, h.kind == .comment {
-            Button("Show Comment") {
-                TimelineInput(model: model, state: state, layout: TimelineLayout(slots: []), lanesHeight: 0)
-                    .selectComment(h.id, at: h.start)
-            }
+        } else if let h, h.kind == .comment, let c = model.review.comments.first(where: { $0.id == h.id }) {
+            StudioMenuContent(entries: ContextMenus.comment(c, model: model))
             Divider()
         } else if let h, [.event, .caption, .silence].contains(h.kind) {
-            Button("Comment on This Range") {
-                model.playback.pause()
-                model.review.beginComment(t: h.start, end: h.end > h.start ? h.end : nil)
-                model.ui.inspectorTab = .comments
-                model.ui.showInspector = true
+            Button("Comment on This Range…") { ContextMenus.comment(model, t: h.start, end: h.end > h.start ? h.end : nil) }
+            Button("Select Range") { model.playback.setInOut(h.start...max(h.start, h.end)) }
+            Button("Copy Timecode") {
+                model.edits.copy(h.end > h.start ? "\(StudioTime.precise(h.start))–\(StudioTime.precise(h.end))"
+                                                 : StudioTime.precise(h.start))
             }
-            Button("Set In/Out to Range") { model.playback.setInOut(h.start...max(h.start, h.end)) }
+            Divider()
+        } else if let p = hover?.point, let t = Self.time(at: p.x, model: model) {
+            StudioMenuContent(entries: ContextMenus.time(t, model: model))
             Divider()
         }
-        Button("New Comment at Playhead") { model.perform(.newComment) }
         Button("Zoom to Fit") { model.perform(.timelineZoomFit) }
         Toggle("Follow Playhead", isOn: $follow)
+    }
+
+    /// The frame-snapped time under a lanes-column x, inside the scene.
+    static func time(at x: CGFloat, model: ProjectModel) -> Double? {
+        let v = model.ui.viewport
+        guard model.playback.duration > 0, x >= 0, x <= v.width else { return nil }
+        return min(max(0, v.snap(v.t(x))), model.playback.duration)
     }
 }

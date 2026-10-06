@@ -70,8 +70,8 @@ your project.
 ```
 
 - **Sidebar.** Lists scenes (with `~` for audio-reactive scenes, `{}` for props scenes, and an
-  open-comment badge), review counts, and recent renders. Right-click a render to reveal it
-  in Finder.
+  open-comment badge), review counts, and recent renders. Everything in the window has a
+  right-click menu; see [Right-click menus, Delete and Undo](#right-click-menus-delete-and-undo).
 - **Viewer.** Aspect canvas (16:9, 9:16, 1:1), zoom, title/action-safe guides, region tool for
   comments, comment pins, and A/B compare. A comment's region pin is drawn only on a canvas of the
   same shape as the one it was made on (a 9:16 note is hidden at 16:9; its thread still lists it).
@@ -97,9 +97,83 @@ your project.
 | ⌘R | render with the last preset | ⇧⌘R | Render… sheet |
 | ⇧⌘A | Ask Claude… | ⇧⌘O | open scene / clip source |
 | ⌘1–4 | inspector tabs | ⌥⌘I / ⌥⌘S | inspector / sidebar |
+| ⌫ | delete the selected comment (asks first) | ⌘Z / ⇧⌘Z | undo / redo a delete or Trash move |
+| ⌘C | copy the selected comment's text (Edit › Copy) | | |
 
 Studio handles unmodified keys itself, never as menu shortcuts. They pass straight through
 while you type in a text field, so typing "jkl" in a comment never moves the playhead.
+
+## Right-click menus, Delete and Undo
+
+Every element has a standard Mac context menu. The same thing gets the same menu wherever it
+appears: a comment's list row, its pin on the viewer, its marker in the Comments lane and its
+thread header all use one builder (`ContextMenus.comment`). Every menu's commands are also
+VoiceOver actions on the element (VO-⌘-Space).
+
+| Right-click | Menu (separators as —) |
+|---|---|
+| Comment (row, pin, lane marker, thread header) | Reply · Jump to 0:06.20 · Compare Before and After — Mark Done · Won't Fix (or Looks Good · Not Quite, or Reopen) · Ask Claude… — Open File.swift:73 · Copy Text ⌘C · Copy Reference — Delete Comment… ⌫ |
+| A message in a thread | Copy — Delete Reply… (only replies a person wrote; Claude's and Studio's notes stay) |
+| Scene in the sidebar | Open · Open in Xcode (your editor from Settings) · Show in Finder — Copy Name · Duplicate — Move to Trash… |
+| Sidebar section header | Collapse All · Expand All |
+| Export (sidebar or a finished row in the Exports popover) | Open · Show in Finder — Copy Path — Move to Trash… |
+| Clip on the timeline | Jump to Start · Select Range (In/Out) · Comment on This Clip… — Open File.swift:42 · Copy Timecode |
+| Score event or caption | Comment on This Range… · Select Range · Copy Timecode |
+| Ruler or an empty lane | Add Comment Here — Set In Here · Set Out Here · Clear In and Out — Zoom to Fit · Follow Playhead |
+| The picture | Add Comment Here (a point pin where you clicked) — Copy Frame · Save Frame As… — Fit · Actual Size — Show Safe Areas |
+| Knob | Reset to Default · Copy Value — Open File.swift:12 |
+| Content field | Revert Field · Copy Value — Open Scene Source — Remove Item (list items) |
+| Claude transcript row / changed file | Copy — Open File.swift · Show in Finder (· Copy Path) |
+
+- **Copy Reference** puts `AppleLaunch @ 0:06.20 (c49807dc8)` on the clipboard: the scene, the
+  time and the comment id that `swift-render review show <id>` and the MCP tools accept.
+- **Copy Frame / Save Frame As…** ask the running host for a full-resolution PNG (`still`) of
+  the frame at the playhead; they're dimmed while there is no preview.
+- **Duplicate** writes `<Scene>Copy.swift` next to the original with every whole-word use of
+  the scene's name renamed, and the copy appears after the next build. It refuses (and says
+  why) when the file declares anything else at the top level that isn't `private` or
+  `fileprivate`, because the copy would clash with the original. Undo moves the copy to the Trash.
+
+**Data safety.** Every destructive command asks first in one confirmation dialog that names
+exactly what goes, with a red destructive button and Cancel as the default:
+
+- **Delete Comment…** removes the comment and its attachment frames through `ReviewStore`
+  (`remove(scene:id:)`, locked and atomic like every review edit). **Delete Reply…** removes one
+  reply and the frames only it used.
+- **Move to Trash…** (scenes and exports) uses `FileManager.trashItem`, never `rm`. Studio only
+  moves a plain file strictly inside the project: symlinked folders are resolved first, a
+  symlink itself, a folder, `..` and anything in a hidden folder (`.git`, `.build`, `.swiftpm`)
+  are refused, scenes must be `.swift` files under `Sources/`, and exports must be in `out/`.
+  A trashed scene disappears after the rebuild; its comments and knobs stay in `.swift-render`.
+- **Undo.** Edit › Undo (⌘Z) reverses each of these: a comment or reply comes back with its
+  attachment files (never over a file that has reappeared), and a trashed file is moved back
+  from the Trash (never over a file now at its path; then it stays in the Trash and Studio says
+  so). Redo (⇧⌘Z) does it again. The undo stack is the window's, shared with text fields.
+
+**Keys and the Edit menu.** ⌫ (or Edit › Delete) asks to delete the selected comment;
+⌘C (Edit › Copy) copies its text. Both go through the responder chain: while you type in a
+field, ⌫ and ⌘C act on the text as usual, and only when nothing in front handles them does
+Studio's `EditResponder` (after the window) act on the comment. Shortcut glyphs in context
+menus are hints only; no menu adds a second key binding.
+
+**For agents.** The menus are data: `ContextMenus.<thing>(…)` returns `[StudioMenuEntry]`, which
+`StudioMenuContent` draws as menu items, `studioContextMenu(_:)` attaches (with the VoiceOver
+actions), and `MenuPreview` draws for snapshots. To add a command, add it to the builder; every
+surface that shows that thing picks it up. Deletes go through `model.edits` (`EditController`):
+call `request(_:)` to ask first, never delete directly from a view.
+
+```
+swift run swift-render-studio . --scene AppleLaunch --comment first --context-menu comment --snapshot out/menu.png
+swift run swift-render-studio . --scene AppleLaunch --comment first --confirm delete-comment --snapshot out/confirm.png
+```
+
+`--context-menu comment|reply|scene|section|export|clip|time|frame|knob|content|transcript`
+draws that menu (for the selected comment, else comment #1; the open scene; the newest export;
+the selected clip, else the first; the playhead's time) where it would open, and prints its
+outline (`Reply | Jump to 0:06.20 | … | — | Delete Comment… ⌫`). `--context-menu-at x,y` moves it
+(window points from the top-left). `--confirm delete-comment|delete-reply|trash-scene|trash-export`
+raises the real confirmation dialog and prints its title, button and message. Snapshots never
+delete anything: the snapshot window takes no input.
 
 ## Rendering
 
@@ -203,6 +277,7 @@ The other panels have snapshot options too:
 | Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
 | Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
 | Launch | `--new-launch-film` runs **New Launch Film…**: the project CLI's `launch --no-render` scan, then AppleLaunch opens with those props |
+| Menus | `--context-menu <kind> [--context-menu-at x,y]` draws a right-click menu, `--confirm <kind>` raises a delete/Trash confirmation (see [Right-click menus](#right-click-menus-delete-and-undo)) |
 
 `--knob`, `--props` and `--check` apply as soon as the first scene's info arrives, whether or not
 an inspector tab is shown (no `--tab` needed). `--scene X` loads X's saved knobs, props and

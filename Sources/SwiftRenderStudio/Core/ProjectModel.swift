@@ -197,6 +197,8 @@ final class ProjectModel {
     let renders: RenderQueue
     /// Knobs / Props / Info tab state.
     @ObservationIgnored private(set) lazy var inspector = InspectorController(model: self)
+    /// Deletes (asked first, undoable), Trash, clipboard and frame commands behind the menus.
+    @ObservationIgnored private(set) lazy var edits = EditController(model: self)
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
@@ -601,6 +603,7 @@ final class ProjectModel {
             if agent.isRunning { agent.stop() } else if build.isBuilding { build.cancel() }
             else if let j = renders.active { renders.cancel(j.id) }
         case .openSource: openSource()
+        case .deleteSelection: edits.deleteSelection()
         case .inspectorTab(let t): ui.inspectorTab = t; ui.showInspector = true
         case .toggleInspector: ui.showInspector.toggle()
         case .toggleSidebar: ui.showSidebar.toggle()

@@ -97,7 +97,7 @@ enum RenderSnapshot {
     }
 
     /// Lays `view` out at its fitting size in an offscreen window and renders its layers.
-    private static func renderPanel(_ view: AnyView, like window: NSWindow) -> CGImage? {
+    static func renderPanel(_ view: AnyView, like window: NSWindow) -> CGImage? {
         let dark = window.effectiveAppearance.isDark
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, dark ? .dark : .light)
             .environment(\.controlActiveState, .key))

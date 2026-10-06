@@ -51,6 +51,8 @@ enum StudioAction: Equatable, Sendable {
     case askAgent
     case stop
     case openSource
+    /// ⌫ / Edit › Delete: the selected comment, after a confirmation.
+    case deleteSelection
     // Layout
     case inspectorTab(InspectorTab)
     case toggleInspector, toggleSidebar, toggleAgentPanel, toggleStats

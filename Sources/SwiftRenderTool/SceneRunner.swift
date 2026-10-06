@@ -269,7 +269,8 @@ extension SceneRunner {
 
     func summary(name: String) -> SceneSummary {
         SceneSummary(name: name, kind: kind, defaultDuration: defaultDuration,
-                     hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil)
+                     hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil,
+                     sourcePath: sourcePath)
     }
 }
 

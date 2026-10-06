@@ -47,6 +47,7 @@ struct ViewerView: View {
                 .clipped()
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) { model.perform(.toggleZoomFit) }
+                .modifier(ViewerContextMenu(model: model, canvas: canvas))
             }
             .frame(minHeight: 220)
         }

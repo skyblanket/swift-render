@@ -338,7 +338,23 @@ private struct TranscriptRow: View {
     var pending: Bool
 
     var body: some View {
-        if raw { rawRow } else { friendlyRow }
+        Group {
+            if raw { rawRow } else { friendlyRow }
+        }
+        .contentShape(Rectangle())
+        .studioContextMenu(ContextMenus.transcript(text: copyText, file: row.files.first))
+    }
+
+    /// What Copy puts on the clipboard: the words as shown, plus the raw call underneath.
+    private var copyText: String {
+        let shown: String
+        switch row.kind {
+        case .tool, .result: shown = TranscriptText.step(row, numbers: numbers)
+        case .finished: shown = row.detail.isEmpty ? (row.ok == true ? "Done." : "Claude didn't finish.") : row.detail
+        default: shown = row.title
+        }
+        let raw = [row.title, row.detail].filter { !$0.isEmpty }.joined(separator: " ")
+        return raw.isEmpty || raw == shown ? shown : shown + "\n" + raw
     }
 
     @ViewBuilder private var friendlyRow: some View {
@@ -494,6 +510,7 @@ private struct FilesColumn: View {
                         }
                         .buttonStyle(.plain)
                         .help("Open \(f)")
+                        .studioContextMenu(ContextMenus.file(f))
                         .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.xs)
                     }
                 }

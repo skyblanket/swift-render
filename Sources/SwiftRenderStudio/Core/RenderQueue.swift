@@ -503,6 +503,9 @@ final class RenderQueue {
     // MARK: Outputs
 
     /// Finished renders on disk (sidebar), newest first.
+    /// Something outside the queue moved an export (Move to Trash, Undo): re-list them.
+    func outputsChanged() { outputsVersion += 1 }
+
     func recentOutputs(limit: Int = 8) -> [URL] {
         _ = outputsVersion
         let fm = FileManager.default
