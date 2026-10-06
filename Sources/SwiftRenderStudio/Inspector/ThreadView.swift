@@ -157,6 +157,7 @@ struct ThreadView: View {
                 }
                 Text(body)
                     .font(StudioStyle.Fonts.callout)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 10).padding(.vertical, 7)
                     .background(StudioStyle.bubble, in: StudioStyle.rounded(StudioStyle.Radius.large))

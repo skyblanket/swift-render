@@ -118,6 +118,20 @@ extension Array where Element == StudioMenuEntry {
 }
 
 /// The items of a menu, for `.contextMenu { }` and `Menu { }`.
+extension Array where Element == StudioMenuEntry {
+    /// Splits off the trailing destructive group (after its separator), so a host menu
+    /// that appends its own commands can still put the destructive ones last.
+    var splitDestructive: (head: [StudioMenuEntry], destructive: [StudioMenuEntry]) {
+        var head = self, tail: [StudioMenuEntry] = []
+        while let last = head.last, last.item?.destructive == true {
+            tail.insert(last, at: 0)
+            head.removeLast()
+        }
+        while let last = head.last, case .divider = last { head.removeLast() }
+        return (head, tail)
+    }
+}
+
 struct StudioMenuContent: View {
     var entries: [StudioMenuEntry]
 

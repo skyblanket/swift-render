@@ -6,10 +6,13 @@ import SwiftRenderKit
 //
 // Exports run one at a time through the project's own CLI, never the preview host:
 //
-//   build    optimized → `swift build -c release --product <p> --scratch-path .build/studio`
-//            current debug → the executable the live host runs (no build)
-//   render   `<exe> render <Scene> <preset flags> [--range a:b] [--knobs f] [--props f] --progress json`
-//            stderr `{"progress":{…}}` lines drive the bar and ETA
+//   build    optimized → `swift build -c release --product <p> --scratch-path .build/studio-release`
+//            (its own scratch path, so it never waits on the live debug builds' lock), skipped
+//            when the release CLI is newer than every source; current debug → the executable
+//            the live host runs (no build)
+//   render   `<exe> render <Scene> <preset flags> [--range a:b | --jobs auto] [--knobs f] [--props f] --progress json`
+//            stderr `{"stage":…}` lines name the early steps (music, finishing up);
+//            `{"progress":{…}}` lines drive the bar and ETA
 //   finish   GIF: ffmpeg palette pass. In→Out range with a score: `<exe> audio` + ffmpeg mux,
 //            because the CLI skips the audio mux for ranges.
 //
@@ -28,11 +31,18 @@ struct RenderInputs: Sendable {
     var duration: Double?
 }
 
+extension RenderJob.State {
+    var isRendering: Bool { if case .rendering = self { return true }; return false }
+}
+
 struct RenderJob: Identifiable, Equatable, Sendable {
     enum State: Equatable, Sendable {
         case queued
         /// Latest build line, e.g. "[12/40] Compiling SwiftRender NeverHeard.swift".
         case building(String)
+        /// The CLI is running but no frame has landed yet: what it's doing, in plain words
+        /// ("Preparing music…").
+        case preparing(String)
         case rendering(done: Int, total: Int, fps: Double)
         /// Post-processing (GIF palette, audio mux).
         case finishing(String)
@@ -60,10 +70,14 @@ struct RenderJob: Identifiable, Equatable, Sendable {
     var log: [String] = []
     /// Output size on disk once finished.
     var bytes: Int64?
+    /// Frame count from the CLI's first stdout line, before progress lines arrive.
+    var expectedFrames: Int?
+
+    var isRendering: Bool { state.isRendering }
 
     var isActive: Bool {
         switch state {
-        case .building, .rendering, .finishing: return true
+        case .building, .preparing, .rendering, .finishing: return true
         default: return false
         }
     }
@@ -86,6 +100,38 @@ struct RenderJob: Identifiable, Equatable, Sendable {
     var eta: Double? {
         guard case .rendering(let d, let t, let fps) = state, fps > 0, d > 0 else { return nil }
         return Double(max(0, t - d)) / fps
+    }
+
+    /// The one status line the Exports popover and sheet show, in plain words:
+    /// "Rendering 120 of 900 · 42 fps · about 18 s left".
+    var statusLine: String {
+        switch state {
+        case .queued: return "Waiting its turn"
+        case .building: return "Building for export…"
+        case .preparing(let what): return what
+        case .rendering(let done, let total, let fps):
+            var s = "Rendering \(done.formatted()) of \(total.formatted())"
+            if fps > 0 { s += " · \(Int(fps.rounded())) fps" }
+            if let eta { s += " · " + Self.timeLeft(eta) }
+            return s
+        case .finishing(let what): return what
+        case .finished(let secs): return "Done in " + Self.clock(secs)
+        case .failed(let why): return why
+        case .cancelled: return "Stopped"
+        }
+    }
+
+    /// "about 18 s left", "about 3 min left", "less than a second left".
+    static func timeLeft(_ s: Double) -> String {
+        if s < 1 { return "almost done" }
+        if s < 60 { return "about \(Int(s.rounded())) s left" }
+        let m = Int((s / 60).rounded())
+        return "about \(m) min left"
+    }
+
+    static func clock(_ s: Double) -> String {
+        let t = Int(s.rounded())
+        return t >= 60 ? String(format: "%d:%02d", t / 60, t % 60) : String(format: "%.1f s", s)
     }
 
     /// The span of scene time the export covers.
@@ -155,7 +201,11 @@ final class RenderQueue {
     /// Release (or debug) build in Studio's scratch path, so the export uses the
     /// same module cache as the live builds and never fights the terminal's lock.
     static let swiftPM: ExecutableResolver = { project, configuration, progress in
-        let scratch = RenderQueue.realPath(project.root).appendingPathComponent(".build/studio", isDirectory: true)
+        let scratch = RenderQueue.scratchPath(project, configuration: configuration)
+        // Built once and reused: skip SwiftPM entirely while the release CLI is newer than
+        // every source (a no-op `swift build` still costs seconds of manifest work).
+        let built = scratch.appendingPathComponent("\(configuration)/\(project.config.product)")
+        if configuration == "release", RenderQueue.isFresh(built, project: project) { return built }
         let (events, cancel) = ProjectBuilder.stream(project, configuration: configuration, scratchPath: scratch)
         return try await withTaskCancellationHandler {
             for await e in events {
@@ -175,6 +225,37 @@ final class RenderQueue {
         } onCancel: {
             cancel.cancel()
         }
+    }
+
+    /// Release exports build in `.build/studio-release` — apart from the live debug builds in
+    /// `.build/studio`, so an export never waits on (or blocks) a hot reload.
+    nonisolated static func scratchPath(_ project: Project, configuration: String) -> URL {
+        RenderQueue.realPath(project.root)
+            .appendingPathComponent(configuration == "release" ? ".build/studio-release" : ".build/studio", isDirectory: true)
+    }
+
+    /// The release CLI at `exe` exists and is newer than the manifest and every file under
+    /// `Sources/` (and a custom scenes directory).
+    nonisolated static func isFresh(_ exe: URL, project: Project) -> Bool {
+        let fm = FileManager.default
+        guard let built = (try? fm.attributesOfItem(atPath: exe.path))?[.modificationDate] as? Date else { return false }
+        var roots = [project.root.appendingPathComponent("Package.swift"),
+                     project.root.appendingPathComponent("Package.resolved"),
+                     project.root.appendingPathComponent("Sources", isDirectory: true)]
+        if let dir = project.config.scenesDir { roots.append(project.root.appendingPathComponent(dir, isDirectory: true)) }
+        for root in roots {
+            guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                if let d = (try? fm.attributesOfItem(atPath: root.path))?[.modificationDate] as? Date, d > built { return false }
+                continue
+            }
+            if let d = (try? fm.attributesOfItem(atPath: root.path))?[.modificationDate] as? Date, d > built { return false }
+            for case let url as URL in walker {
+                if let d = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d > built {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     /// `BuildController.canonical` off the main actor: the scratch path must be spelled
@@ -276,7 +357,7 @@ final class RenderQueue {
         switch jobs[i].state {
         case .queued:
             jobs[i].state = .cancelled
-        case .building, .rendering, .finishing:
+        case .building, .preparing, .rendering, .finishing:
             guard let r = running[id] else { return }
             r.cancelled = true
             r.task?.cancel()                // stops a build
@@ -368,7 +449,7 @@ final class RenderQueue {
                 exe = debug
             } else {
                 let config = job.build == .optimized ? "release" : "debug"
-                update(id) { $0.state = .building(config == "release" ? "Building release…" : "Building…") }
+                update(id) { $0.state = .building("Building for export…") }
                 exe = try await resolveExecutable(project, config) { [weak self] line in
                     Task { @MainActor in
                         guard let self, case .building = self.job(id)?.state else { return }
@@ -415,9 +496,12 @@ final class RenderQueue {
         var args = job.preset.args(scene: job.scene, out: videoOut)
         if let range = job.range {
             args += ["--range", String(format: "%.4f:%.4f", range.lowerBound, range.upperBound)]
+        } else {
+            // Whole films render in parallel processes, stitched without re-encoding.
+            args += ["--jobs", "auto"]
         }
         args += extra + ["--progress", "json"]
-        update(id) { $0.state = .rendering(done: 0, total: 0, fps: 0) }
+        update(id) { $0.state = .preparing("Getting ready…") }
         let status = await runChild(id, r, exe, args, progress: true)
         if r.cancelled { finish(.cancelled); return }
         guard status == 0, fm.fileExists(atPath: videoOut.path) else {
@@ -465,7 +549,13 @@ final class RenderQueue {
                 for await line in child.stderrLines {
                     guard let self else { continue }
                     if progress, let p = try? HostWire.decode(RenderProgressLine.self, line: line) {
-                        self.update(id) { $0.state = .rendering(done: p.progress.frame, total: p.progress.total, fps: p.progress.fps) }
+                        self.update(id) {
+                            // A late chunk line can't pull a job that's finishing back to rendering.
+                            if case .finishing = $0.state { return }
+                            $0.state = .rendering(done: p.progress.frame, total: p.progress.total, fps: p.progress.fps)
+                        }
+                    } else if progress, let st = try? HostWire.decode(RenderStageLine.self, line: line) {
+                        self.update(id) { $0.state = Self.state(after: st, current: $0.state) }
                     } else {
                         self.appendLog(id, String(decoding: line, as: UTF8.self))
                     }
@@ -476,17 +566,24 @@ final class RenderQueue {
                     guard let self else { continue }
                     let text = String(decoding: line, as: UTF8.self)
                     // "[swift-render] scene=… frames=540 → out" — the total before the first progress line.
-                    if progress, let total = Self.parseFrames(text) {
-                        self.update(id) {
-                            if case .rendering(0, 0, _) = $0.state { $0.state = .rendering(done: 0, total: total, fps: 0) }
-                        }
-                    }
+                    if progress, let total = Self.parseFrames(text) { self.update(id) { $0.expectedFrames = total } }
                     self.appendLog(id, text)
                 }
             }
         }
         // Not cancellable: `cancel` terminates the child, which ends this wait.
         return await child.waitForExit().status
+    }
+
+    /// The job state a `{"stage":…}` line moves to. Stages only describe the steps
+    /// around the frames; progress lines own `.rendering`.
+    static func state(after line: RenderStageLine, current: RenderJob.State) -> RenderJob.State {
+        switch line.stage {
+        case .build: return .building("Building for export…")
+        case .audio: return current.isRendering ? current : .preparing("Preparing music…")
+        case .render: return current.isRendering ? current : .preparing("Rendering the first frames…")
+        case .mux: return .finishing("Finishing up…")
+        }
     }
 
     static func parseFrames(_ line: String) -> Int? {

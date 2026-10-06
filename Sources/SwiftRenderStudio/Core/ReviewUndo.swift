@@ -106,11 +106,13 @@ extension ReviewStore {
 extension ReviewController {
     /// Deletes a comment and its attachment files; the returned copy undoes it.
     @discardableResult
-    func deleteKeepingCopy(_ id: String) throws -> DeletedComment {
-        guard let scene else { throw ReviewError.io("no scene selected") }
+    func deleteKeepingCopy(_ id: String, scene: String? = nil) throws -> DeletedComment {
+        guard let scene = scene ?? self.scene else { throw ReviewError.io("no scene selected") }
         let d = try store.removeKeepingCopy(scene: scene, id: id)
         if selection == id { selection = nil; threadOpen = false }
         if compareID == id { compareID = nil }
+        // A deleted comment can't still be waiting for Claude.
+        dequeueFromAgent(id)
         reload()
         return d
     }
@@ -124,8 +126,8 @@ extension ReviewController {
 
     /// Deletes one reply from a thread; the returned copy undoes it.
     @discardableResult
-    func deleteReply(_ commentID: String, replyID: String) throws -> DeletedReply {
-        guard let scene else { throw ReviewError.io("no scene selected") }
+    func deleteReply(_ commentID: String, replyID: String, scene: String? = nil) throws -> DeletedReply {
+        guard let scene = scene ?? self.scene else { throw ReviewError.io("no scene selected") }
         let r = try store.removeReply(scene: scene, commentID: commentID, replyID: replyID)
         reload()
         return r

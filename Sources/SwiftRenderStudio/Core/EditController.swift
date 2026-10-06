@@ -82,7 +82,7 @@ final class EditController {
                                     message: "It's removed from the thread. You can undo this with Edit › Undo (⌘Z).",
                                     button: "Delete Reply")
         case .trashScene(let name, let file, let others):
-            var msg = "\(name) disappears from Studio after the next build."
+            var msg = "Studio rebuilds without \(name). If other code still uses it, that build fails until you put the file back."
             if !others.isEmpty {
                 msg += " This file also holds \(TranscriptText.list(others)), so \(others.count == 1 ? "it goes" : "they go") too."
             }
@@ -115,9 +115,10 @@ final class EditController {
         request(.deleteComment(id: id))
     }
 
-    func deleteComment(_ id: String) {
+    /// `scene` is the comment's own scene (Redo after switching scenes); nil = the one open.
+    func deleteComment(_ id: String, scene: String? = nil) {
         do {
-            let d = try model.review.deleteKeepingCopy(id)
+            let d = try model.review.deleteKeepingCopy(id, scene: scene)
             registerUndo("Delete Comment") { $0.restoreComment(d) }
         } catch {
             model.ui.toast = "Couldn't delete the comment. \(error)"
@@ -127,15 +128,15 @@ final class EditController {
     private func restoreComment(_ d: DeletedComment) {
         do {
             try model.review.restore(d)
-            registerUndo("Delete Comment") { $0.deleteComment(d.comment.id) }
+            registerUndo("Delete Comment") { $0.deleteComment(d.comment.id, scene: d.scene) }
         } catch {
             model.ui.toast = "Couldn't bring the comment back. \(error)"
         }
     }
 
-    func deleteReply(_ commentID: String, replyID: String) {
+    func deleteReply(_ commentID: String, replyID: String, scene: String? = nil) {
         do {
-            let r = try model.review.deleteReply(commentID, replyID: replyID)
+            let r = try model.review.deleteReply(commentID, replyID: replyID, scene: scene)
             registerUndo("Delete Reply") { $0.restoreReply(r) }
         } catch {
             model.ui.toast = "Couldn't delete the reply. \(error)"
@@ -145,7 +146,7 @@ final class EditController {
     private func restoreReply(_ r: DeletedReply) {
         do {
             try model.review.restore(r)
-            registerUndo("Delete Reply") { $0.deleteReply(r.commentID, replyID: r.reply.id) }
+            registerUndo("Delete Reply") { $0.deleteReply(r.commentID, replyID: r.reply.id, scene: r.scene) }
         } catch {
             model.ui.toast = "Couldn't bring the reply back. \(error)"
         }
@@ -207,9 +208,10 @@ final class EditController {
             if model.selectedScene == scene, let next = model.scenes.first(where: { $0.name != scene })?.name {
                 Task { await model.select(scene: next) }
             }
-            let t = try trash.trash(file, within: model.project.root.appendingPathComponent("Sources"), extensions: ["swift"])
-            model.ui.toast = "Moved \(file.lastPathComponent) to the Trash. \(scene) goes away after the build."
-            registerUndo("Move to Trash") { $0.putBack(t) }
+            let sources = model.project.root.appendingPathComponent("Sources")
+            let t = try trash.trash(file, within: sources, extensions: ["swift"])
+            model.ui.toast = "Moved \(file.lastPathComponent) to the Trash. Studio rebuilds without \(scene)."
+            registerUndo("Move to Trash") { $0.putBack(t, within: sources, extensions: ["swift"]) }
         } catch {
             model.ui.toast = "Couldn't move \(file.lastPathComponent) to the Trash. \(error)"
         }
@@ -238,8 +240,9 @@ final class EditController {
     /// Undo of Duplicate: the copy goes to the Trash (it's never deleted outright).
     private func trashCopy(_ url: URL) {
         do {
-            let t = try trash.trash(url, within: model.project.root.appendingPathComponent("Sources"), extensions: ["swift"])
-            registerUndo("Duplicate Scene") { $0.putBack(t) }
+            let sources = model.project.root.appendingPathComponent("Sources")
+            let t = try trash.trash(url, within: sources, extensions: ["swift"])
+            registerUndo("Duplicate Scene") { $0.putBack(t, within: sources, extensions: ["swift"]) }
         } catch {
             model.ui.toast = "Couldn't remove the copy. \(error)"
         }
@@ -251,23 +254,25 @@ final class EditController {
         do {
             let t = try trash.trash(url, within: model.project.rendersDir)
             model.renders.outputsChanged()
-            registerUndo("Move to Trash") { $0.putBack(t) }
+            let renders = model.project.rendersDir
+            registerUndo("Move to Trash") { $0.putBack(t, within: renders) }
         } catch {
             model.ui.toast = "Couldn't move \(url.lastPathComponent) to the Trash. \(error)"
         }
     }
 
-    /// Undo of any Move to Trash.
-    private func putBack(_ t: TrashedFile) {
+    /// Undo of any Move to Trash. Redo moves it again only through the same checks
+    /// (`within`, `extensions`) the first move passed: the path may have changed since.
+    private func putBack(_ t: TrashedFile, within: URL?, extensions: Set<String>? = nil) {
         do {
             try trash.restore(t)
             model.renders.outputsChanged()
             model.ui.toast = "Put back \(t.original.lastPathComponent)"
             registerUndo("Move to Trash") { me in
                 do {
-                    let again = try me.trash.trash(t.original)
+                    let again = try me.trash.trash(t.original, within: within, extensions: extensions)
                     me.model.renders.outputsChanged()
-                    me.registerUndo("Move to Trash") { $0.putBack(again) }
+                    me.registerUndo("Move to Trash") { $0.putBack(again, within: within, extensions: extensions) }
                 } catch {
                     me.model.ui.toast = "Couldn't move \(t.original.lastPathComponent) to the Trash. \(error)"
                 }
@@ -314,14 +319,24 @@ final class EditController {
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "\(model.selectedScene ?? "Frame")-\(StudioTime.precise(t).replacingOccurrences(of: ":", with: ".")).png"
         panel.directoryURL = model.project.rendersDir
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            do {
-                try await capture(t, url)
-                model.ui.toast = "Saved \(url.lastPathComponent)"
-            } catch {
-                model.ui.toast = "Couldn't save the frame. \(error)"
+        let save: (URL) -> Void = { [model] url in
+            Task {
+                do {
+                    try await capture(t, url)
+                    model.ui.toast = "Saved \(url.lastPathComponent)"
+                } catch {
+                    model.ui.toast = "Couldn't save the frame. \(error)"
+                }
             }
+        }
+        // A sheet on the project window, like every other save in a document window.
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in
+                guard response == .OK, let url = panel.url else { return }
+                MainActor.assumeIsolated { save(url) }
+            }
+        } else if panel.runModal() == .OK, let url = panel.url {
+            save(url)
         }
     }
 

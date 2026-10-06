@@ -108,8 +108,12 @@ enum ContextMenus {
         m.add("Show in Finder", symbol: "folder") { SourceOpener.reveal(url) }
         m.divider()
         m.add("Copy Path", symbol: "doc.on.doc") { e.copy(url.path) }
-        m.divider()
-        m.add("Move to Trash…", symbol: "trash", destructive: true) { e.request(.trashExport(url)) }
+        // Only exports Studio keeps in out/ can be trashed from here; a file saved elsewhere
+        // (Save To… outside the project) is the person's to manage in Finder.
+        if (try? e.trash.validate(url, within: model.project.rendersDir)) != nil {
+            m.divider()
+            m.add("Move to Trash…", symbol: "trash", destructive: true) { e.request(.trashExport(url)) }
+        }
         return m.built
     }
 

@@ -136,8 +136,9 @@ enum RenderPreset: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Optimized (release) builds by default for deliverables; debug is fine for drafts.
-    var prefersRelease: Bool { group == .master || group == .appStore }
+    /// Every export renders with the optimized (release) CLI by default: debug builds are
+    /// 6–20× slower at score synthesis and heavy scenes, and the release CLI is built once.
+    var prefersRelease: Bool { true }
 
     /// `render` arguments (without `--progress`, range, knobs or props). For a GIF, `out`
     /// is the intermediate MP4 that ffmpeg converts.

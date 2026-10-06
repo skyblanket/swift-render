@@ -386,6 +386,7 @@ final class ReviewController {
 
     /// Ask Claude consumed the queue.
     func clearAgentQueue() { agentQueue = [] }
+    func dequeueFromAgent(_ id: String) { agentQueue.remove(id) }
 
     /// `[` / `]`: previous/next comment by time; returns its time to seek to.
     func selectAdjacent(next: Bool, from t: Double) -> Double? {

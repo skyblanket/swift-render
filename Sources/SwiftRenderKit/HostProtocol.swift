@@ -269,6 +269,18 @@ public struct RenderProgressLine: Codable, Sendable, Equatable {
     public init(frame: Int, total: Int, fps: Double) { progress = Progress(frame: frame, total: total, fps: fps) }
 }
 
+/// A stage line of `render --progress json`, sent before (and after) frames flow so a UI
+/// never sits on a vague "Starting…": `{"stage":"audio","detail":"Synthesizing the score"}`.
+/// Stages: `build` (Studio's own, before the CLI runs), `audio` (score synthesis or audio
+/// analysis — can take seconds), `render` (frames about to flow), `mux` (encoding is done;
+/// the file is being finalized, stitched or given its soundtrack).
+public struct RenderStageLine: Codable, Sendable, Equatable {
+    public enum Stage: String, Codable, Sendable { case build, audio, render, mux }
+    public var stage: Stage
+    public var detail: String?
+    public init(_ stage: Stage, _ detail: String? = nil) { self.stage = stage; self.detail = detail }
+}
+
 /// One-line JSON encode/decode shared by both ends.
 public enum HostWire {
     public static func encode<T: Encodable>(_ value: T) throws -> Data {

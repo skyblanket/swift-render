@@ -182,6 +182,19 @@ Exports run through your project's CLI, the same `render` command you would type
 press ⇧⌘R for the sheet, and ⌘R to render again with the last preset (it is remembered
 across launches).
 
+Exports use a **release** build of the CLI by default ("Final" in the sheet): `swift build -c
+release --product <p> --scratch-path .build/studio-release`, built once and reused until a file
+under `Sources/` (or the manifest) is newer than it, in its own scratch path so it never waits on
+the live debug builds. Debug builds are 6–20× slower at score synthesis and heavy scenes. A whole
+film renders with `--jobs auto` (parallel processes, stitched without re-encoding); an In→Out
+range renders in one process. "Quick" uses the debug executable the preview host runs.
+
+The Exports popover shows one line of status per job: "Building for export…", "Preparing
+music…" (the CLI's `{"stage":"audio"}` line), "Rendering 120 of 900 · 42 fps · about 18 s
+left" under a native progress bar, "Finishing up…" (`{"stage":"mux"}`), then Open and Show in
+Finder. Snapshots: `--render <preset> [--render-wait done] [--render-build quick] --show renders`
+prints the job's final state and wall time.
+
 | Preset | Output | Flags passed to `render` |
 |---|---|---|
 | Master 1080p60 | 1920×1080, 60 fps, H.264 12 Mb/s | `--fps 60` |

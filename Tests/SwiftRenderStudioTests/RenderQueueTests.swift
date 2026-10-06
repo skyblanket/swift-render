@@ -22,10 +22,16 @@ final class RenderQueueTests: XCTestCase {
         echo "[swift-render] scene=$2 duration=1.0s range=0.0-1.0s fps=30 size=960×540 frames=30 → $out"
         mkdir -p "$(dirname "$out")"
         if [ -n "$FAKE_PARTIAL" ]; then echo partial > "$out"; fi
+        if [ -n "$FAKE_STAGES" ]; then
+          printf '{"stage":"audio","detail":"Synthesizing the score"}\\n' >&2
+          sleep ${FAKE_STEP:-0.05}
+          printf '{"stage":"render"}\\n' >&2
+        fi
         for i in 10 20 30; do
           printf '{"progress":{"frame":%d,"total":30,"fps":120.0}}\\n' $i >&2
           sleep ${FAKE_STEP:-0.05}
         done
+        [ -n "$FAKE_STAGES" ] && printf '{"stage":"mux","detail":"Finishing the file"}\\n' >&2 && sleep ${FAKE_STEP:-0.05}
         echo "args: $*" > "$out"
         echo "[swift-render] done in 0.2s → $out"
         """.write(to: cli, atomically: true, encoding: .utf8)
@@ -33,7 +39,7 @@ final class RenderQueueTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        unsetenv("FAKE_STEP"); unsetenv("FAKE_PARTIAL")
+        unsetenv("FAKE_STEP"); unsetenv("FAKE_PARTIAL"); unsetenv("FAKE_STAGES")
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -141,6 +147,66 @@ final class RenderQueueTests: XCTestCase {
         let scratch = Project(root: root).cacheDir.appendingPathComponent("renders")
         XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: scratch.path)) ?? [], [])
         XCTAssertEqual(q.recentOutputs().map(\.lastPathComponent), [out.lastPathComponent])
+    }
+
+    /// `{"stage":…}` lines name the steps around the frames: the job never sits on a
+    /// vague "Starting…", and a whole-film export renders with `--jobs auto`.
+    func testStageLinesDriveTheStatus() async throws {
+        setenv("FAKE_STEP", "0.4", 1)
+        setenv("FAKE_STAGES", "1", 1)
+        let q = queue()
+        let id = q.enqueue(scene: "Demo", preset: .master1080p60, range: nil, build: .optimized, knobs: .saveToFile)
+        let music = await wait(q, id) { if case .preparing(let s) = $0.state { return s.contains("music") }; return $0.isDone }
+        XCTAssertEqual(music?.state, .preparing("Preparing music…"))
+        XCTAssertEqual(music?.statusLine, "Preparing music…")
+        let rendering = await wait(q, id) { $0.state.isRendering || $0.isDone }
+        XCTAssertTrue(rendering?.statusLine.hasPrefix("Rendering ") ?? false, rendering?.statusLine ?? "")
+        let finishing = await wait(q, id) { if case .finishing = $0.state { return true }; return $0.isDone }
+        XCTAssertEqual(finishing?.state, .finishing("Finishing up…"))
+        let job = await wait(q, id) { $0.isDone }
+        guard case .finished = job?.state else { return XCTFail("not finished: \(String(describing: job?.state))") }
+        let args = try String(contentsOf: try XCTUnwrap(job?.output), encoding: .utf8)
+        XCTAssertTrue(args.contains("--jobs auto"), args)
+    }
+
+    func testStatusLineWording() {
+        var j = RenderJob(id: UUID(), scene: "S", preset: .master1080p60, range: nil, build: .optimized,
+                          knobs: .saveToFile, output: URL(fileURLWithPath: "/tmp/x.mp4"))
+        j.state = .rendering(done: 120, total: 900, fps: 42)
+        XCTAssertEqual(j.statusLine, "Rendering 120 of 900 · 42 fps · about 19 s left")
+        j.state = .rendering(done: 10, total: 900, fps: 0)
+        XCTAssertEqual(j.statusLine, "Rendering 10 of 900")
+        j.state = .building("[3/9] Compiling")
+        XCTAssertEqual(j.statusLine, "Building for export…")
+        XCTAssertEqual(RenderQueue.state(after: RenderStageLine(.mux), current: .rendering(done: 9, total: 9, fps: 1)),
+                       .finishing("Finishing up…"))
+        // A late audio line never pulls a rendering job back to "preparing".
+        XCTAssertEqual(RenderQueue.state(after: RenderStageLine(.audio), current: .rendering(done: 1, total: 9, fps: 1)),
+                       .rendering(done: 1, total: 9, fps: 1))
+        XCTAssertTrue(RenderPreset.allCases.allSatisfy(\.prefersRelease), "every export defaults to the release CLI")
+    }
+
+    /// The release CLI is reused until a source is newer than it.
+    func testReleaseExecutableFreshness() throws {
+        let fm = FileManager.default
+        let src = root.appendingPathComponent("Sources/App", isDirectory: true)
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        let file = src.appendingPathComponent("Scene.swift")
+        try "let x = 1".write(to: file, atomically: true, encoding: .utf8)
+        try "// manifest".write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        let project = Project(root: root)
+        let exe = RenderQueue.scratchPath(project, configuration: "release").appendingPathComponent("release/swift-render")
+        XCTAssertTrue(exe.path.contains(".build/studio-release/release/"))
+        XCTAssertFalse(RenderQueue.isFresh(exe, project: project), "not built yet")
+        try fm.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "bin".write(to: exe, atomically: true, encoding: .utf8)
+        let old = Date().addingTimeInterval(-60)
+        for u in [file, src, src.deletingLastPathComponent(), root.appendingPathComponent("Package.swift")] {
+            try fm.setAttributes([.modificationDate: old], ofItemAtPath: u.path)
+        }
+        XCTAssertTrue(RenderQueue.isFresh(exe, project: project))
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: file.path)
+        XCTAssertFalse(RenderQueue.isFresh(exe, project: project), "an edited source needs a rebuild")
     }
 
     func testJobsRunOneAtATime() async {

@@ -16,15 +16,17 @@ enum RenderSnapshot {
         if let io = options.inOut { model.playback.setInOut(io) }
         guard let preset = options.renderPreset, let scene = model.selectedScene else { return }
         let id = model.renders.enqueue(scene: scene, preset: preset, range: model.playback.inOut,
-                                       build: .currentDebug, knobs: .useLive)
-        let deadline = Date().addingTimeInterval(600)
+                                       build: options.renderBuild, knobs: .useLive)
+        let started = Date()
+        let deadline = started.addingTimeInterval(1200)
         while Date() < deadline, let job = model.renders.job(id) {
             if job.isDone { break }
             if !options.renderWaitDone, let f = job.fraction, f >= 0.4, f < 1 { break }
             try? await Task.sleep(for: .milliseconds(50))
         }
         if let job = model.renders.job(id) {
-            print("[studio] render \(job.preset.rawValue): \(job.state)\(job.isDone ? "" : " (captured mid-render)")")
+            print("[studio] render \(job.preset.rawValue): \(job.state)\(job.isDone ? "" : " (captured mid-render)")"
+                  + String(format: " — %.1f s wall", Date().timeIntervalSince(started)))
             if case .failed = job.state { print(job.log.suffix(10).joined(separator: "\n")) }
         }
     }

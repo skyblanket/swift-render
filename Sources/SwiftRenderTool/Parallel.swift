@@ -39,8 +39,10 @@ private final class ChunkProgress: @unchecked Sendable {
     private var logs: [Data]
     private var partial: [Data]
     private var lastEmitted = -1
+    private var forwardedAudio = false
+    private var firstFrame: Date?
+    private var firstSum = 0
     let total: Int
-    let start = Date()
     let emit: Bool
 
     init(chunks: Int, total: Int, emit: Bool) {
@@ -63,12 +65,25 @@ private final class ChunkProgress: @unchecked Sendable {
         }
         var out: Data? = nil
         for line in lines {
-            guard emit, let p = try? HostWire.decode(RenderProgressLine.self, line: line) else { continue }
+            guard emit else { continue }
+            // Every chunk synthesizes an audio-reactive scene's track; say so once, before frames.
+            if let st = try? HostWire.decode(RenderStageLine.self, line: line) {
+                if st.stage == .audio, !forwardedAudio, lastEmitted < 0, let encoded = try? HostWire.encode(st) {
+                    forwardedAudio = true
+                    out = (out ?? Data()) + encoded
+                }
+                continue
+            }
+            guard let p = try? HostWire.decode(RenderProgressLine.self, line: line) else { continue }
             done[k] = p.progress.frame
             let sum = done.reduce(0, +)
+            // Throughput from the first progress line on (chunk start-up isn't render speed);
+            // 0 until there's a second's worth of evidence.
+            if firstFrame == nil { firstFrame = Date(); firstSum = sum }
             guard sum != lastEmitted, sum % 10 == 0 || sum == total else { continue }
             lastEmitted = sum
-            let fps = Double(sum) / max(1e-6, Date().timeIntervalSince(start))
+            let elapsed = Date().timeIntervalSince(firstFrame ?? Date())
+            let fps = elapsed < 1 ? 0 : Double(sum - firstSum) / elapsed
             if let encoded = try? HostWire.encode(RenderProgressLine(frame: sum, total: total, fps: (fps * 10).rounded() / 10)) {
                 out = (out ?? Data()) + encoded
             }
@@ -100,6 +115,11 @@ func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
     guard let exe = Bundle.main.executablePath else { throw NSError(domain: "jobs", code: 1) }
 
     let progress = ChunkProgress(chunks: n, total: total, emit: progressJSON)
+    StageReporter.emit(.render, "\(n) parts")
+    // The soundtrack for the final mux is synthesized while the chunks render.
+    let planTask = Task.detached(priority: .utility) {
+        try AudioPlan.make(audio, fps: fps, needsTrack: false, needsMux: true, announce: false)
+    }
     var procs: [(Process, Pipe, URL)] = []
     for k in 0..<n {
         let a = total * k / n, b = total * (k + 1) / n
@@ -132,7 +152,8 @@ func renderParallel(jobs: Int, scene: String, duration: Double, fps: Int,
         }
     }
 
-    let plan = try AudioPlan.make(audio, fps: fps, needsTrack: false, needsMux: true)
+    let plan = try await planTask.value
     defer { plan.cleanup() }
+    StageReporter.emit(.mux, "Joining \(n) parts")
     try await MP4Assembler.assemble(video: procs.map(\.2), audio: plan.muxURL, to: out)
 }

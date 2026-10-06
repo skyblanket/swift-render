@@ -6,6 +6,11 @@
 codebases. It adds a native editor and an agent review loop on top of the engine.
 
 ### Added
+- **Fast, honest exports in Studio.** Exports use a release CLI built once in
+  `.build/studio-release` (skipped while it's newer than every source) and `--jobs auto` for whole
+  films. `render --progress json` adds `{"stage":"audio"|"render"|"mux"}` lines, and `--jobs`
+  overlaps the final soundtrack synthesis with the chunks. The Exports popover shows a native
+  spinner for early steps, a native progress bar once frames flow, and one plain status line.
 - **Right-click menus, Delete and Undo in Studio.** Comments (list row, viewer pin, lane marker,
   thread), replies, scenes, sidebar sections, exports, clips, the ruler, the picture, knobs,
   content fields and Claude's transcript each have a standard Mac context menu built from one

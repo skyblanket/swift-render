@@ -141,6 +141,13 @@ final class EditTests: XCTestCase {
         XCTAssertTrue(model.review.comments.isEmpty)
         um.undo()
         XCTAssertEqual(model.review.comments.count, 1)
+
+        // Redo after switching scenes deletes from the comment's own scene, not the open one.
+        model.review.load(scene: "Other")
+        um.redo()
+        XCTAssertTrue(try store.load(scene: "Demo").comments.isEmpty, "redo reached Demo")
+        um.undo()
+        XCTAssertEqual(try store.load(scene: "Demo").comments.count, 1)
     }
 
     func testTrashExportUndoPutsItBack() throws {
@@ -309,8 +316,21 @@ final class EditTests: XCTestCase {
         let scene = SceneSummary(name: "Hero", kind: .render, defaultDuration: 5, hasSoundtrack: false, hasProps: false)
         XCTAssertEqual(ContextMenus.scene(scene, model: model).outline.filter { $0 != "—" }.map { $0.hasPrefix("Open in") ? "Open in" : $0 },
                        ["Open", "Open in", "Show in Finder", "Copy Name", "Duplicate", "Move to Trash…"])
-        XCTAssertEqual(ContextMenus.export(root.appendingPathComponent("out/a.mp4"), model: model).outline,
+        let inOut = root.appendingPathComponent("out/a.mp4")
+        try FileManager.default.createDirectory(at: inOut.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("mp4".utf8).write(to: inOut)
+        XCTAssertEqual(ContextMenus.export(inOut, model: model).outline,
                        ["Open", "Show in Finder", "—", "Copy Path", "—", "Move to Trash…"])
+        // An export saved outside out/ is the person's to manage: no Move to Trash.
+        let elsewhere = root.appendingPathComponent("b.mp4")
+        try Data("mp4".utf8).write(to: elsewhere)
+        XCTAssertEqual(ContextMenus.export(elsewhere, model: model).outline, ["Open", "Show in Finder", "—", "Copy Path"])
+        // A host menu that adds its own commands keeps the destructive group last.
+        let c = ReviewComment(id: "c1", t: 1, body: "x", author: ReviewAuthor(name: "Sky"))
+        let split = ContextMenus.comment(c, model: model).splitDestructive
+        XCTAssertEqual(split.destructive.compactMap(\.item?.title), ["Delete Comment…"])
+        XCTAssertFalse(split.head.contains { $0.item?.destructive == true })
+        if case .divider = split.head.last { XCTFail("trailing separator left in the head") }
         XCTAssertEqual(ContextMenus.time(1, model: model).outline, ["Add Comment Here", "—", "Set In Here", "Set Out Here"])
         let frame = ContextMenus.frame(at: CGPoint(x: 0.5, y: 0.5), model: model)
         XCTAssertEqual(frame.outline, ["Add Comment Here", "—", "Copy Frame (off)", "Save Frame As… (off)", "—",

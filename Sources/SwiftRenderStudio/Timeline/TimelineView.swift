@@ -371,11 +371,15 @@ struct TimelineContextMenu: View {
     var body: some View {
         let hover = state.hover
         let h = hover?.hit
+        // A comment marker's Delete Comment… stays last, after the timeline's own commands.
+        let commentMenu = h.flatMap { h in
+            h.kind == .comment ? model.review.comments.first(where: { $0.id == h.id }) : nil
+        }.map { ContextMenus.comment($0, model: model).splitDestructive }
         if let h, h.kind == .clip, let c = model.info?.clips.first(where: { $0.id == h.id }) {
             StudioMenuContent(entries: ContextMenus.clip(c, model: model))
             Divider()
-        } else if let h, h.kind == .comment, let c = model.review.comments.first(where: { $0.id == h.id }) {
-            StudioMenuContent(entries: ContextMenus.comment(c, model: model))
+        } else if let commentMenu {
+            StudioMenuContent(entries: commentMenu.head)
             Divider()
         } else if let h, [.event, .caption, .silence].contains(h.kind) {
             Button("Comment on This Range…") { ContextMenus.comment(model, t: h.start, end: h.end > h.start ? h.end : nil) }
@@ -391,6 +395,10 @@ struct TimelineContextMenu: View {
         }
         Button("Zoom to Fit") { model.perform(.timelineZoomFit) }
         Toggle("Follow Playhead", isOn: $follow)
+        if let commentMenu, !commentMenu.destructive.isEmpty {
+            Divider()
+            StudioMenuContent(entries: commentMenu.destructive)
+        }
     }
 
     /// The frame-snapped time under a lanes-column x, inside the scene.

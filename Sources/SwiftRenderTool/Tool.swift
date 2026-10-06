@@ -254,7 +254,9 @@ func printUsage() {
       --open                   Open the result when done
       --snapshot <png>         `preview` only: save the window to PNG and exit (CI/agents)
       --knobs <file.json>      Knob overrides for this run, used instead of .swift-render/knobs/<Scene>.json
-      --progress json          `render` only: {"progress":{"frame":i,"total":n,"fps":f}} lines on stderr
+      --progress json          `render` only: {"progress":{"frame":i,"total":n,"fps":f}} lines on stderr,
+                               plus {"stage":"audio"|"render"|"mux","detail":…} lines around the frames
+                               (summed across processes with --jobs)
 
     PREVIEW KEYS:
       space play/pause · ←/→ one frame · ⇧←/⇧→ one second · home start · esc/⌘W close
@@ -499,9 +501,15 @@ func run(_ argv: [String]) async throws {
     let start = Date()
     var span = RenderSpan(duration: duration, start: startTime, end: endTime, mux: args.rangeStart == nil)
     if args.progress == "json" {
+        StageReporter.enabled = true
+        // Throughput counts from the first frame: audio synthesis before it isn't render speed.
+        let firstFrame = FirstFrameClock()
         span.progress = { done, total in
+            let t0 = firstFrame.mark()
             guard done % 10 == 0 || done == total else { return }
-            let fps = Double(done) / max(1e-6, Date().timeIntervalSince(start))
+            defer { if done == total { StageReporter.emit(.mux, "Finishing the file") } }
+            let elapsed = Date().timeIntervalSince(t0)
+            let fps = elapsed < 0.5 ? 0 : Double(done - 1) / elapsed
             if let line = try? HostWire.encode(RenderProgressLine(frame: done, total: total, fps: (fps * 10).rounded() / 10)) {
                 FileHandle.standardError.write(line)
             }
@@ -519,3 +527,12 @@ func run(_ argv: [String]) async throws {
     if args.open { NSWorkspace.shared.open(outURL) }
 }
 
+
+/// When the first frame landed (progress throughput is measured from it).
+final class FirstFrameClock: @unchecked Sendable {
+    private var t0: Date?
+    func mark() -> Date {
+        if let t0 { return t0 }
+        let now = Date(); t0 = now; return now
+    }
+}

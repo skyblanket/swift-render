@@ -70,6 +70,8 @@ struct LaunchOptions: Equatable, Sendable {
     /// or, with `--render-wait done`, once finished.
     var renderPreset: RenderPreset?
     var renderWaitDone = false
+    /// `--render-build quick` exports with the live debug executable; the default is Final (release).
+    var renderBuild: BuildChoice = .optimized
     /// Snapshot mode: In/Out set before rendering (`--in-out 2:8`).
     var inOut: ClosedRange<Double>?
     /// Snapshot mode: draw a sheet/popover over the window (`--show render-sheet|renders`).
@@ -129,6 +131,7 @@ struct LaunchOptions: Equatable, Sendable {
                 i += 2
             case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
             case "--render-wait": o.renderWaitDone = v == "done"; i += 2
+            case "--render-build": o.renderBuild = v == "quick" ? .currentDebug : .optimized; i += 2
             case "--show": o.show = v; i += 2
             case "--in-out":
                 let p = (v ?? "").split(separator: ":").compactMap { Double($0) }
