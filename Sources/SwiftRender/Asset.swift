@@ -48,27 +48,43 @@ public enum AssetPaths {
 }
 
 /// Small thread-safe memo used by the media caches.
+///
+/// File-backed entries pass a `version` (see `FileStamp`): a hit only counts when the
+/// version still matches, so a long-lived process (Studio's render host) re-decodes a
+/// sample, image or video after the file on disk changes instead of serving the old one.
 final class LockedCache<Key: Hashable, Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var store: [Key: Value] = [:]
+    private var store: [Key: (version: String, value: Value)] = [:]
     private var order: [Key] = []
     private let limit: Int
 
     init(limit: Int = .max) { self.limit = limit }
 
-    func value(_ key: Key, orInsert make: () throws -> Value) rethrows -> Value {
+    func value(_ key: Key, version: String = "", orInsert make: () throws -> Value) rethrows -> Value {
         lock.lock()
-        if let v = store[key] { lock.unlock(); return v }
+        if let hit = store[key], hit.version == version { lock.unlock(); return hit.value }
         lock.unlock()
         let v = try make()
         lock.lock()
-        if store[key] == nil {
-            store[key] = v
+        if let old = store[key] {
+            if old.version != version { store[key] = (version, v) }
+        } else {
+            store[key] = (version, v)
             order.append(key)
             if order.count > limit { store.removeValue(forKey: order.removeFirst()) }
         }
         lock.unlock()
         return v
+    }
+}
+
+/// Identity of a file's current contents for cache keys: size, modification time
+/// (nanoseconds) and inode — or "missing".
+enum FileStamp {
+    static func of(_ path: String) -> String {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return "missing" }
+        return "\(st.st_size):\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec):\(st.st_ino)"
     }
 }
 

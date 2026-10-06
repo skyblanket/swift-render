@@ -20,6 +20,10 @@ struct ScoreAudio: Sendable {
     let right: [Float]
     /// Decoded from disk rather than synthesized.
     let cacheHit: Bool
+    /// Speech lines or samples that failed, so the mix is missing them. A degraded mix
+    /// is never stored under the fingerprint (`wav` is a side file): once TTS or the
+    /// sample works again, the next load synthesizes the real thing.
+    var degraded: [String] = []
 
     var mono: [Float] { mixdown(left, right) }
 }
@@ -37,8 +41,9 @@ func mixdown(_ left: [Float], _ right: [Float]) -> [Float] {
 }
 
 enum AudioCache {
-    /// Bump when ScoreSynth's output changes for identical events.
-    static let synthVersion = 1
+    /// Bump when ScoreSynth's output changes for identical events — or to drop entries an
+    /// older build may have cached wrongly (2: 0.10.0 could cache voiceless mixes).
+    static let synthVersion = 2
 
     static func directory(for project: Project?) -> URL {
         if let project { return project.cacheDir.appendingPathComponent("audio", isDirectory: true) }
@@ -76,23 +81,59 @@ enum AudioCache {
     }
 
     /// Decode the cached WAV, or synthesize and cache it. Blocking; any thread.
+    ///
+    /// ScoreSynth leaves out (with a stderr warning) any speech line or sample it can't
+    /// produce. Such a mix is still returned — and written next to the cache for
+    /// playback — but never under the fingerprint, and `degraded` says what's missing.
     static func load(_ score: Score, in dir: URL) throws -> ScoreAudio {
         let fp = fingerprint(score)
         let url = url(fingerprint: fp, in: dir)
         if let (l, r) = try? readFloatWAV(url) {
             return ScoreAudio(fingerprint: fp, wav: url, left: l, right: r, cacheHit: true)
         }
+        let problems = unavailableSounds(score)
         let (l, r) = ScoreSynth.render(score)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = problems.isEmpty ? url : dir.appendingPathComponent(".degraded-\(fp).wav")
         // Write then rename: a second host (blue/green swap) may read the same path.
         let tmp = dir.appendingPathComponent(".\(fp)-\(getpid())-\(UUID().uuidString).wav")
         try writeFloatWAV(left: l, right: r, to: tmp)
-        guard rename(tmp.path, url.path) == 0 else {
+        guard rename(tmp.path, target.path) == 0 else {
             try? FileManager.default.removeItem(at: tmp)
             throw NSError(domain: "AudioCache", code: Int(errno), userInfo: [
-                NSLocalizedDescriptionKey: "cannot move cached audio into \(url.path): \(String(cString: strerror(errno)))"])
+                NSLocalizedDescriptionKey: "cannot move cached audio into \(target.path): \(String(cString: strerror(errno)))"])
         }
-        return ScoreAudio(fingerprint: fp, wav: url, left: l, right: r, cacheHit: false)
+        if problems.isEmpty { try? FileManager.default.removeItem(at: dir.appendingPathComponent(".degraded-\(fp).wav")) }
+        return ScoreAudio(fingerprint: fp, wav: target, left: l, right: r, cacheHit: false, degraded: problems)
+    }
+
+    /// Speech lines (TTS) and samples the synth would have to leave out right now.
+    /// Synthesizes missing TTS lines first (batched, as ScoreSynth would), so the
+    /// following synth pass reuses them.
+    static func unavailableSounds(_ score: Score) -> [String] {
+        var problems: [String] = []
+        var lines: [SpeechSpec] = [], seenLines = Set<SpeechSpec>()
+        var samplePaths: [String] = [], seenSamples = Set<String>()
+        for e in score.events {
+            switch e.sound {
+            case .speech(let spec): if seenLines.insert(spec).inserted { lines.append(spec) }
+            case .sample(let ref): if seenSamples.insert(ref.path).inserted { samplePaths.append(ref.path) }
+            default: break
+            }
+        }
+        if !lines.isEmpty {
+            try? Speech.prepare(lines)            // failures are reported per line below
+            for spec in lines {
+                do { _ = try Speech.buffer(spec) } catch {
+                    let text = spec.text.count > 40 ? String(spec.text.prefix(39)) + "…" : spec.text
+                    problems.append("voiceover “\(text)”: \(error)")
+                }
+            }
+        }
+        for path in samplePaths {
+            do { _ = try SampleLibrary.load(path) } catch { problems.append("sample \(path): \(error)") }
+        }
+        return problems
     }
 
     // MARK: 32-bit float WAV
@@ -183,6 +224,8 @@ struct AudioReady: Sendable {
     var seconds: Double
     /// Where the time went, for the host log ("load 0.31s · analyze 1.02s · …").
     var breakdown: String = ""
+    /// What the mix is missing (failed TTS lines, unreadable samples); see `ScoreAudio`.
+    var degraded: [String] = []
 }
 
 extension AudioCache {
@@ -210,7 +253,7 @@ extension AudioCache {
             return AudioReady(path: audio.wav.path, track: track,
                               loudness: loudnessEnvelope(track, duration: duration, rate: loudnessRate),
                               captions: captions, cacheHit: audio.cacheHit, seconds: Date().timeIntervalSince(start),
-                              breakdown: laps.summary)
+                              breakdown: laps.summary, degraded: audio.degraded)
         }
     }
 }

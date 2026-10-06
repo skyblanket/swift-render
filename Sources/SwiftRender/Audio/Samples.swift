@@ -51,9 +51,12 @@ public enum SampleLibrary {
         return try load(url: url)
     }
 
-    /// Load (and cache) a sample by URL.
+    /// Load (and cache, until the file changes) a sample by URL.
     public static func load(url: URL) throws -> SampleBuffer {
-        try cache.value(url.standardizedFileURL.path) { try decode(url) }
+        let path = url.standardizedFileURL.path
+        // Versioned by the file's stamp: an edited sample is decoded again (AudioCache's
+        // fingerprint already changed), never served from the old decode.
+        return try cache.value(path, version: FileStamp.of(path)) { try decode(url) }
     }
 
     static func decode(_ url: URL) throws -> SampleBuffer {

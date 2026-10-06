@@ -11,8 +11,10 @@ public enum MediaLibrary {
     private static let images = LockedCache<String, CGImage?>()
 
     static func source(_ path: String) -> VideoSource? {
-        sources.value(path) {
-            guard let url = AssetPaths.resolve(path) else {
+        // Versioned by the resolved file and its stamp, so an edited clip is re-opened.
+        let resolved = AssetPaths.resolve(path)
+        return sources.value(path, version: resolved.map { $0.path + "|" + FileStamp.of($0.path) } ?? "missing") {
+            guard let url = resolved else {
                 fputs("[swift-render] WARN: video not found: \(path)\n", stderr)
                 return nil
             }
@@ -30,8 +32,9 @@ public enum MediaLibrary {
 
     /// A still image from disk (png, jpg, heic, webp, …).
     public static func image(_ path: String) -> CGImage? {
-        images.value(path) {
-            guard let url = AssetPaths.resolve(path),
+        let resolved = AssetPaths.resolve(path)
+        return images.value(path, version: resolved.map { $0.path + "|" + FileStamp.of($0.path) } ?? "missing") {
+            guard let url = resolved,
                   let ns = NSImage(contentsOf: url),
                   let cg = ns.cgImage(forProposedRect: nil, context: nil, hints: nil)
             else {
