@@ -131,7 +131,7 @@ final class HostSupervisor {
         guard let host = active else { return nil }
         let reply = try await host.call(method, p)
         if let i = reply.result.info { info = i }
-        if method == .setKnobs, let k = p.knobs { openParams.knobs = (openParams.knobs ?? [:]).merging(k) { $1 } }
+        if method == .setKnobs { openParams.knobs = p.knobs }       // the complete set, like the host
         if method == .setProps { openParams.propsJSON = p.propsJSON }
         return reply.result.info
     }

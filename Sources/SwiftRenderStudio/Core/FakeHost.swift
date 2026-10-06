@@ -215,7 +215,7 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
             }
             return HostReply(result: HostResult(info: currentInfo()))
         case .setKnobs:
-            lock.withLock { knobOverrides.merge(p.knobs ?? [:]) { $1 } }
+            lock.withLock { knobOverrides = p.knobs ?? [:] }        // the complete set, like the real host
             return HostReply(result: HostResult(info: currentInfo()))
         case .setProps:
             lock.withLock { session?.propsJSON = p.propsJSON }

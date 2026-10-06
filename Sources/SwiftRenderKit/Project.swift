@@ -10,6 +10,7 @@ import Foundation
 //   .swift-render/reviews/<Scene>.json     review comments   (commit these)
 //   .swift-render/knobs/<Scene>.json       knob overrides    (commit these — they change renders)
 //   .swift-render/attachments/*.png        before/after frames for comments
+//   .swift-render/props/<Scene>/*.json     saved props variants (`render --props <file>`)
 //   .swift-render/cache/                   scratch (gitignored)
 //
 // An optional `swift-render.json` at the root names the CLI product:
@@ -93,6 +94,10 @@ public struct Project: Sendable, Equatable {
 
     public func reviewURL(scene: String) -> URL { reviewsDir.appendingPathComponent("\(scene).json") }
     public func knobsURL(scene: String) -> URL { knobsDir.appendingPathComponent("\(scene).json") }
+
+    /// Saved props variants for a PropsScene, one JSON file each (Studio's Props tab).
+    public var propsDir: URL { dotDir.appendingPathComponent("props", isDirectory: true) }
+    public func propsVariantsDir(scene: String) -> URL { propsDir.appendingPathComponent(scene, isDirectory: true) }
 
     /// Default comment author: config, then `git config user.name`, then the login name.
     public func defaultAuthorName() -> String {
