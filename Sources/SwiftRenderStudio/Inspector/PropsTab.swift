@@ -20,6 +20,7 @@ struct PropsTab: View {
         if model.info?.propsJSON == nil && model.propsJSON == nil {
             StudioEmptyState(title: "No Props", symbol: "curlybraces",
                              message: "This scene isn't a PropsScene. Props scenes take a Codable payload — a launch film per product, a chart per dataset.")
+                .inspectorFill()
         } else {
             VStack(spacing: 0) {
                 header(insp)
@@ -389,6 +390,6 @@ struct PropsTextField: View {
             .background(Color.white.opacity(focused ? 0.1 : 0.05), in: RoundedRectangle(cornerRadius: 4))
             .focused($focused)
             .onChange(of: text, initial: true) { _, t in if !focused { draft = t } }
-            .onChange(of: draft) { _, d in if d != text { commit(d) } }
+            .onChange(of: draft) { _, d in if focused, d != text { commit(d) } }   // typing only
     }
 }

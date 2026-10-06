@@ -109,7 +109,9 @@ struct InfoTab: View {
                     }
                     .listRowInsets(EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6))
                 }
-                ForEach(Array(r.report.dropFirst().enumerated()), id: \.offset) { _, line in
+                // The first line repeats the Scene section; the ASCII loudness lane is the sparkline below.
+                let lines = r.report.dropFirst().filter { !(info.loudness.count > 1 && $0.hasPrefix("loudness")) }
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     ReportLine(text: line)
                 }
             } else if !insp.checkRunning {
@@ -277,8 +279,9 @@ struct ReportLine: View {
     let text: String
 
     var body: some View {
-        let warn = text.contains("⚠")
-        let (head, rest) = split(text)
+        // "⚠︎" is U+26A0 + a variation selector: a different Character than "⚠", so match the scalar.
+        let warn = text.unicodeScalars.contains("\u{26A0}")
+        let (head, rest) = split(warn ? Self.stripWarning(text) : text)
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: warn ? "exclamationmark.triangle.fill" : "checkmark.circle")
                 .imageScale(.small)
@@ -292,6 +295,11 @@ struct ReportLine: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    static func stripWarning(_ s: String) -> String {
+        guard s.unicodeScalars.first == "\u{26A0}" else { return s }
+        return String(String.UnicodeScalarView(s.unicodeScalars.drop { $0 == "\u{26A0}" || $0 == "\u{FE0E}" || $0 == " " }))
     }
 
     /// "frames: no blank samples" → ("frames", "no blank samples").

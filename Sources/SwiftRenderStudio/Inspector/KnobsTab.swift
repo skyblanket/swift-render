@@ -22,6 +22,7 @@ struct KnobsTab: View {
         if knobs.isEmpty && unreached.isEmpty {
             StudioEmptyState(title: "No Knobs", symbol: "slider.horizontal.3",
                              message: "Declare tunables in the scene with Knob.double(\"key\", 0.4, in: 0...2).")
+                .inspectorFill()
         } else {
             VStack(spacing: 0) {
                 header(knobs, insp)
@@ -319,7 +320,8 @@ struct KnobTextField: View {
             .focused($focused)
             .onChange(of: text, initial: true) { _, t in if !focused { draft = t } }
             .onChange(of: draft) { _, d in
-                guard d != text else { return }
+                // Only typing commits: `draft` also changes when a new value arrives from outside.
+                guard focused, d != text else { return }
                 onChange(d, true)
                 settle?.cancel()
                 settle = Task { try? await Task.sleep(for: .milliseconds(400)); if !Task.isCancelled { onChange(d, false) } }
@@ -370,5 +372,13 @@ struct KnobColorControl: View {
         guard let ns = NSColor(c).usingColorSpace(.sRGB) else { return "#FFFFFF" }
         return KnobCoercion.hex(r: Double(ns.redComponent), g: Double(ns.greenComponent),
                                 b: Double(ns.blueComponent), a: Double(ns.alphaComponent))
+    }
+}
+
+extension View {
+    /// Inspector tab content never sets the window's minimum height: a wrapped
+    /// empty-state message measured narrow did, pushing the agent panel off-screen.
+    func inspectorFill() -> some View {
+        frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
     }
 }

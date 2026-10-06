@@ -153,7 +153,6 @@ final class InspectorController {
         let current = model.propsJSON ?? model.info?.propsJSON
         guard let current else { return }
         if propsScene != model.selectedScene || (!propsEdited && current != propsApplied) {
-            propsScene = model.selectedScene
             propsIssue = nil
             loadPropsEditor(current)
             propsApplied = editorJSON ?? current
@@ -161,6 +160,7 @@ final class InspectorController {
     }
 
     private func loadPropsEditor(_ text: String) {
+        propsScene = model.selectedScene        // a load (variant, --props) owns the editor from here
         propsSyntax = nil
         if let doc = try? JSONValue.parse(text) {
             propsDoc = doc

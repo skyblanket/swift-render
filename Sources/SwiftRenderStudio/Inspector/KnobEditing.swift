@@ -83,11 +83,11 @@ enum KnobCoercion {
 
     // MARK: Numbers
 
-    /// A slider step of 1, 2 or 5 × 10ⁿ giving roughly 200 stops over `range`.
+    /// A slider step of 1, 2 or 5 × 10ⁿ giving roughly 100 stops over `range`.
     static func step(for range: ClosedRange<Double>) -> Double {
         let span = range.upperBound - range.lowerBound
         guard span > 0, span.isFinite else { return 0.01 }
-        let raw = span / 200
+        let raw = span / 100
         let mag = pow(10, floor(log10(raw)))
         let n = raw / mag
         return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag
