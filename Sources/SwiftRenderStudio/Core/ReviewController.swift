@@ -368,6 +368,13 @@ final class ReviewController {
         reload()
     }
 
+    /// Snapshot fixtures only: change the loaded threads without writing the review file.
+    func editInMemory(_ edit: (inout [ReviewComment]) -> Void) {
+        edit(&comments)
+        revision += 1
+        onChange?(comments)
+    }
+
     /// Ask Claude consumed the queue.
     func clearAgentQueue() { agentQueue = [] }
 

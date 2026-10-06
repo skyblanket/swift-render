@@ -262,9 +262,7 @@ final class AgentController {
             if (try? store.setStatus(scene: e.scene, id: id, .open)) != nil { released.append(id) }
         }
         if !released.isEmpty {
-            // Above the final line, which stays last.
-            let row = AgentTranscriptRow(kind: .notice, title: "Back to open: " + released.joined(separator: ", "))
-            if transcript.last?.kind == .finished { transcript.insert(row, at: transcript.count - 1) } else { transcript.append(row) }
+            noteReleased(released)
             onReviewsChanged?()
         }
 
@@ -291,6 +289,12 @@ final class AgentController {
         isStopping = false
         task = nil
         onRunningChanged?(false)
+    }
+
+    /// "Back to open" notice for comments a run held but didn't resolve, above the final line.
+    func noteReleased(_ ids: [String]) {
+        let row = AgentTranscriptRow(kind: .notice, title: "Back to open: " + ids.joined(separator: ", "))
+        if transcript.last?.kind == .finished { transcript.insert(row, at: transcript.count - 1) } else { transcript.append(row) }
     }
 
     // MARK: Revert

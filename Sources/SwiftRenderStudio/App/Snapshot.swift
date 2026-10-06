@@ -57,7 +57,10 @@ enum SnapshotRunner {
             return false
         }
         while model.info == nil, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        // Seek once the scene is open: a seek made before the host attached is lost, and
+        // `--comment N` would otherwise leave the playhead at 00:00 on a black frame.
         if let at = options.at { model.playback.seek(at, precise: true) }
+        else if let c = model.review.selected { model.playback.seek(c.t, precise: true) }
         while !model.playback.hasFrame, !stuck(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
         if case .failed(let diags, let log) = model.build.phase {
             let rows = diags.map { "\($0.file):\($0.line):\($0.column): \($0.severity.rawValue): \($0.message)" }
@@ -134,7 +137,38 @@ enum SnapshotRunner {
         model.agent.ask(AgentRequest(project: model.project, scene: model.selectedScene ?? "", commentIDs: ids, mode: .reply),
                         info: model.info)
         while model.agent.isRunning, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        settleReplay(model)
         print("[studio] agent replay: \(model.agent.transcript.count) rows, run ok=\(model.agent.currentRun?.ok.map(String.init) ?? "nil")")
+    }
+
+    /// A replay only re-reads a recorded stream: the MCP calls in it never touched the review
+    /// files. Bring the in-memory threads in line with the transcript (snapshot only, nothing
+    /// is written): a comment the run resolved is resolved by Claude, and one Claude still held
+    /// goes back to open, as `AgentController.finish` does for a live run.
+    private static func settleReplay(_ model: ProjectModel) {
+        guard let run = model.agent.currentRun else { return }
+        let rows = model.agent.transcript
+        let resolved = Set(run.commentIDs.filter { id in
+            rows.contains { $0.title == "resolve_comment" && $0.detail.contains(id) } || (run.result ?? "").contains("\(id) resolved")
+        })
+        let summary = (run.result?.range(of: "resolved: ").map { String(run.result![$0.upperBound...]) })
+        let said = rows.last { $0.kind == .text }?.title
+        var released: [String] = []
+        model.review.editInMemory { comments in
+            for i in comments.indices where run.commentIDs.contains(comments[i].id) {
+                if resolved.contains(comments[i].id) {
+                    if let said { comments[i].replies.append(ReviewReply(author: AgentController.agentAuthor, body: said)) }
+                    comments[i].status = .resolved
+                    comments[i].assignee = nil
+                    comments[i].resolution = summary.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                } else if comments[i].status == .inProgress, comments[i].assignee?.kind == .agent {
+                    comments[i].status = .open
+                    comments[i].assignee = nil
+                    released.append(comments[i].id)
+                }
+            }
+        }
+        if !released.isEmpty { model.agent.noteReleased(released) }
     }
 
     /// The sheet window drawn where AppKit attaches it: centered, under the toolbar.
@@ -334,6 +368,12 @@ enum SnapshotRunner {
 
 /// Same size on every machine: AppKit would otherwise clamp a titled window to the
 /// current screen, so snapshots taken on a laptop and a desktop would differ.
+/// It also reports itself key and main: an offscreen window never is, and an inactive
+/// window draws prominent buttons and selected rows gray, hiding every accent decision.
 private final class SnapshotWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
