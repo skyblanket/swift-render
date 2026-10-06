@@ -144,6 +144,8 @@ struct BuildDiagnosticsPopover: View {
 struct DiagnosticRow: View {
     var diagnostic: CompilerDiagnostic
     var root: URL
+    /// One line (file:line:col first), for the viewer banner.
+    var compact = false
 
     var body: some View {
         let d = diagnostic
@@ -153,6 +155,13 @@ struct DiagnosticRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: d.severity == .error ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(d.severity == .error ? StudioStyle.bad : StudioStyle.warn)
+                    .frame(width: 14)
+                if compact {
+                    Text(d.file.isEmpty ? "build" : "\(URL(fileURLWithPath: d.file).lastPathComponent):\(d.line):\(d.column)")
+                        .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
+                        .frame(minWidth: 150, alignment: .leading)
+                    Text(d.message).font(.system(size: 11)).lineLimit(1).truncationMode(.tail)
+                } else {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(d.message).font(.callout).lineLimit(3).multilineTextAlignment(.leading)
                     if !d.file.isEmpty {
@@ -160,13 +169,14 @@ struct DiagnosticRow: View {
                             .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
                     }
                 }
+                }
                 Spacer(minLength: 8)
                 if !d.file.isEmpty {
                     Image(systemName: "arrow.up.forward.square").foregroundStyle(.secondary)
                 }
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .padding(.horizontal, 12).padding(.vertical, compact ? 3 : 7)
         }
         .buttonStyle(.plain)
         .help(d.file.isEmpty ? "" : "Open in \(SourceOpener.preferred.title)")
@@ -175,6 +185,60 @@ struct DiagnosticRow: View {
     private func relative(_ path: String) -> String {
         let r = root.path + "/"
         return path.hasPrefix(r) ? String(path.dropFirst(r.count)) : path
+    }
+}
+
+/// Build errors above the viewer (§1.6): the first few diagnostics, each opening its
+/// source; the viewer below keeps showing the last good build. Muted while an agent
+/// is mid-edit (its intermediate states often don't compile).
+struct BuildErrorBanner: View {
+    @Bindable var model: ProjectModel
+    var errors: [CompilerDiagnostic]
+    @State private var expanded = true
+
+    var body: some View {
+        let b = model.build
+        let muted = b.agentEditing
+        let rows = Array((errors + b.warnings).prefix(3))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(muted ? Color.secondary : StudioStyle.bad).frame(width: 7, height: 7)
+                Text(summary).font(.system(size: 11, weight: .semibold))
+                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
+                Button { model.perform(.askAgent) } label: { Label("Ask Claude to Fix", systemImage: "sparkles") }
+                    .help("⌘⇧A")
+                Button { model.ui.showBuildPopover = true } label: { Text("All…") }
+                Button { withAnimation(.snappy(duration: 0.2)) { expanded.toggle() } } label: {
+                    Image(systemName: "chevron.down").rotationEffect(.degrees(expanded ? 0 : -90))
+                }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            if expanded {
+                ForEach(rows, id: \.self) { d in
+                    DiagnosticRow(diagnostic: d, root: model.project.root, compact: true)
+                }
+                .padding(.bottom, 2)
+            }
+        }
+        .background((muted ? Color.gray : StudioStyle.bad).opacity(0.10))
+        .overlay(alignment: .bottom) { Rectangle().fill(StudioStyle.hairline).frame(height: 1) }
+        .opacity(muted ? 0.75 : 1)
+    }
+
+    private var summary: String {
+        let w = model.build.warnings.count
+        return "\(errors.count) error\(errors.count == 1 ? "" : "s")" + (w > 0 ? " · \(w) warning\(w == 1 ? "" : "s")" : "")
+    }
+
+    private var detail: String {
+        let b = model.build
+        let secs = b.lastSeconds.map { String(format: " (%.1fs)", $0) } ?? ""
+        let showing = model.host.active == nil ? "no build to show yet" : "showing gen \(model.host.generation)"
+        return (b.agentEditing ? "agent editing — " : "") + "build failed\(secs) — \(showing)"
     }
 }
 

@@ -214,10 +214,17 @@ enum SimulatedBuild {
                 cont.yield(.progress("[2/3] Compiling \(product) (simulated)"))
                 try? await Task.sleep(for: .seconds(seconds / 2))
                 let failed = fail()
-                let diag = CompilerDiagnostic(file: project.root.appendingPathComponent("Sources/Scene.swift").path,
-                                              line: 12, column: 9, severity: .error, message: "simulated failure")
-                if failed { cont.yield(.diagnostic(diag)) }
-                cont.yield(.finished(BuildUpdate.Result(success: !failed, seconds: seconds, diagnostics: failed ? [diag] : [],
+                let file = project.root.appendingPathComponent("Sources/SwiftRender/Scenes/LaunchFilm.swift").path
+                let diags = failed ? [
+                    CompilerDiagnostic(file: file, line: 212, column: 14, severity: .error,
+                                       message: "cannot convert value of type 'String' to specified type 'Double'"),
+                    CompilerDiagnostic(file: file, line: 230, column: 9, severity: .error,
+                                       message: "missing return in closure expected to return 'some View'"),
+                    CompilerDiagnostic(file: file, line: 88, column: 13, severity: .warning,
+                                       message: "initialization of immutable value 'x' was never used"),
+                ] : []
+                diags.forEach { cont.yield(.diagnostic($0)) }
+                cont.yield(.finished(BuildUpdate.Result(success: !failed, seconds: seconds, diagnostics: diags,
                                                  log: failed ? "error: simulated failure" : "Build complete!",
                                                  executable: failed ? nil : scratch.appendingPathComponent("debug/\(product)"))))
                 cont.finish()

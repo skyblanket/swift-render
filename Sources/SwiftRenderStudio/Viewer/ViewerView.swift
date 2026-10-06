@@ -13,6 +13,9 @@ struct ViewerView: View {
     var body: some View {
         VStack(spacing: 0) {
             ViewerHUDRow(model: model)
+            if case .failed(let errors, _) = model.build.phase, !errors.isEmpty {
+                BuildErrorBanner(model: model, errors: errors)
+            }
             GeometryReader { geo in
                 let zoom = model.ui.zoom
                 let canvas = ViewerGeometry.canvasRect(container: geo.size, content: sceneSize, zoom: zoom,
@@ -61,6 +64,7 @@ struct ViewerView: View {
 
     private var placeholderText: String {
         if model.build.isBuilding { return "Building \(model.build.product)…" }
+        if case .failed = model.build.phase, model.host.active == nil { return "Build failed — fix the errors above" }
         if case .ready = model.host.state { return model.selectedScene == nil ? "Choose a scene" : "Rendering…" }
         return "Starting render host…"
     }

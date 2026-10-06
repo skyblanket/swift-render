@@ -35,6 +35,8 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// Fake modes: simulated builds fail (and one runs right after launch).
+    var fakeBuildFails = false
     /// Inspector tab to show first (`--tab knobs`), e.g. to snapshot a tab.
     var tab: InspectorTab?
     /// Snapshot mode: play this many seconds before capturing (prints playback stats).
@@ -55,6 +57,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--fake-host": o.fakeHost = true; i += 1
             case "--fake-serve": o.fakeServe = true; i += 1
             case "--fake-process-host": o.fakeProcessHost = true; i += 1
+            case "--fake-build-fail": o.fakeBuildFails = true; i += 1
             case "--snapshot": o.snapshot = v; i += 2
             case "--play-for": o.playFor = v.flatMap(Double.init); i += 2
             case "--tab": o.tab = v.flatMap(InspectorTab.init(rawValue:)); i += 2
@@ -127,7 +130,8 @@ final class ProjectModel {
         self.project = project
         self.options = options
         let fake = options.fakeHost || options.fakeProcessHost
-        build = BuildController(project: project, runner: fake ? SimulatedBuild.runner() : nil)
+        let failBuilds = options.fakeBuildFails
+        build = BuildController(project: project, runner: fake ? SimulatedBuild.runner(fail: { failBuilds }) : nil)
         let factory: HostSupervisor.Factory
         if options.fakeProcessHost {
             // This very binary, as `--fake-serve`, behind the real client.
@@ -202,6 +206,7 @@ final class ProjectModel {
         if isFake {
             await host.start(URL(fileURLWithPath: "/fake-host"), generation: 1, open: openParams())
             if selectedScene == nil, let first = host.scenes.first?.name { await select(scene: first) }
+            if options.fakeBuildFails { build.requestBuild(.manual) }
         } else {
             build.requestBuild(.initial)
         }

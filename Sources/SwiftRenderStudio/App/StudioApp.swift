@@ -5,7 +5,7 @@ import SwiftRenderKit
 // MARK: - Entry point
 //
 //   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host | --fake-process-host]
-//                       [--fake-crash-at t] [--tab comments|knobs|props|info]
+//                       [--fake-crash-at t] [--fake-build-fail] [--tab comments|knobs|props|info]
 //                       [--snapshot out.png [--play-for seconds]]
 //   swift-render-studio --fake-serve        (a fake render host on stdio; see FakeServe)
 //
