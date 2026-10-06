@@ -128,10 +128,11 @@ struct ShortcutsView: View {
         ("Range", [("I  O", "Set In or Out"), ("⇧I  ⇧O", "Go to In or Out"), ("⌥X", "Clear the range"), ("/", "Loop the range")]),
         ("Comments", [("C", "Comment at the playhead"), ("R", "Mark a spot on the frame (or hold ⌥ and drag)"),
                       ("[  ]", "Previous or next comment"), ("\\", "Compare before and after"), ("|", "Next compare mode"),
-                      ("⌘↩", "Post"), ("⌘⇧↩", "Post and ask Claude")]),
+                      ("⌘↩", "Post"), ("⌘⇧↩", "Post and ask Claude"),
+                      ("⌫", "Delete the selected comment (asks first)"), ("⌘C", "Copy the selected comment")]),
         ("View", [("G", "Next guide"), ("⇧Z", "Zoom the timeline to fit"), ("⌘=  ⌘−", "Zoom the timeline in or out"),
                   ("⌘1 … ⌘4", "Comments, Knobs, Content, Info")]),
-        ("Actions", [("⌘⇧A", "Ask Claude"), ("⌘R", "Export again"), ("⌘⇧R", "Export…"), ("⌘B", "Rebuild now"), ("⌘.", "Stop")]),
+        ("Actions", [("⌘Z  ⇧⌘Z", "Undo or redo a delete or a Move to Trash"), ("⌘⇧A", "Ask Claude"), ("⌘R", "Export again"), ("⌘⇧R", "Export…"), ("⌘B", "Rebuild now"), ("⌘.", "Stop")]),
     ]
 
     var body: some View {

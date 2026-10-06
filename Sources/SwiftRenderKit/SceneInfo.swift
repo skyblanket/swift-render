@@ -16,10 +16,13 @@ public struct SceneSummary: Codable, Sendable, Equatable, Hashable {
     public var defaultDuration: Double
     public var hasSoundtrack: Bool
     public var hasProps: Bool
+    /// The Swift file that declares the scene (from the registry plugin); nil from older hosts.
+    public var sourcePath: String?
 
-    public init(name: String, kind: SceneKind, defaultDuration: Double, hasSoundtrack: Bool, hasProps: Bool) {
+    public init(name: String, kind: SceneKind, defaultDuration: Double, hasSoundtrack: Bool, hasProps: Bool,
+                sourcePath: String? = nil) {
         self.name = name; self.kind = kind; self.defaultDuration = defaultDuration
-        self.hasSoundtrack = hasSoundtrack; self.hasProps = hasProps
+        self.hasSoundtrack = hasSoundtrack; self.hasProps = hasProps; self.sourcePath = sourcePath
     }
 }
 

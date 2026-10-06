@@ -101,6 +101,7 @@ enum SnapshotRunner {
         if let path = options.agentReplay { await replayAgent(model, path: path, deadline: deadline) }
         if options.askSheet { model.ui.showAskSheet = true }
         await RenderSnapshot.prepare(model: model, options: options)
+        await MenuSnapshot.prepare(model)
         // Let the sharpen pass land and SwiftUI settle.
         try? await Task.sleep(for: .milliseconds(700))
         window.contentView?.layoutSubtreeIfNeeded()
@@ -114,6 +115,7 @@ enum SnapshotRunner {
             png = merged
         }
         png = RenderSnapshot.decorate(png, window: window, model: model, options: options)
+        png = MenuSnapshot.decorate(png, window: window, model: model)
         let url = URL(fileURLWithPath: out)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -6,6 +6,9 @@ import SwiftRenderKit
 // Scenes grouped by what you do with them — Templates (editable content), Music-driven,
 // Films — each collapsible, with a filter field · Comments (Open, Ready for Review: each
 // opens that segment) · Exports (recent files) · a + menu to add a scene or a launch film.
+// Right-click a scene (Open, Open in Editor, Show in Finder, Copy Name, Duplicate, Move to
+// Trash…), a section header (Collapse All / Expand All) or an export (Open, Show in Finder,
+// Copy Path, Move to Trash…); see ContextMenus.
 
 /// How the sidebar groups scenes: by what you can do with them, not how they're coded.
 enum SceneCategory: String, CaseIterable, Identifiable {
@@ -98,6 +101,7 @@ struct SidebarView: View {
                                 .tag(s.name)
                                 .id(s.name)
                                 .opacity(sceneListIsStale ? 0.5 : 1)
+                                .studioContextMenu(ContextMenus.scene(s, model: model))
                         }
                     } header: {
                         HStack {
@@ -106,6 +110,8 @@ struct SidebarView: View {
                             Text("\(scenes.count)").monospacedDigit().foregroundStyle(.tertiary)
                         }
                         .help(category.help)
+                        .contentShape(Rectangle())
+                        .studioContextMenu(sectionMenu)
                     }
                 }
             }
@@ -126,10 +132,7 @@ struct SidebarView: View {
                 ForEach(outs, id: \.self) { url in
                     Label(url.lastPathComponent, systemImage: url.pathExtension == "gif" ? "photo" : "film")
                         .lineLimit(1).truncationMode(.middle)
-                        .contextMenu {
-                            Button("Open") { NSWorkspace.shared.open(url) }
-                            Button("Show in Finder") { SourceOpener.reveal(url) }
-                        }
+                        .studioContextMenu(ContextMenus.export(url, model: model))
                         .help(url.path)
                 }
             }
@@ -137,6 +140,15 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .searchable(text: $filter, placement: .sidebar, prompt: "Filter scenes")
+    }
+
+    /// Section headers: Collapse All / Expand All (filtering shows every match, so both wait).
+    private var sectionMenu: [StudioMenuEntry] {
+        let shown = SceneCategory.allCases.filter { !visibleScenes(in: $0).isEmpty }
+        return ContextMenus.section(collapseAll: { collapsed = Set(SceneCategory.allCases) },
+                                    expandAll: { collapsed = [] },
+                                    anyOpen: filter.isEmpty && shown.contains { !collapsed.contains($0) },
+                                    anyClosed: filter.isEmpty && shown.contains { collapsed.contains($0) })
     }
 
     private func visibleScenes(in category: SceneCategory) -> [SceneSummary] {

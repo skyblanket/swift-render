@@ -6,6 +6,18 @@
 codebases. It adds a native editor and an agent review loop on top of the engine.
 
 ### Added
+- **Fast, honest exports in Studio.** Exports use a release CLI built once in
+  `.build/studio-release` (skipped while it's newer than every source) and `--jobs auto` for whole
+  films. `render --progress json` adds `{"stage":"audio"|"render"|"mux"}` lines, and `--jobs`
+  overlaps the final soundtrack synthesis with the chunks. The Exports popover shows a native
+  spinner for early steps, a native progress bar once frames flow, and one plain status line.
+- **Right-click menus, Delete and Undo in Studio.** Comments (list row, viewer pin, lane marker,
+  thread), replies, scenes, sidebar sections, exports, clips, the ruler, the picture, knobs,
+  content fields and Claude's transcript each have a standard Mac context menu built from one
+  menu model (`ContextMenus`), with the same commands as VoiceOver actions. Deletes ask first,
+  files go to the Trash (confined to the project) and Edit › Undo reverses every delete and
+  Trash move. ⌫ deletes the selected comment, Edit › Copy copies it. Snapshots take
+  `--context-menu <kind>` and `--confirm <kind>`. `SceneSummary` gains `sourcePath`.
 - **`swift-render launch [path]`** scans a Swift codebase offline: `Package.swift` (via
   `dump-package`, or `--no-manifest` for untrusted code), `.xcodeproj`, `AppIcon`/`AccentColor`,
   `Info.plist`, README, CHANGELOG, LICENSE, git and screenshots. It prints each value with its

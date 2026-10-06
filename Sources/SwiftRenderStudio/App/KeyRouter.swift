@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Key router
 //
-// Unmodified editing keys (Space, J/K/L, arrows, I/O, C, R, G, [ ], \, /, Esc) go
+// Unmodified editing keys (Space, J/K/L, arrows, I/O, C, R, G, [ ], \, /, ⌫, Esc) go
 // through a local NSEvent monitor instead of menu key equivalents, and are passed
 // through untouched whenever a text field is being edited — typing "jkl c io" in
 // the comment composer must never seek. Keys with ⌘/⌃ belong to StudioCommands.
@@ -36,6 +36,7 @@ final class KeyRouter {
         static let left: UInt16 = 123, right: UInt16 = 124, down: UInt16 = 125, up: UInt16 = 126
         static let home: UInt16 = 115, end: UInt16 = 119
         static let k: UInt16 = 40
+        static let delete: UInt16 = 51, forwardDelete: UInt16 = 117
     }
 
     private weak var model: ProjectModel?
@@ -93,6 +94,7 @@ final class KeyRouter {
         case KeyCode.down: return .jumpEdit(next: true)
         case KeyCode.home: return .home
         case KeyCode.end: return .end
+        case KeyCode.delete, KeyCode.forwardDelete: return s.option || s.shift ? nil : .deleteSelection
         default: break
         }
         if s.option {

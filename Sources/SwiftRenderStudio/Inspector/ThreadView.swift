@@ -29,9 +29,13 @@ struct ThreadView: View {
                     if state == .claudeOnIt, isLive(c) { working(c) }
                     VStack(alignment: .leading, spacing: StudioStyle.Space.m) {
                         message(c.author, c.body, c.createdAt, attachments: [])
+                            .studioContextMenu(ContextMenus.comment(c, model: model))
                         ForEach(c.replies) { r in
                             if ReviewStyle.isStudioNote(r.author) { note(r.body) }
-                            else { message(r.author, r.body, r.createdAt, attachments: r.attachments) }
+                            else {
+                                message(r.author, r.body, r.createdAt, attachments: r.attachments)
+                                    .studioContextMenu(ContextMenus.reply(r, in: c, model: model))
+                            }
                         }
                     }
                     outcome(c, state)
@@ -42,6 +46,12 @@ struct ThreadView: View {
             }
             Divider()
             composer(c, state)
+        }
+        // Reply in a context menu: open with the reply field focused.
+        .onChange(of: model.edits.replyFocus, initial: true) { _, id in
+            guard id == comment.id else { return }
+            replyFocused = true
+            model.edits.replyFocus = nil
         }
     }
 
@@ -85,6 +95,8 @@ struct ThreadView: View {
                 Spacer(minLength: StudioStyle.Space.s)
                 StatusMenu(state: state) { choice in setStatus(c, choice) }
             }
+            .contentShape(Rectangle())
+            .studioContextMenu(ContextMenus.comment(c, model: model))
             if let src = c.source {
                 Button { SourceOpener.open(src) } label: {
                     HStack(spacing: StudioStyle.Space.xs) {
@@ -155,6 +167,7 @@ struct ThreadView: View {
             }
             Spacer(minLength: 0)
         }
+        .contentShape(Rectangle())
     }
 
     /// Studio's own notes ("back on your list"): a quiet line, not a message.

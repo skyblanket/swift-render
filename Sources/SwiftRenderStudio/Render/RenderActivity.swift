@@ -8,8 +8,18 @@ import SwiftRenderKit
 // runs. It opens the Export sheet, or, while exports are running or just finished, a
 // popover listing them:
 //
-//   [▣] NeverHeard · Master 1080p60      ███████████░░░░░  3,112 of 5,580 · 0:27 left   [■]
-//   [▣] RepoPromo · Preview  Done in 7.9 s · 4.1 MB     [Show in Finder] [Open] [Attach to Comment ▾]
+//   [▣] NeverHeard                                              (■)
+//       Master 1080p60
+//       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//       Rendering 3,112 of 5,580 · 42 fps · about 1 min left
+//   [▣] RepoPromo
+//       Preview
+//       ✓ Done in 7.9 s · 4.1 MB
+//       [Open] [Show in Finder] [Attach to Comment ▾]
+//
+// One status line per job, in plain words. A native spinner sits beside it while the
+// export builds, prepares music or finishes up; a native determinate bar takes over once
+// frames flow.
 
 struct ExportToolbarButton: View {
     @Bindable var model: ProjectModel
@@ -76,20 +86,23 @@ struct ExportActivityIcon: View {
 struct RenderActivityList: View {
     @Bindable var model: ProjectModel
 
+    static let width: CGFloat = 400
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: StudioStyle.Space.s) {
                 Text("Exports").font(StudioStyle.Fonts.headline)
                 Spacer()
                 if model.renders.jobs.contains(where: \.isDone) {
                     Button("Clear") { model.renders.clearDone() }
                         .buttonStyle(.borderless).controlSize(.small)
+                        .help("Remove finished and stopped exports from this list")
                 }
                 Button("Export…") { model.ui.showRenderActivity = false; model.perform(.renderSheet) }
                     .controlSize(.small)
-                    .help("⌘⇧R")
+                    .help("Export (⌘⇧R)")
             }
-            .padding(.horizontal, StudioStyle.Space.l).padding(.top, StudioStyle.Space.m).padding(.bottom, StudioStyle.Space.s)
+            .padding(.horizontal, StudioStyle.Space.l).padding(.vertical, StudioStyle.Space.m)
             Divider()
             if model.renders.jobs.isEmpty {
                 StudioEmptyState(title: "Nothing exported yet", symbol: StudioStyle.Symbol.export,
@@ -98,17 +111,17 @@ struct RenderActivityList: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(model.renders.jobs.reversed()) { job in
+                        ForEach(Array(model.renders.jobs.reversed().enumerated()), id: \.element.id) { i, job in
+                            if i > 0 { Divider().padding(.leading, StudioStyle.Space.l + RenderJobRow.iconSize + StudioStyle.Space.m) }
                             RenderJobRow(model: model, job: job)
-                            Divider().opacity(0.5)
                         }
                     }
                 }
-                .frame(maxHeight: 380)
+                .frame(maxHeight: 400)
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(width: 440)
+        .frame(width: Self.width)
     }
 }
 
@@ -116,91 +129,96 @@ struct RenderJobRow: View {
     @Bindable var model: ProjectModel
     var job: RenderJob
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ZStack {
-                StudioStyle.rounded(StudioStyle.Radius.medium).fill(StudioStyle.well)
-                Image(systemName: job.preset.symbol).foregroundStyle(tint)
-            }
-            .frame(width: 30, height: 30)
+    static let iconSize: CGFloat = 28
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 5) {
-                    Text(job.scene).font(StudioStyle.Fonts.calloutEmphasis).lineLimit(1)
-                    Text(job.preset.title).font(StudioStyle.Fonts.callout).foregroundStyle(.secondary).lineLimit(1)
-                    if job.range != nil {
-                        Text(job.durationLabel).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).monospacedDigit()
+    var body: some View {
+        HStack(alignment: .top, spacing: StudioStyle.Space.m) {
+            Image(systemName: job.preset.symbol)
+                .font(StudioStyle.Fonts.body)
+                .foregroundStyle(iconTint)
+                .frame(width: Self.iconSize, height: Self.iconSize)
+                .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.medium))
+
+            VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+                HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(job.scene).font(StudioStyle.Fonts.calloutEmphasis).lineLimit(1)
+                        Text(subtitle).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                            .lineLimit(1).monospacedDigit()
                     }
-                    Spacer(minLength: 4)
+                    Spacer(minLength: StudioStyle.Space.s)
                     if !job.isDone {
                         Button { model.renders.cancel(job.id) } label: {
-                            Image(systemName: "stop.circle.fill")
+                            Image(systemName: "stop.circle").font(StudioStyle.Fonts.body)
                         }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
                         .help(job.state == .queued ? "Take it out of the queue" : "Stop exporting (⌘.)")
+                        .accessibilityLabel(job.state == .queued ? "Remove from queue" : "Stop")
                     }
                 }
                 status
                 if case .finished = job.state { actions }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, StudioStyle.Space.l).padding(.vertical, StudioStyle.Space.m)
+        .contentShape(Rectangle())
+        .modifier(FinishedExportMenu(model: model, job: job))
     }
 
-    private var tint: AnyShapeStyle {
-        switch job.state {
-        case .failed: return AnyShapeStyle(StudioStyle.error)
-        default: return AnyShapeStyle(.secondary)
-        }
+    /// "Master 1080p60", plus the In→Out span when it isn't the whole film.
+    private var subtitle: String {
+        job.range == nil ? job.preset.title : "\(job.preset.title) · \(job.durationLabel)"
+    }
+
+    private var iconTint: AnyShapeStyle {
+        if case .failed = job.state { return AnyShapeStyle(StudioStyle.error) }
+        return AnyShapeStyle(.secondary)
     }
 
     @ViewBuilder private var status: some View {
         switch job.state {
-        case .queued:
-            caption("Waiting its turn")
+        case .queued, .cancelled:
+            caption(job.statusLine)
         case .building(let line):
-            VStack(alignment: .leading, spacing: 4) {
-                ProgressBar(fraction: nil)
-                caption(job.build == .optimized ? "Getting the Final build ready…" : "Building…").lineLimit(1)
-                    .help(line)
+            working(job.statusLine).help(line)
+        case .preparing, .finishing:
+            working(job.statusLine)
+        case .rendering:
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                ProgressView(value: job.fraction ?? 0)
+                    .progressViewStyle(.linear)
+                    .tint(StudioStyle.accent)
+                    .controlSize(.small)
+                caption(job.statusLine)
             }
-        case .rendering(let done, let total, let fps):
-            VStack(alignment: .leading, spacing: 4) {
-                ProgressBar(fraction: job.fraction)
-                HStack(spacing: 0) {
-                    caption(total > 0 ? "\(done.formatted()) of \(total.formatted()) frames" : "Starting…")
-                    Spacer()
-                    if let eta = job.eta { caption(String(format: "%d:%02d left", Int(eta) / 60, Int(eta) % 60)) }
-                }
-                .monospacedDigit()
+        case .finished:
+            HStack(spacing: StudioStyle.Space.xs) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
+                caption(job.statusLine + (job.bytes.map { " · " + Self.size($0) } ?? ""))
             }
-        case .finishing(let what):
-            VStack(alignment: .leading, spacing: 4) {
-                ProgressBar(fraction: nil)
-                caption(what)
-            }
-        case .finished(let secs):
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
-                caption(String(format: "Done in %@", Self.clock(secs)) + (job.bytes.map { " · " + Self.size($0) } ?? ""))
-                    .help(job.output.path)
-            }
+            .help(job.output.path)
         case .failed(let why):
             Text(why)
                 .font(StudioStyle.Fonts.subheadline).foregroundStyle(StudioStyle.error)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .help(job.log.suffix(12).joined(separator: "\n"))
-        case .cancelled:
-            caption("Stopped")
+        }
+    }
+
+    /// A step with no frame count yet: the native spinner and what's happening.
+    private func working(_ text: String) -> some View {
+        HStack(spacing: StudioStyle.Space.s) {
+            ProgressView().controlSize(.small).scaleEffect(0.8).frame(width: 14, height: 14)
+            caption(text).lineLimit(1)
         }
     }
 
     private var actions: some View {
-        HStack(spacing: 6) {
-            Button("Show in Finder") { SourceOpener.reveal(job.output) }
+        HStack(spacing: StudioStyle.Space.s) {
             Button("Open") { NSWorkspace.shared.open(job.output) }
+            Button("Show in Finder") { SourceOpener.reveal(job.output) }
             let comments = model.renders.attachableComments(scene: job.scene)
             Menu("Attach to Comment") {
                 if comments.isEmpty {
@@ -233,31 +251,23 @@ struct RenderJobRow: View {
         Text(s).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).monospacedDigit()
     }
 
-    static func clock(_ s: Double) -> String {
-        let t = Int(s.rounded())
-        return t >= 60 ? String(format: "%d:%02d", t / 60, t % 60) : String(format: "%.1f s", s)
-    }
+    static func clock(_ s: Double) -> String { RenderJob.clock(s) }
 
     static func size(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
-/// Thin capsule bar; nil fraction shows the system indeterminate bar.
-struct ProgressBar: View {
-    var fraction: Double?
+/// A finished export's row: the same right-click menu as its row in the sidebar.
+private struct FinishedExportMenu: ViewModifier {
+    let model: ProjectModel
+    let job: RenderJob
 
-    var body: some View {
-        GeometryReader { g in
-            ZStack(alignment: .leading) {
-                Capsule().fill(StudioStyle.well)
-                if let fraction {
-                    Capsule().fill(StudioStyle.accent).frame(width: max(4, g.size.width * fraction))
-                } else {
-                    ProgressView().progressViewStyle(.linear).labelsHidden()
-                }
-            }
+    func body(content: Content) -> some View {
+        if case .finished = job.state, FileManager.default.fileExists(atPath: job.output.path) {
+            content.studioContextMenu(ContextMenus.export(job.output, model: model))
+        } else {
+            content
         }
-        .frame(height: 5)
     }
 }

@@ -74,6 +74,8 @@ struct LaunchOptions: Equatable, Sendable {
     /// or, with `--render-wait done`, once finished.
     var renderPreset: RenderPreset?
     var renderWaitDone = false
+    /// `--render-build quick` exports with the live debug executable; the default is Final (release).
+    var renderBuild: BuildChoice = .optimized
     /// Snapshot mode: In/Out set before rendering (`--in-out 2:8`).
     var inOut: ClosedRange<Double>?
     /// Snapshot mode: draw a sheet/popover over the window (`--show render-sheet|renders`).
@@ -140,6 +142,7 @@ struct LaunchOptions: Equatable, Sendable {
                 i += 2
             case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
             case "--render-wait": o.renderWaitDone = v == "done"; i += 2
+            case "--render-build": o.renderBuild = v == "quick" ? .currentDebug : .optimized; i += 2
             case "--show": o.show = v; i += 2
             case "--switch-to": o.switchTo = v; i += 2
             case "--switch-hold": o.switchHold = true; i += 1
@@ -233,6 +236,8 @@ final class ProjectModel {
     let renders: RenderQueue
     /// Knobs / Props / Info tab state.
     @ObservationIgnored private(set) lazy var inspector = InspectorController(model: self)
+    /// Deletes (asked first, undoable), Trash, clipboard and frame commands behind the menus.
+    @ObservationIgnored private(set) lazy var edits = EditController(model: self)
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
@@ -676,6 +681,7 @@ final class ProjectModel {
             if agent.isRunning { agent.stop() } else if build.isBuilding { build.cancel() }
             else if let j = renders.active { renders.cancel(j.id) }
         case .openSource: openSource()
+        case .deleteSelection: edits.deleteSelection()
         case .inspectorTab(let t): ui.inspectorTab = t; ui.showInspector = true
         case .toggleInspector: ui.showInspector.toggle()
         case .toggleSidebar: ui.showSidebar.toggle()

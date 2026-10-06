@@ -86,7 +86,7 @@ struct RenderSheet: View {
             useRange = false
         }
         .onChange(of: preset) { _, p in
-            build = p.prefersRelease && !useRange ? .optimized : .currentDebug
+            build = p.prefersRelease ? .optimized : .currentDebug
             if let old = customOutput, old.pathExtension != p.fileExtension {
                 // The person agreed to replace `old`, not whatever already has the new extension.
                 customOutput = RenderQueue.unused(old.deletingPathExtension().appendingPathExtension(p.fileExtension),
@@ -97,7 +97,7 @@ struct RenderSheet: View {
                p.durationProblem(sceneDuration ?? 0) != nil { useRange = true }
         }
         .onChange(of: useRange) { _, on in
-            build = preset.prefersRelease && !on ? .optimized : .currentDebug
+            build = preset.prefersRelease ? .optimized : .currentDebug
         }
     }
 
@@ -196,10 +196,10 @@ struct RenderSheet: View {
         switch build {
         case .optimized:
             let exe = BuildController.canonical(model.project.root)
-                .appendingPathComponent(".build/studio/release/\(model.project.config.product)")
+                .appendingPathComponent(".build/studio-release/release/\(model.project.config.product)")
             return FileManager.default.fileExists(atPath: exe.path)
-                ? "Renders a few times faster than Quick."
-                : "The first Final export takes a few extra minutes to get ready. After that it's quick."
+                ? "Renders several times faster than Quick, using every core."
+                : "The first Final export builds for a few minutes first. After that it starts right away."
         case .currentDebug:
             return model.build.lastGoodExecutable == nil
                 ? "Builds first, since nothing is playing yet."

@@ -75,12 +75,14 @@ struct ProjectWindowContent: View {
         .toolbarTitleMenu { SceneSwitcherMenu(model: model) }
         .sheet(isPresented: $model.ui.showAskSheet) { AskAgentSheet(model: model) }
         .sheet(isPresented: $model.ui.showRenderSheet) { RenderSheet(model: model) }
+        .modifier(ProjectEditing(model: model))
         .focusedSceneValue(\.project, model)
         .background(WindowAccessor { window in
             // Snapshots never take keys (the window draws as key but must not act on typing).
             if !StudioStyle.isSnapshot {
                 if router == nil { router = KeyRouter(model: model) }
                 router?.install(window: window)
+                EditResponder.install(model: model, in: window)
             }
             // The project folder (often a worktree name) lives in the title's tooltip, not under it.
             window.representedURL = model.project.root

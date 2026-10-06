@@ -41,16 +41,24 @@ struct CommentsTab: View {
                     ForEach(rows) { c in
                         CommentRow(comment: c, number: numbers[c.id], queued: review.agentQueue.contains(c.id))
                             .tag(c.id)
+                            .studioAccessibilityActions(ContextMenus.comment(c, model: model))
                     }
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .contextMenu(forSelectionType: String.self) { ids in
-                    if let id = ids.first, let c = review.comments.first(where: { $0.id == id }) { menu(c) }
+                    if let id = ids.first, let c = review.comments.first(where: { $0.id == id }) {
+                        StudioMenuContent(entries: ContextMenus.comment(c, model: model))
+                    }
                 } primaryAction: { ids in
                     if let id = ids.first { review.open(id) }
                 }
-                .onDeleteCommand { if let id = review.selection { try? review.delete(id) } }
+                // Edit › Delete and Edit › Copy while the list has focus (⌫ itself goes through KeyRouter).
+                .onDeleteCommand { model.edits.deleteSelection() }
+                .onCopyCommand {
+                    guard let c = review.selected else { return [] }
+                    return [NSItemProvider(object: c.body as NSString)]
+                }
             }
             if let err = review.lastError {
                 Label(err, systemImage: StudioStyle.Symbol.warning)
@@ -132,30 +140,6 @@ struct CommentsTab: View {
                                  message: "Comments you mark done, or sign off, land here.").inspectorFill()
             }
         }
-    }
-
-    @ViewBuilder
-    private func menu(_ c: ReviewComment) -> some View {
-        let r = model.review
-        Button("Open Thread") { r.open(c.id) }
-        Button("Go to \(StudioTime.short(c.t))") { r.selection = c.id; model.playback.seek(c.t, precise: true) }
-        if c.beforeAttachment != nil {
-            Button("Compare") { r.selection = c.id; r.compareID = c.id; model.ui.compare = .split }
-        }
-        Divider()
-        let state = CommentState(c)
-        if state == .readyForReview { Button("Looks Good") { try? r.accept(c.id) } }
-        if state.isActive { Button("Mark Done") { try? r.markDone(c.id, resolution: nil) } }
-        if state.isActive { Button("Won't Fix") { try? r.setStatus(c.id, .wontFix) } }
-        if !state.isActive { Button("Reopen") { try? r.reopen(c.id, note: nil) } }
-        Divider()
-        if let src = c.source { Button("Open \(ReviewStyle.file(src))") { SourceOpener.open(src) } }
-        Button("Copy ID") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(c.id, forType: .string)
-        }
-        Divider()
-        Button("Delete Comment", role: .destructive) { try? r.delete(c.id) }
     }
 }
 

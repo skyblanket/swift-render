@@ -204,14 +204,7 @@ struct KnobRow: View {
         }
         .onHover { hovering = $0 }
         .help(help)
-        .contextMenu {
-            Button("Back to Default") { insp.reset(knob) }.disabled(!insp.isOverridden(knob))
-            Button("Copy Value") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(KnobCoercion.display(v), forType: .string)
-            }
-            if let src = knob.source { Button("Open Source") { SourceOpener.open(src) } }
-        }
+        .studioContextMenu(ContextMenus.knob(knob, insp: insp, model: insp.projectModel))
     }
 
     private var help: String {

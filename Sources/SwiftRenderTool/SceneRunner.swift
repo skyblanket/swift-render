@@ -11,6 +11,16 @@ enum AudioSource: Sendable {
     case score(Score)
 }
 
+/// `render --progress json` stage lines on stderr (`{"stage":"audio",…}`); off unless the
+/// flag is set. The `--jobs` driver turns it off for work it overlaps with the chunks.
+enum StageReporter {
+    nonisolated(unsafe) static var enabled = false
+    static func emit(_ stage: RenderStageLine.Stage, _ detail: String? = nil) {
+        guard enabled, let line = try? HostWire.encode(RenderStageLine(stage, detail)) else { return }
+        FileHandle.standardError.write(line)
+    }
+}
+
 /// Resolves an AudioSource into (AudioTrack for reactive scenes, mux URL).
 /// Scores synthesize once: samples analyzed in memory, temp WAV only for mux.
 struct AudioPlan {
@@ -21,17 +31,26 @@ struct AudioPlan {
     func cleanup() { if let tempURL { try? FileManager.default.removeItem(at: tempURL) } }
 
     static func make(_ source: AudioSource, fps: Int,
-                     needsTrack: Bool, needsMux: Bool) throws -> AudioPlan {
+                     needsTrack: Bool, needsMux: Bool, announce: Bool = true) throws -> AudioPlan {
+        let plan = try resolve(source, fps: fps, needsTrack: needsTrack, needsMux: needsMux, announce: announce)
+        if announce { StageReporter.emit(.render) }
+        return plan
+    }
+
+    private static func resolve(_ source: AudioSource, fps: Int,
+                                needsTrack: Bool, needsMux: Bool, announce: Bool) throws -> AudioPlan {
         switch source {
         case .none:
             return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
         case .file(let url):
+            if needsTrack && announce { StageReporter.emit(.audio, "Analyzing \(url.lastPathComponent)") }
             let track = needsTrack ? try AudioAnalyzer.analyze(url: url, fps: fps) : .silent
             return AudioPlan(track: track, muxURL: needsMux ? url : nil, tempURL: nil)
         case .score(let score):
             guard needsTrack || needsMux else {
                 return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
             }
+            if announce { StageReporter.emit(.audio, "Synthesizing the score") }
             let (l, r) = ScoreSynth.render(score)
             var track = AudioTrack.silent
             if needsTrack {
@@ -269,7 +288,8 @@ extension SceneRunner {
 
     func summary(name: String) -> SceneSummary {
         SceneSummary(name: name, kind: kind, defaultDuration: defaultDuration,
-                     hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil)
+                     hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil,
+                     sourcePath: sourcePath)
     }
 }
 

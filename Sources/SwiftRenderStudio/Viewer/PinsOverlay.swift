@@ -72,6 +72,9 @@ struct PinsOverlay: View {
                 model.ui.inspectorTab = .comments
                 model.ui.showInspector = true
             }
+            .studioContextMenu(ContextMenus.comment(c, model: model))
+            .accessibilityLabel("Comment \(number.map(String.init) ?? ""), \(state.title): \(c.body)")
+            .accessibilityAddTraits(.isButton)
     }
 
     /// The note beside a hovered pin; `compact` (the selected pin's callout) shows only
