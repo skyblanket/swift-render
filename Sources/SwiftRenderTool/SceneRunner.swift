@@ -1,0 +1,220 @@
+import AppKit
+import AVFoundation
+import Foundation
+import SwiftRender
+import SwiftRenderKit
+import SwiftUI
+
+enum AudioSource {
+    case none
+    case file(URL)
+    case score(Score)
+}
+
+/// Resolves an AudioSource into (AudioTrack for reactive scenes, mux URL).
+/// Scores synthesize once: samples analyzed in memory, temp WAV only for mux.
+struct AudioPlan {
+    let track: AudioTrack
+    let muxURL: URL?
+    private let tempURL: URL?
+
+    func cleanup() { if let tempURL { try? FileManager.default.removeItem(at: tempURL) } }
+
+    static func make(_ source: AudioSource, fps: Int,
+                     needsTrack: Bool, needsMux: Bool) throws -> AudioPlan {
+        switch source {
+        case .none:
+            return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
+        case .file(let url):
+            let track = needsTrack ? try AudioAnalyzer.analyze(url: url, fps: fps) : .silent
+            return AudioPlan(track: track, muxURL: needsMux ? url : nil, tempURL: nil)
+        case .score(let score):
+            guard needsTrack || needsMux else {
+                return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
+            }
+            let (l, r) = ScoreSynth.render(score)
+            var track = AudioTrack.silent
+            if needsTrack {
+                var mono = [Float](repeating: 0, count: l.count)
+                for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
+                track = try AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: fps)
+            }
+            guard needsMux else { return AudioPlan(track: track, muxURL: nil, tempURL: nil) }
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sr-score-\(UUID().uuidString).wav")
+            try WAV.write(left: l, right: r, to: tmp)
+            return AudioPlan(track: track, muxURL: tmp, tempURL: tmp)
+        }
+    }
+}
+
+/// Type-erased handle on one registered scene. The registry plugin generates
+/// `SceneRunner(MyScene.self)` for every scene; everything else is internal.
+@MainActor
+public struct SceneRunner {
+    let kind: SceneKind
+    /// Absolute path of the declaring file (set by the registry plugin).
+    var sourcePath: String?
+    let defaultDuration: Double
+    /// Pretty-printed default-props JSON; nil for prop-less scenes.
+    let propsTemplate: (() -> String)?
+    /// Scene-declared soundtrack, if any (duration-aware).
+    let soundtrack: (Double) -> Score?
+    /// (recorder, outURL, endTime, startTime, audioSource, propsURL)
+    let render: (Recorder, URL, Double, Double, AudioSource, URL?) async throws -> Void
+    /// (recorder, outURL, t, duration, audioSource, propsURL)
+    let frame: (Recorder, URL, Double, Double, AudioSource, URL?) throws -> Void
+    let ownsPostFX: Bool
+    /// (duration, audioSource, propsURL) → a time → view function (live preview).
+    let makeView: (Double, AudioSource, URL?) throws -> (Double) -> AnyView
+
+    public init<S: RenderScene>(_ type: S.Type) {
+        kind = .render
+        defaultDuration = S.defaultDuration
+        propsTemplate = nil
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur)
+            }
+        }
+        frame = { recorder, out, t, dur, _, _ in
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
+                S.body(at: tt, duration: dur)
+            }
+        }
+        ownsPostFX = S.ownsPostFX
+        makeView = { dur, _, _ in { t in AnyView(S.body(at: t, duration: dur)) } }
+    }
+
+    public init<S: AudioReactiveScene>(_ type: S.Type) {
+        kind = .audio
+        defaultDuration = S.defaultDuration
+        propsTemplate = nil
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur, audio: plan.track)
+            }
+        }
+        frame = { recorder, out, t, dur, source, _ in
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: false)
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
+                S.body(at: tt, duration: dur, audio: plan.track)
+            }
+        }
+        ownsPostFX = S.ownsPostFX
+        makeView = { dur, source, _ in
+            let plan = try AudioPlan.make(source, fps: 60, needsTrack: true, needsMux: false)
+            return { t in AnyView(S.body(at: t, duration: dur, audio: plan.track)) }
+        }
+    }
+
+    public init<S: PropsScene>(_ type: S.Type) {
+        kind = .props
+        defaultDuration = S.defaultDuration
+        propsTemplate = { Self.templateJSON(S.defaultProps) }
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur, props: props)
+            }
+        }
+        frame = { recorder, out, t, dur, _, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
+                S.body(at: tt, duration: dur, props: props)
+            }
+        }
+        ownsPostFX = S.ownsPostFX
+        makeView = { dur, _, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            return { t in AnyView(S.body(at: t, duration: dur, props: props)) }
+        }
+    }
+
+    public init<S: PropsAudioScene>(_ type: S.Type) {
+        kind = .propsAudio
+        defaultDuration = S.defaultDuration
+        propsTemplate = { Self.templateJSON(S.defaultProps) }
+        soundtrack = { S.soundtrack(duration: $0) }
+        render = { recorder, out, dur, start, source, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            defer { plan.cleanup() }
+            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+                S.body(at: t, duration: dur, props: props, audio: plan.track)
+            }
+        }
+        frame = { recorder, out, t, dur, source, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: false)
+            try recorder.renderPNG(at: t, to: out, postFX: !S.ownsPostFX, duration: dur) { tt in
+                S.body(at: tt, duration: dur, props: props, audio: plan.track)
+            }
+        }
+        ownsPostFX = S.ownsPostFX
+        makeView = { dur, source, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            let plan = try AudioPlan.make(source, fps: 60, needsTrack: true, needsMux: false)
+            return { t in AnyView(S.body(at: t, duration: dur, props: props, audio: plan.track)) }
+        }
+    }
+
+    private static func loadProps<P: Codable>(_: P.Type, defaults: P, from url: URL?) throws -> P {
+        guard let url else { return defaults }
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch { throw PropsError.unreadable(url, error.localizedDescription) }
+        do { return try JSONDecoder().decode(P.self, from: data) }
+        catch let e as DecodingError { throw PropsError.decode(url, describe(e)) }
+    }
+
+    private static func templateJSON<P: Codable>(_ value: P) -> String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return (try? enc.encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    private static func describe(_ e: DecodingError) -> String {
+        func path(_ c: [CodingKey]) -> String { c.map(\.stringValue).joined(separator: ".") }
+        switch e {
+        case .keyNotFound(let k, let ctx): return "missing key '\(k.stringValue)' at \(path(ctx.codingPath))"
+        case .typeMismatch(let t, let ctx): return "expected \(t) at \(path(ctx.codingPath))"
+        case .valueNotFound(let t, let ctx): return "null for \(t) at \(path(ctx.codingPath))"
+        case .dataCorrupted(let ctx): return "invalid JSON: \(ctx.debugDescription)"
+        @unknown default: return String(describing: e)
+        }
+    }
+}
+
+enum PropsError: Error, CustomStringConvertible {
+    case unreadable(URL, String)
+    case decode(URL, String)
+    var description: String {
+        switch self {
+        case .unreadable(let u, let why): return "cannot read props \(u.path): \(why)"
+        case .decode(let u, let why):     return "props decode failed for \(u.path): \(why)"
+        }
+    }
+}
+
+
+extension SceneRunner {
+    /// Registry plugin hook: remember where the scene is declared.
+    public func source(_ path: String) -> SceneRunner {
+        var r = self; r.sourcePath = path; return r
+    }
+
+    func summary(name: String) -> SceneSummary {
+        SceneSummary(name: name, kind: kind, defaultDuration: defaultDuration,
+                     hasSoundtrack: soundtrack(defaultDuration) != nil, hasProps: propsTemplate != nil)
+    }
+}

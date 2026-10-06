@@ -2,8 +2,9 @@ import AppKit
 import AVFoundation
 import Foundation
 import SwiftRender
+import SwiftRenderKit
 
-/// Package root, resolved from this source file's location (Sources/SwiftRenderCLI/Check.swift).
+/// Package root, resolved from this source file's location (Sources/SwiftRenderTool/Check.swift).
 let packageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
@@ -156,7 +157,13 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
     guard name.range(of: #"^[A-Z][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
         throw NSError(domain: "new", code: 1, userInfo: [NSLocalizedDescriptionKey: "scene name must be UpperCamelCase"])
     }
-    let url = packageRoot.appendingPathComponent("Sources/SwiftRender/Scenes/\(name).swift")
+    // Project-aware: swift-render.json's scenesDir (e.g. a Launch/ package's
+    // Sources/LaunchScenes), else this repo's Sources/SwiftRender/Scenes.
+    let project = Project.discover()
+    let root = project?.root ?? packageRoot
+    let dir = project?.config.scenesDir ?? "Sources/SwiftRender/Scenes"
+    let external = dir != "Sources/SwiftRender/Scenes"
+    let url = root.appendingPathComponent(dir).appendingPathComponent("\(name).swift")
     if FileManager.default.fileExists(atPath: url.path) {
         throw NSError(domain: "new", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(url.path) already exists"])
     }
@@ -164,7 +171,7 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
     let proto = audio ? "AudioReactiveScene" : "RenderScene"
     let sig = audio ? "at t: Double, duration: Double, audio: AudioTrack" : "at t: Double, duration: Double"
     let src = """
-    import SwiftUI
+    import SwiftUI\(external ? "\nimport SwiftRender" : "")
 
     /// \(name) — one line on what this piece is.
     ///
