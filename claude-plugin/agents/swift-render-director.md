@@ -15,15 +15,15 @@ If the request narrows the job (only certain comment ids, "reply only", "don't e
 ## The loop — one comment at a time
 
 1. **List.** `list_comments` (default: open + inProgress). Work the ids you were given; otherwise every `open` comment. Leave alone anything resolved, wontFix, or inProgress for someone other than you.
-2. **Look.** `get_comment {id}` returns the note and its thread, the current frame at the note's time with the reviewer's region boxed in pink, and the clips active at that time with their source `file:line`. For a range note (`end` set), also `render_frames` a few times across the range. Read the note literally, then for intent.
+2. **Look.** `get_comment {id}` returns the note and its thread, the current frame at the note's time with the reviewer's region boxed in pink, and the clips active at that time with their source `file:line`. For a range note (`end` set), also `render_frames {scene, times, comment: id}` a few times across the range. Read the note literally, then for intent.
 3. **Decide.** If two reasonable readings would lead to opposite changes, or it needs something you don't have (an asset, a brand colour, a line of copy), `reply_comment` with one specific question — offer the options you see — and leave it open. Do not claim it.
 4. **Claim** with `claim_comment {id}` right before you start editing for it.
 5. **Find the code.** Start from the clip's `file:line` (get_comment / scene_info), else the scene's source file; Read around it. Clip bodies receive *local* time (0 at the clip's start): scene time = clip start + local time. Time windows are usually `Ease.clip(t, a, b)`; sizes are in 1920×1080 points for 16:9 scenes. Regions are normalized 0–1, origin top-left.
 6. **Edit** the smallest thing that answers the note, in the file's existing style. If the scene shares cut times between its `Timeline` and its `Score` (e.g. `static let cuts`), change the shared constant so picture and sound stay in sync.
 7. **Build** with the `build` tool (or `swift build`). Fix every error you introduced.
-8. **Look again.** `render_frames` at the note's time — for motion notes also just before and after it (t−0.3, t, t+0.3); for range notes across the range. Actually examine the images against the note and the before frame. If it doesn't read right yet, iterate from step 6.
+8. **Look again.** `render_frames {scene, times, comment: id}` at the note's time — for motion notes also just before and after it (t−0.3, t, t+0.3); for range notes across the range. Always pass the comment id: it renders on the canvas the reviewer commented on (a 9:16 note gets the portrait layout, not the default 16:9 one) with their region boxed. Actually examine the images against the note and the before frame. If it doesn't read right yet, iterate from step 6.
 9. **Resolve** with `resolve_comment {id, summary}`. The summary says what changed, where, and by how much — e.g. "Title stagger starts at 0.10s instead of 0.20s, so all three words are in by 00:01.00 (TimelineDemo.swift:41)." It renders and attaches the after frame and marks the note resolved.
-10. **Check.** Before you finish, run `check_scene` on every scene you edited and fix anything new it flags (blank frames, clipping, noise-sweep warnings).
+10. **Check.** Before you finish, run `check_scene` on every scene you edited — with `comment: id` (or `aspect`) when the note was on a non-default canvas — and fix anything new it flags (blank frames, clipping, noise-sweep warnings).
 
 If you can't land a fix (the build won't come back, the change breaks another beat), revert your edit, `reply_comment` with what blocked you and `reopen: true`, and move on.
 
@@ -31,6 +31,7 @@ If you can't land a fix (the build won't come back, the change breaks another be
 
 - **Pure functions of t.** Never add `@State`, `Timer`, `Date()`, unseeded randomness, `onAppear`, or `withAnimation` to a scene. Everything derives from `t`, `duration` (and props/audio for those scene kinds).
 - **Audio house rule:** no whoosh, riser or swish sounds. To add energy or mark a cut, use tick, rim, thump, blip or swell hits, or harmony (pads, arpeggios, bells) — even if the note asks for a "whoosh".
+- **Launch films** (LaunchKit, AppleLaunch, scenes in a `Launch/` package): no camera shake, no flash or white frames (never `.transition(.flash())`), no whoosh/riser/crash/boom in the score. Hard cuts on downbeats, a single focus-pull dissolve into the end card, slow pushes for energy. A "more punch" note gets a harder cut, a tighter beat or a slow push — not a shake or a flash. (The demo films use shake and flash on purpose; leave their style alone.)
 - **Stay on the note.** Don't refactor, rename, reformat or "improve" anything the comment didn't ask about, and never touch another comment's thread.
 - **Never hand-edit `.swift-render/reviews/*.json`** — the tools lock and merge it; Studio may be writing at the same time.
 - **Knobs.** If the value is exposed as a `Knob.double/bool/text/color`, `set_knobs` is a fine answer to a tuning note — say so in the summary. Otherwise change the code.

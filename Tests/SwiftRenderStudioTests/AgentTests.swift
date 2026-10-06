@@ -190,6 +190,7 @@ final class AgentTests: XCTestCase {
         XCTAssertFalse(prompt.contains("cffff0000"))
         XCTAssertTrue(system.contains("no whoosh, riser or swish"))
         XCTAssertTrue(system.contains("pure functions of time"))
+        XCTAssertTrue(system.contains("no camera shake, no flash or white frames"), "launch-film grammar reaches the agent")
 
         let reply = AgentPrompt.make(AgentRequest(project: Project.open(root), scene: "Demo", commentIDs: ["c1a2b3c4"], mode: .reply),
                                      info: info, comments: [c]).prompt

@@ -14,25 +14,29 @@ every writer (Studio, CLI, MCP) takes a file lock.
 
 ## Addressing comments (the usual job)
 
-Delegate to the **swift-render-director** agent — it runs the whole loop: list → look at the
+Delegate to the **swift-render-director** agent (`swift-render:swift-render-director` when it
+comes from the plugin) — it runs the whole loop: list → look at the
 frame, region and clip source → claim → edit the scene Swift → build → re-render and look →
 resolve with a summary, or reply with a question and leave it open.
 
-Doing it yourself, with the `swift-render` MCP tools:
+Doing it yourself, with the `swift-render` MCP tools (`mcp__swift-render__*` from a project
+`.mcp.json`; `mcp__plugin_swift-render_swift-render__*` from the plugin):
 
 | step | tool |
 |---|---|
 | what's open | `list_comments {scene?, status?}` — default open + inProgress |
 | read + see it | `get_comment {id}` — thread, frame with the region boxed, active clips with `file:line` |
 | start | `claim_comment {id}` — inProgress, assigned to you, before-frame captured |
-| verify | `build {}`, `render_frames {scene, times, width?}`, `contact_sheet {scene}`, `check_scene {scene}` |
+| verify | `build {}`, `render_frames {scene, times, comment?, aspect?, width?}`, `contact_sheet {scene, comment?}`, `check_scene {scene, comment?}` — pass the comment id to render on the note's canvas (e.g. 9:16) |
 | ask | `reply_comment {id, body, attach_frame?, reopen?}` — the comment keeps its status unless `reopen` |
 | finish | `resolve_comment {id, summary}` — renders + attaches the after-frame, marks resolved |
 | tune | `set_knobs {scene, values}` — for values a scene exposes with `Knob.*` |
 
 Rules that matter: scenes stay pure functions of `t` (no `@State`, `Timer`, `Date()`); no
-whoosh/riser/swish sounds (use tick/rim/thump/blip/swell and harmony); change only what the note
-asks; run `check_scene` on every scene you edited before finishing.
+whoosh/riser/swish sounds (use tick/rim/thump/blip/swell and harmony); in launch films (LaunchKit,
+AppleLaunch, a `Launch/` package) no camera shake, no flash/white frames (never
+`.transition(.flash())`) and no crash/boom — hard cuts on downbeats, one dissolve into the end card;
+change only what the note asks; run `check_scene` on every scene you edited before finishing.
 
 ## From the terminal (no MCP)
 
@@ -52,10 +56,16 @@ named in `swift-render.json` (`"product"`), e.g. `swift run launch review list`.
 
 ## Headless (what Studio runs)
 
+In a project whose `.mcp.json` registers `swift-render` (this repo, or a `Launch/` package from
+`swift-render init` — run it there):
+
 ```sh
 claude -p "Address the open swift-render review comments on TimelineDemo." \
   --agent swift-render-director --mcp-config .mcp.json --allowedTools "mcp__swift-render" \
   --permission-mode acceptEdits --output-format stream-json --verbose --max-budget-usd 2
 ```
+
+With only the plugin installed, the names are namespaced and there is no `--mcp-config`:
+`--agent swift-render:swift-render-director --allowedTools "mcp__plugin_swift-render_swift-render"`.
 
 See `docs/review-loop.md` for the event stream and the full flow.

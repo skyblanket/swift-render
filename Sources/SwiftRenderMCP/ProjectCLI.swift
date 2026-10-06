@@ -32,12 +32,39 @@ enum BuildReport {
     }
 }
 
+/// How long one CLI child may run before it is stopped (its whole process group).
+/// A scene that never terminates at some `t` must not wedge the server for good.
+/// `SWIFT_RENDER_MCP_TIMEOUT` (seconds) overrides the frame/info and sheet limits,
+/// `SWIFT_RENDER_MCP_RENDER_TIMEOUT` and `SWIFT_RENDER_MCP_BUILD_TIMEOUT` the others.
+enum CLITimeouts {
+    private static func env(_ k: String) -> TimeInterval? {
+        ProcessInfo.processInfo.environment[k].flatMap(Double.init).flatMap { $0 > 0 ? $0 : nil }
+    }
+    /// frame, info, review scenes
+    static var quick: TimeInterval { env("SWIFT_RENDER_MCP_TIMEOUT") ?? 180 }
+    /// contact, check (many frames + audio synthesis)
+    static var sheet: TimeInterval { env("SWIFT_RENDER_MCP_TIMEOUT") ?? 600 }
+    static var render: TimeInterval { env("SWIFT_RENDER_MCP_RENDER_TIMEOUT") ?? 3600 }
+    static var build: TimeInterval { env("SWIFT_RENDER_MCP_BUILD_TIMEOUT") ?? 1800 }
+
+    static func forCommand(_ args: [String]) -> TimeInterval {
+        switch args.first {
+        case "render": return render
+        case "contact", "check": return sheet
+        default: return quick
+        }
+    }
+}
+
 final class ProjectCLI {
     let project: Project
     /// Newest source mtime seen when the current binary was built.
     private var builtFrom: Date?
     private var executable: URL?
     private(set) var lastBuild: BuildResult?
+    /// The running tool call's cancel token (set by ToolBox for the call's duration):
+    /// `notifications/cancelled` or server shutdown stops the build/render it started.
+    var cancel: ProcessCancel?
 
     init(project: Project) { self.project = project }
 
@@ -51,13 +78,13 @@ final class ProjectCLI {
            FileManager.default.fileExists(atPath: exe.path) {
             return exe
         }
-        if !force, builtFrom == nil, let exe = try? ProjectBuilder.executable(project),
+        if !force, builtFrom == nil, let exe = try? ProjectBuilder.executable(project, cancel: cancel),
            let built = modificationDate(exe), newest <= built {
             executable = exe; builtFrom = newest
             return exe
         }
         log("building \(product) (sources newer than the last build)…")
-        let result = try ProjectBuilder.build(project)
+        let result = try buildNow()
         lastBuild = result
         log(BuildReport.text(result, product: product).components(separatedBy: "\n").first ?? "")
         guard result.success, let exe = result.executable else { throw BuildFailure(result: result) }
@@ -68,16 +95,46 @@ final class ProjectCLI {
     /// Unconditional build (the `build` tool).
     func build() throws -> BuildResult {
         let newest = newestSourceDate()
-        let result = try ProjectBuilder.build(project)
+        let result = try buildNow()
         lastBuild = result
         if result.success, let exe = result.executable { executable = exe; builtFrom = newest }
         return result
     }
 
-    /// `<bin>/<product> args…` in the project root; builds first if needed.
-    func run(_ args: [String]) throws -> ProcessResult {
+    /// `swift build` with the build time limit; a timeout or cancel becomes a ToolError.
+    private func buildNow() throws -> BuildResult {
+        do {
+            return try ProjectBuilder.build(project, timeout: CLITimeouts.build, cancel: cancel)
+        } catch let e as ProcessRunnerError {
+            switch e {
+            case .timedOut(let s):
+                throw ToolError(String(format: "`swift build --product %@` %@ — another SwiftPM process may hold the "
+                                       + ".build lock, or the build is stuck. Set SWIFT_RENDER_MCP_BUILD_TIMEOUT to allow longer.",
+                                       product, ProcessRunnerError.timedOut(seconds: s).description))
+            case .cancelled: throw ToolError("build cancelled")
+            }
+        }
+    }
+
+    /// `<bin>/<product> args…` in the project root; builds first if needed. The child is
+    /// stopped after `timeout` (default: by command, see `CLITimeouts`) or on cancel.
+    func run(_ args: [String], timeout: TimeInterval? = nil) throws -> ProcessResult {
         let exe = try ensureBuilt()
-        return try ProcessRunner.run(exe.path, args, cwd: project.root)
+        let limit = timeout ?? CLITimeouts.forCommand(args)
+        do {
+            return try ProcessRunner.run(exe.path, args, cwd: project.root, timeout: limit, cancel: cancel)
+        } catch let e as ProcessRunnerError {
+            switch e {
+            case .timedOut:
+                var why = "`\(product) \(args.joined(separator: " "))` \(e)"
+                if args.first == "frame", let i = args.firstIndex(of: "--at"), i + 1 < args.count {
+                    why += " — the scene may not terminate at t=\(args[i + 1]) (a loop in body?)"
+                }
+                throw ToolError(why + ". Set SWIFT_RENDER_MCP_TIMEOUT (seconds) to allow longer.")
+            case .cancelled:
+                throw ToolError("`\(product) \(args.first ?? "")` cancelled")
+            }
+        }
     }
 
     /// Like `run` but throws with the CLI's stderr when it exits non-zero.

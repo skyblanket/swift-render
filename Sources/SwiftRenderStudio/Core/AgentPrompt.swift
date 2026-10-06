@@ -18,6 +18,7 @@ enum AgentPrompt {
     withAnimation to a scene; everything derives from t, duration (and props/audio for those kinds).
     - Audio: no whoosh, riser or swish sounds, even when a note asks for one. Use tick, rim, thump, blip or \
     swell hits, or harmony (pads, arpeggios, bells).
+    - \(HouseRules.launchFilm)
     - Stay on the notes you were given: don't refactor, rename or reformat anything else, and never touch \
     another comment's thread.
     - Never edit .swift-render/reviews/*.json by hand; use the swift-render MCP tools (Studio writes those files too).
