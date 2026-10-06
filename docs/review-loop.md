@@ -146,6 +146,10 @@ the CLI, and to hand real work to the director.
 /plugin install swift-render@swift-render
 ```
 
+The same commands from a shell are `claude plugin marketplace add skyblanket/swift-render` and
+`claude plugin install swift-render@swift-render`. To try the plugin without installing it, run
+`claude --plugin-dir /path/to/swift-render/claude-plugin`.
+
 The launcher execs `$SWIFT_RENDER_MCP`, else builds `swift-render-mcp` from the project in the cwd
 (or `./Launch`) — SwiftPM builds a dependency's executable product, so any package that depends on
 swift-render works — else `swift-render-mcp` on `PATH`. Plugin MCP tools are namespaced
@@ -223,3 +227,7 @@ Gotchas seen while verifying:
   skill load; its MCP server connects through the launcher and the agent's tools resolve to the 13
   `mcp__plugin_swift-render_swift-render__*` tools. `claude plugin validate` passes for
   `claude-plugin/` and the marketplace (it checks manifests only, not agent/skill front matter).
+- The plugin launcher, run from an app repo after `swift-render init` (so a `Launch/` package
+  depends on swift-render): it built `swift-render-mcp` from `./Launch`, and the server answered
+  `initialize` and listed all 13 tools. The `marketplace add` / `install` commands were not run,
+  because they change the user's Claude Code configuration.

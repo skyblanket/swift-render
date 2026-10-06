@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.10.0 — 2026-10-06
+
+"Studio preview". This release makes swift-render a way to make Apple-style launch films for Swift
+codebases. It adds a native editor and an agent review loop on top of the engine.
+
+### Added
+- **`swift-render launch [path]`** scans a Swift codebase offline: `Package.swift` (via
+  `dump-package`, or `--no-manifest` for untrusted code), `.xcodeproj`, `AppIcon`/`AccentColor`,
+  `Info.plist`, README, CHANGELOG, LICENSE, git and screenshots. It prints each value with its
+  source, plus any conflicts and gaps, and writes `.swift-render/launch/<Name>.json` (and
+  `<Name>.scan.json`). It then renders the `AppleLaunch` scene to `out/<name>-launch.mp4`.
+  Options: `--aspect 9:16|1:1`, `--preview`, `--voiceover`, `--rescan`, `--no-render`, `--eject`,
+  `--props-out`. See `docs/launch.md`.
+- **`swift-render init [path]`** scaffolds `<path>/Launch/`, a package that depends on
+  swift-render (`from: "0.10.0"`, or `--local <checkout>`). It contains your film as
+  `Sources/LaunchScenes/<App>Launch.swift`, a `launch` CLI, `swift-render.json` and `.mcp.json`.
+- **LaunchKit** (`Sources/SwiftRender/LaunchKit/`) provides Apple-keynote-grammar components, each
+  pure in a local `t`: `LaunchTheme`, `Motion`, `.reveal`, `.specularSweep`, `.launchPostFX`,
+  `Stage`, `Eyebrow`, `KeynoteTitle`, `LaunchIcon`, `AppIconHero`, `GlassPanel`, `DeviceFrame`,
+  `ScreenshotView`, `FeatureCard`/`FeatureTriad`/`FeatureList`, `SwiftHighlighter`, `CodeReveal`,
+  `TerminalCard`, `StatCounter`/`StatRow`, `ChangelogList`, `PlatformBadges`, `EndCard` and
+  `LaunchScore`. The new transitions are `.focusPull` and `.zoomThrough`. Components that make a
+  sound expose their timing (`landTimes`, `lineTimes`, `keystrokeTimes`, `rowTimes`).
+- **`AppleLaunch`** is a built-in `PropsScene` that every CLI built on `SwiftRenderTool` has. It
+  sizes itself to the props through `LaunchPlan`, using whole bars on a 60 fps beat grid. Set
+  `"typeface": "inter"` to use the bundled Inter (SIL OFL) for commercial renders.
+- **swift-render Studio** (`swift-render-studio`) is a native macOS editor. It builds the
+  project's CLI into `.build/studio` and runs it as a render host, with a blue/green swap on each
+  build, so hot reload takes about 2 s. Features:
+  - timeline lanes for clips (with `file:line`), score events, loudness, captions and comments
+  - viewer with 16:9 / 9:16 / 1:1 canvases, safe-area guides and A/B compare
+  - comments with a time range and a region box
+  - inspector: live knobs, props JSON editor and the check report
+  - agent panel that runs headless Claude Code, with git checkpoints and Revert
+  - render queue with presets: Master 1080p60, 4K, 9:16, 1:1, App Store previews (15–30 s
+    enforced), preview and GIF
+  - **New Launch Film…**
+  - offscreen `--snapshot` for CI
+
+  `scripts/package-studio.sh` builds a signed `swift-render Studio.app` whose icon is rendered by
+  swift-render (`StudioAppIcon`). See `docs/studio.md`.
+- **`swift-render serve`** is the render host behind Studio. It speaks JSON lines plus binary
+  frames on stdio (`list`, `open`, `frame`, `setKnobs`, `setProps`, `stream`, `credit`, `cancel`,
+  `still`, `check`, `shutdown`). It coalesces scrubbing, streams playback and caches score audio.
+  `scripts/host-smoke.py` drives it over real pipes.
+- **Review loop:**
+  - `swift-render review list|show|add|reply|status|frame|delete|scenes` manages timecoded
+    comments, which can have a range and a region box. They are stored in
+    `.swift-render/reviews/<Scene>.json` (file-locked, meant to be committed), with before and
+    after frames in `.swift-render/attachments/`.
+  - `swift-render-mcp` is a hand-written MCP stdio server with 13 tools. It returns rendered
+    frames inline and rebuilds the project before rendering when sources changed.
+  - `.claude/agents/swift-render-director.md` is the film-director subagent.
+  - `.claude/skills/swift-render-review` is a skill for working with review comments.
+  - `.mcp.json` registers the MCP server in this repo.
+  - A Claude Code plugin (`claude-plugin/`) and marketplace entry (`.claude-plugin/`) bring the
+    agent, skill and server to other repos.
+  - `scripts/mcp-smoke.py` (`--full`, `--claude`) exercises the server.
+  - See `docs/review-loop.md`.
+- **Engine introspection:**
+  - clips record their `file:line` and take `.named("…")` labels
+  - `Timeline(t, label:)` names nested lanes
+  - transitions carry a name
+  - `Knob.double/bool/text/color` are live-tunable constants, with overrides in
+    `.swift-render/knobs/<Scene>.json`
+  - score events are sorted into lanes (`Score.eventInfos`)
+  - `swift-render info <Scene> [--json]` reports all of this
+- `PropsScene` / `PropsAudioScene` can implement `duration(for:)` and
+  `soundtrack(duration:props:)`, so the data decides the length and the score.
+- CLI: `render --knobs file.json`, `render --progress json` (machine-readable progress on
+  stderr), `list --json`, and `Recorder.render(progress:)`.
+- `swift-render.json` marks a project root (`product`, `scenesDir`, `author`). `new` scaffolds
+  into `scenesDir`.
+- `KnobLab` (knobs reference scene) and `StudioAppIcon`.
+
+### Changed
+- **The CLI is a library.** `SwiftRenderTool` exposes `SwiftRenderCommand.main(scenes:)`, and
+  `SceneRegistryPlugin` is an exported product. It scans the CLI target plus its same-package
+  dependencies. Any package can now ship its own `swift-render`-style executable, and
+  `SwiftRenderCLI` is a one-line `main.swift`.
+- New Foundation-only **`SwiftRenderKit`** library: project layout, review model, host protocol,
+  `SceneInfo`, streaming builds and diagnostics, and `LaunchProps`/`LaunchPlan`/`LaunchScanner`.
+  The engine depends on it, and Studio and the MCP server depend on nothing else.
+- `Recorder.Config.outputSize` defaults to `size × scale` (rounded to even). `--scale 2` now
+  encodes 3840×2160, and `--preview` encodes at half size.
+- The Recorder converts frames into its own pooled pixel buffers instead of going through
+  `CIContext`. That takes about 0.7 ms per 1080p frame, down from 1.2–2 ms, and the output is
+  byte-identical to before.
+- `Transition` has a public `init(_ name:duration:apply:)` and a `name`, so custom transitions
+  can be built outside the module and show up by name in Studio. SwiftUI also has a `Transition`,
+  so write `SwiftRender.Transition` when you name the type.
+
+### Fixed
+- `--scale` and `--preview` used to encode at the base size, rendering at the reduced scale and
+  then resampling up. Half-res previews now really are 960×540.
+- README and quickstart scene templates now `import SwiftRender` (scenes live outside the engine
+  module since 0.9), and the README's `Hello` returns its view explicitly, so the snippet
+  compiles.
+- `docs/studio.md` pointed at the wrong path for `StudioAppIcon.swift`.
+
 ## 0.9.0 — 2026-10-06
 
 ### Added
