@@ -11,7 +11,7 @@ import Foundation
 final class FileWatcher: @unchecked Sendable {
     struct Change: Equatable, Sendable {
         enum Kind: String, Sendable, CaseIterable {
-            /// *.swift, *.metal, Plugins/**, anything under Sources/ → rebuild.
+            /// Anything under Sources/ or Plugins/ → rebuild.
             case source
             /// assets/** → reopen (media caches), no rebuild.
             case asset
@@ -121,8 +121,11 @@ final class FileWatcher: @unchecked Sendable {
     static func classify(_ rel: String) -> Change.Kind? {
         let parts = rel.split(separator: "/").map(String.init)
         guard let name = parts.last, !parts.isEmpty else { return nil }
-        // Build products, VCS, renders, editor droppings.
-        if let first = parts.first, [".build", ".git", ".swiftpm", "out", "node_modules"].contains(first) { return nil }
+        // Build products and VCS at any depth (agent worktrees under .claude/worktrees/*
+        // have their own .build, whose plugin outputs are *.swift), renders, editor droppings.
+        if parts.contains(where: { Self.ignoredDirectories.contains($0) }) || parts.first == "out" { return nil }
+        // Hidden top-level trees (.claude/, .vscode/, .github/…) except Studio's own.
+        if let first = parts.first, first.hasPrefix("."), first != ".swift-render", parts.count > 1 { return nil }
         if name == ".DS_Store" || name.hasSuffix(".swp") || name.hasSuffix("~") || name.hasPrefix(".#")
             || name.hasSuffix(".lock") || name.hasPrefix(".") && parts.count == 1 { return nil }
         if parts.first == ".swift-render" {
@@ -137,10 +140,13 @@ final class FileWatcher: @unchecked Sendable {
             return .manifest
         }
         if parts.first == "assets" { return .asset }
+        // Only what the product is built from: Tests/, scripts/ and other *.swift outside
+        // the package's source trees don't change the binary the host runs.
         if parts.first == "Sources" || parts.first == "Plugins" { return .source }
-        if name.hasSuffix(".swift") || name.hasSuffix(".metal") { return .source }
         return nil
     }
+
+    static let ignoredDirectories: Set<String> = [".build", ".git", ".swiftpm", "node_modules"]
 
     /// Stable order: manifest, source, asset, knobs, review.
     static func coalesce(_ pending: [Change.Kind: Set<String>]) -> [Change] {

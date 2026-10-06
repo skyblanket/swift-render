@@ -126,6 +126,16 @@ final class FileWatcherTests: XCTestCase {
             ("Sources/.DS_Store", nil),
             ("out/NeverHeard.mp4", nil),
             ("README.md", nil),
+            // Agent worktrees and their build trees, tests, scripts: not this product's sources.
+            (".claude/worktrees/wt/.build/plugins/outputs/x/SceneRegistry.swift", nil),
+            (".claude/worktrees/wt/.build/debug/X.build/DerivedSources/resource_bundle_accessor.swift", nil),
+            (".claude/worktrees/wt/Sources/SwiftRender/Asset.swift", nil),
+            (".claude/worktrees/wt/Package.swift", nil),
+            ("Sources/Vendored/.build/x.swift", nil),
+            ("Sources/Lib/node_modules/a/b.swift", nil),
+            ("Tests/SwiftRenderStudioTests/HostTests.swift", nil),
+            ("scripts/tool.swift", nil),
+            (".vscode/settings.json", nil),
         ]
         for (path, kind) in cases { XCTAssertEqual(FileWatcher.classify(path), kind, path) }
         XCTAssertEqual(FileWatcher.relative("/private/tmp/p/Sources/A.swift", root: "/tmp/p"), "Sources/A.swift")

@@ -86,7 +86,9 @@ struct RenderSheet: View {
         .onChange(of: preset) { _, p in
             build = p.prefersRelease && !useRange ? .optimized : .currentDebug
             if let old = customOutput, old.pathExtension != p.fileExtension {
-                customOutput = old.deletingPathExtension().appendingPathExtension(p.fileExtension)
+                // The user agreed to replace `old`, not whatever already has the new extension.
+                customOutput = RenderQueue.unused(old.deletingPathExtension().appendingPathExtension(p.fileExtension),
+                                                  taken: model.renders.pendingOutputs)
             }
             // A too-long scene with In/Out set: App Store presets need the range.
             if p.durationLimit != nil, model.playback.inOut != nil,
@@ -281,8 +283,14 @@ struct RenderSheet: View {
                      symbol: "speaker.slash", color: StudioStyle.warn)
             }
             if preset.group == .appStore, problem == nil {
-                note("App Store Connect: 15–30 s, 30 fps, H.264 with an AAC score track.",
-                     symbol: "checkmark.seal", color: StudioStyle.ok)
+                if hasSoundtrack && (range == nil || model.renders.ffmpeg != nil) {
+                    note("App Store Connect: 15–30 s, 30 fps, H.264 with an AAC score track.",
+                         symbol: "checkmark.seal", color: StudioStyle.ok)
+                } else {
+                    // Nothing adds a track to a silent scene (or a range without ffmpeg).
+                    note("No audio track: this scene has no score. App Store Connect's app-preview spec lists stereo AAC audio.",
+                         symbol: "speaker.slash", color: StudioStyle.warn)
+                }
             }
         }
     }

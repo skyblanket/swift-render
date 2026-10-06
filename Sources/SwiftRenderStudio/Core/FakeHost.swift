@@ -302,8 +302,12 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
     // MARK: Internals
 
     private var fps: Int { lock.lock(); defer { lock.unlock() }; return session?.fps ?? 60 }
+    /// The open scene's fps (a `stream` without `fps` runs at it, like the real host).
+    var sessionFPS: Int { fps }
 
     private func currentExit() -> HostTermination? { lock.lock(); defer { lock.unlock() }; return exited }
+    /// The session ended (shutdown, kill or crash).
+    var hasExited: Bool { currentExit() != nil }
 
     private func currentInfo() -> SceneInfo? {
         lock.lock(); let s = session, k = knobOverrides; lock.unlock()
@@ -393,6 +397,7 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         let file = options.projectRoot.appendingPathComponent("Sources/SwiftRender/Scenes/\(scene).swift").path
         let tail = """
         Swift/ContiguousArrayBuffer.swift:691: Fatal error: Index out of range
+        [swift-render serve] fatal SIGTRAP while: frame \(scene) t=\(t)
 
         💣 Program crashed: System trap at 0x000000019a4c1234
 

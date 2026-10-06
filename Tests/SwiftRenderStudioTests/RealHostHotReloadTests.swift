@@ -20,13 +20,14 @@ final class RealHostHotReloadTests: XCTestCase {
         }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let file = root.appendingPathComponent("Sources/SwiftRender/Scenes/\(Self.scene).swift")
+        let file = root.appendingPathComponent("Sources/SwiftRenderScenes/\(Self.scene).swift")
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "leftover probe scene")
         defer { try? FileManager.default.removeItem(at: file) }
 
         func write(_ rgb: (Double, Double, Double)) throws {
             try """
             import SwiftUI
+            import SwiftRender
 
             /// Temporary scene written by RealHostHotReloadTests; deleted when the test ends.
             public struct \(Self.scene): RenderScene {

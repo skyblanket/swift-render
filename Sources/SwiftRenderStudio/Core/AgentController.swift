@@ -44,8 +44,17 @@ struct AgentRun: Identifiable, Equatable, Sendable {
     var result: String?
     /// Comments Studio claimed for this run.
     var claimed: [String] = []
-    /// Absolute paths the agent wrote (Edit/Write events), first-touch order.
+    /// Absolute paths the agent wrote (Edit/Write calls that succeeded — or whose result never
+    /// arrived), first-touch order.
     var touched: [String] = []
+    /// Write calls still waiting for their result: tool id → files.
+    var pendingWrites: [String: [String]] = [:]
+    /// Each touched file as the agent left it (`Checkpoint.fingerprint`), taken at finish:
+    /// a file that differs at revert time was edited again since the run.
+    var agentLeft: [String: String] = [:]
+    /// Files that changed during the run but not through the agent's edit tools (the
+    /// user's own edits, or Bash/MCP writes): listed, never reverted.
+    var changedOutside: [String] = []
     var stats: [Checkpoint.FileStat] = []
     var checkpoint: Checkpoint?
     var checkpointError: String?
@@ -203,10 +212,15 @@ final class AgentController {
         case .tool(let call):
             transcript.append(AgentTranscriptRow(kind: .tool, title: call.name, detail: call.summary,
                                                  files: call.files, toolID: call.id, writes: call.writes))
-            if call.writes {
-                update(id) { run in for f in call.files where !run.touched.contains(f) { run.touched.append(f) } }
+            // Counted once the result says it worked: a denied or failed Write changed nothing,
+            // and reverting it would act on a file the agent never touched.
+            if call.writes, !call.files.isEmpty {
+                update(id) { $0.pendingWrites[call.id] = call.files }
             }
         case .toolResult(let toolID, let ok, let summary):
+            update(id) { run in
+                if let files = run.pendingWrites.removeValue(forKey: toolID), ok { Self.addTouched(files, to: &run) }
+            }
             if let i = transcript.lastIndex(where: { $0.toolID == toolID && $0.kind == .tool }) {
                 transcript[i].ok = ok
                 if !summary.isEmpty, !ok || transcript[i].title != "Read" { transcript[i].detail += "  →  " + summary }
@@ -229,6 +243,11 @@ final class AgentController {
     }
 
     private func finish(_ runID: String) async {
+        // A write whose result never came (stopped mid-call) may have happened.
+        update(runID) { run in
+            for files in run.pendingWrites.values { Self.addTouched(files, to: &run) }
+            run.pendingWrites = [:]
+        }
         guard let run = runs.first(where: { $0.id == runID }) else { return }
         if run.ok == nil { handle(.finished(ok: false, costUSD: nil, seconds: 0, result: lastError), runID: runID) }
 
@@ -249,10 +268,22 @@ final class AgentController {
             onReviewsChanged?()
         }
 
-        if let cp = run.checkpoint, !run.touched.isEmpty {
+        if let cp = run.checkpoint {
             let files = run.touched
-            if let stats = try? await Task.detached(operation: { try cp.diffStat(files: files) }).value {
-                update(runID) { $0.stats = stats }
+            let (stats, left, outside) = await Task.detached { () -> ([Checkpoint.FileStat]?, [String: String], [String]) in
+                let stats = files.isEmpty ? [] : try? cp.diffStat(files: files)
+                let mine = Set(cp.resolve(files))
+                return (stats, files.isEmpty ? [:] : cp.fingerprint(files: files),
+                        cp.changedSince().filter { !mine.contains($0) })
+            }.value
+            update(runID) { run in
+                if let stats { run.stats = stats }
+                run.agentLeft = left
+                run.changedOutside = outside
+            }
+            if !outside.isEmpty {
+                notice("Also changed during the run, not by the agent's edit tools (Revert leaves these alone): "
+                       + outside.prefix(8).joined(separator: ", ") + (outside.count > 8 ? " +\(outside.count - 8) more" : ""))
             }
         }
         update(runID) { $0.finished = true }
@@ -264,15 +295,36 @@ final class AgentController {
 
     // MARK: Revert
 
+    /// Touched files (repository-relative) whose content differs from what the agent left:
+    /// edited again since the run. Revert keeps them unless asked to include them.
+    func changedSinceRun(_ runID: String) async -> [String] {
+        guard let run = runs.first(where: { $0.id == runID }), let cp = run.checkpoint, run.finished else { return [] }
+        let files = run.touched, left = run.agentLeft
+        guard !left.isEmpty else { return [] }
+        return await Task.detached {
+            cp.fingerprint(files: files).filter { rel, now in left[rel].map { $0 != now } ?? false }.keys.sorted()
+        }.value
+    }
+
     /// Restores the files the run wrote to its checkpoint (created files go to the Trash).
-    func revert(_ runID: String) async {
+    /// Files edited again since the run are kept unless `includeChanged`. Whatever is
+    /// overwritten is committed to `refs/swift-render/pre-revert/<run>` first.
+    func revert(_ runID: String, includeChanged: Bool = false) async {
         guard !isRunning, let run = runs.first(where: { $0.id == runID }), run.canRevert, let cp = run.checkpoint else { return }
         let files = run.touched
+        let keep = includeChanged ? [] : Set(await changedSinceRun(runID))
         do {
-            let skipped = try await Task.detached { try cp.revert(files: files) }.value
+            let r = try await Task.detached {
+                try cp.revert(files: files, keep: keep, backupRef: Checkpoint.backupPrefix + runID)
+            }.value
             update(runID) { $0.reverted = true; $0.stats = [] }
-            status("Reverted \(files.count - skipped.count) file\(files.count - skipped.count == 1 ? "" : "s") to \(cp.sha.prefix(8))")
-            if !skipped.isEmpty { notice("Not restored (untracked and too large to checkpoint): " + skipped.joined(separator: ", ")) }
+            let n = r.restored.count + r.trashed.count
+            status("Reverted \(n) file\(n == 1 ? "" : "s") to \(cp.sha.prefix(8))"
+                   + (r.trashed.isEmpty ? "" : " (\(r.trashed.count) new → Trash)"))
+            if let b = r.backupRef { notice("The files as they were before this revert: \(b)") }
+            for (reason, paths) in Dictionary(grouping: r.skipped, by: \.reason).sorted(by: { $0.key < $1.key }) {
+                notice("Not restored (\(reason)): " + paths.map(\.path).joined(separator: ", "))
+            }
         } catch {
             lastError = "\(error)"
             transcript.append(AgentTranscriptRow(kind: .error, title: "Revert failed: \(error)"))
@@ -280,6 +332,10 @@ final class AgentController {
     }
 
     // MARK: Helpers
+
+    private static func addTouched(_ files: [String], to run: inout AgentRun) {
+        for f in files where !run.touched.contains(f) { run.touched.append(f) }
+    }
 
     private func update(_ runID: String, _ edit: (inout AgentRun) -> Void) {
         guard let i = runs.firstIndex(where: { $0.id == runID }) else { return }

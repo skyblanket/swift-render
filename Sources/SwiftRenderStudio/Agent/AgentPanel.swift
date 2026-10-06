@@ -13,6 +13,8 @@ import SwiftRenderKit
 struct AgentPanel: View {
     @Bindable var model: ProjectModel
     @State private var confirmRevert = false
+    /// Touched files edited again since the run (computed when Revert Run is clicked).
+    @State private var changedSinceRun: [String] = []
 
     var body: some View {
         let agent = model.agent
@@ -34,8 +36,17 @@ struct AgentPanel: View {
         }
         .background(StudioStyle.laneBackground)
         .confirmationDialog(revertTitle, isPresented: $confirmRevert) {
-            Button("Revert Files", role: .destructive) {
-                if let id = agent.currentRun?.id { Task { await agent.revert(id) } }
+            if changedSinceRun.isEmpty {
+                Button("Revert Files", role: .destructive) {
+                    if let id = agent.currentRun?.id { Task { await agent.revert(id) } }
+                }
+            } else {
+                Button("Revert, Keep Later Edits", role: .destructive) {
+                    if let id = agent.currentRun?.id { Task { await agent.revert(id) } }
+                }
+                Button("Revert All, Discard Later Edits", role: .destructive) {
+                    if let id = agent.currentRun?.id { Task { await agent.revert(id, includeChanged: true) } }
+                }
             }
         } message: {
             Text(revertMessage)
@@ -58,7 +69,12 @@ struct AgentPanel: View {
             }
             Spacer(minLength: 8)
             if let run = agent.currentRun, run.canRevert {
-                Button { confirmRevert = true } label: { Label("Revert Run", systemImage: "arrow.uturn.backward") }
+                Button {
+                    Task {
+                        changedSinceRun = await agent.changedSinceRun(run.id)
+                        confirmRevert = true
+                    }
+                } label: { Label("Revert Run", systemImage: "arrow.uturn.backward") }
                     .help("Restore the \(run.touched.count) file\(run.touched.count == 1 ? "" : "s") this run wrote to checkpoint \(run.checkpoint?.sha.prefix(8) ?? "")")
             }
             if agent.isRunning {
@@ -169,7 +185,12 @@ struct AgentPanel: View {
     private var revertMessage: String {
         guard let run = model.agent.currentRun, let cp = run.checkpoint else { return "" }
         let names = run.touched.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
-        return "\(names) go back to checkpoint \(cp.sha.prefix(8)) (taken before the run). Files the agent created move to the Trash. Comment threads are not changed."
+        var text = "\(names) go back to checkpoint \(cp.sha.prefix(8)) (taken before the run). Files the agent created move to the Trash. Their current content is saved to \(Checkpoint.backupPrefix)\(run.id) first. Comment threads are not changed."
+        if !changedSinceRun.isEmpty {
+            let changed = changedSinceRun.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+            text += "\n\nEdited again since the run: \(changed). Keep those edits (skip these files), or discard them too."
+        }
+        return text
     }
 }
 

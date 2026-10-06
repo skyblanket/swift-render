@@ -163,13 +163,77 @@ final class RenderQueueTests: XCTestCase {
         let id = q.enqueue(scene: "Demo", preset: .master1080p60, range: nil, build: .optimized, knobs: .useLive)
         let started = await wait(q, id) { if case .rendering(let d, _, _) = $0.state { return d > 0 }; return $0.isDone }
         let out = try XCTUnwrap(started?.output)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: out.path), "fake CLI wrote a partial file")
+        let partial = RenderQueue.partialURL(for: out, tag: String(id.uuidString.prefix(8)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path), "fake CLI wrote a partial file")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path), "the destination is only written on success")
         let t0 = Date()
         q.cancel(id)
         let job = await wait(q, id, timeout: 8) { $0.isDone }
         XCTAssertEqual(job?.state, .cancelled)
         XCTAssertLessThan(Date().timeIntervalSince(t0), 3, "SIGINT ends the fake CLI right away")
         XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+    }
+
+    // MARK: An existing file chosen as the output (Change… → Replace)
+
+    private func existingMaster() throws -> URL {
+        let url = root.appendingPathComponent("out/Delivered-master.mp4")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "the delivered master".write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    func testFailedBuildKeepsTheFileItWasToReplace() async throws {
+        let master = try existingMaster()
+        let q = RenderQueue(project: Project(root: root), resolveExecutable: { _, _, _ in
+            throw RenderQueueError.build("release build failed — Scene.swift:3: error: boom")
+        }, ffmpeg: .some(nil))
+        let id = q.enqueue(scene: "A", preset: .master1080p60, range: nil, build: .optimized, knobs: .saveToFile, output: master)
+        let job = await wait(q, id) { $0.isDone }
+        guard case .failed = job?.state else { return XCTFail("\(String(describing: job?.state))") }
+        XCTAssertEqual(try String(contentsOf: master, encoding: .utf8), "the delivered master")
+    }
+
+    func testCancelDuringBuildKeepsTheFileItWasToReplace() async throws {
+        let master = try existingMaster()
+        let q = RenderQueue(project: Project(root: root), resolveExecutable: { _, _, _ in
+            try await Task.sleep(for: .seconds(30))
+            throw RenderQueueError.build("unreachable")
+        }, ffmpeg: .some(nil))
+        let id = q.enqueue(scene: "A", preset: .master1080p60, range: nil, build: .optimized, knobs: .saveToFile, output: master)
+        _ = await wait(q, id) { if case .building = $0.state { return true }; return $0.isDone }
+        q.cancel(id)
+        let job = await wait(q, id) { $0.isDone }
+        XCTAssertEqual(job?.state, .cancelled)
+        XCTAssertEqual(try String(contentsOf: master, encoding: .utf8), "the delivered master")
+    }
+
+    func testFailedRenderKeepsTheFileAndSuccessReplacesIt() async throws {
+        let master = try existingMaster()
+        let failing = RenderQueue(project: Project(root: root), resolveExecutable: { _, _, _ in URL(fileURLWithPath: "/usr/bin/false") },
+                                  ffmpeg: .some(nil))
+        let bad = failing.enqueue(scene: "A", preset: .master1080p60, range: nil, build: .optimized, knobs: .saveToFile, output: master)
+        let failed = await wait(failing, bad) { $0.isDone }
+        guard case .failed = failed?.state else { return XCTFail("\(String(describing: failed?.state))") }
+        XCTAssertEqual(try String(contentsOf: master, encoding: .utf8), "the delivered master")
+
+        let q = queue()
+        let good = q.enqueue(scene: "Demo", preset: .master1080p60, range: nil, build: .optimized, knobs: .saveToFile, output: master)
+        let done = await wait(q, good) { $0.isDone }
+        XCTAssertEqual(done?.state.isFinished, true, "\(done?.log ?? [])")
+        XCTAssertTrue(try String(contentsOf: master, encoding: .utf8).hasPrefix("args: render Demo"))
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: master.deletingLastPathComponent().path)
+        XCTAssertEqual(leftovers, ["Delivered-master.mp4"], "no partial files left behind")
+    }
+
+    func testPresetExtensionSwapNeverLandsOnAnExistingFile() throws {
+        let gif = root.appendingPathComponent("demo.gif")
+        try "keep".write(to: gif, atomically: true, encoding: .utf8)
+        XCTAssertEqual(RenderQueue.unused(gif).lastPathComponent, "demo-2.gif")
+        XCTAssertEqual(RenderQueue.unused(root.appendingPathComponent("fresh.gif")).lastPathComponent, "fresh.gif")
+        XCTAssertEqual(RenderQueue.unused(root.appendingPathComponent("q.mp4"), taken: [root.appendingPathComponent("q.mp4").path])
+                        .lastPathComponent, "q-2.mp4")
     }
 
     func testCancelQueuedJob() {

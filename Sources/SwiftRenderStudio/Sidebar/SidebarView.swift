@@ -18,7 +18,8 @@ struct SidebarView: View {
                         if let name { withAnimation { proxy.scrollTo(name) } }
                     }
                     .onChange(of: model.scenes.count) {
-                        if let name = model.selectedScene { proxy.scrollTo(name) }
+                        // First listing: the selected scene in the middle, not jammed against an edge.
+                        if let name = model.selectedScene { proxy.scrollTo(name, anchor: .center) }
                     }
             }
             footer

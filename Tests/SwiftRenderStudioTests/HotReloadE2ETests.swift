@@ -50,7 +50,8 @@ final class HotReloadE2ETests: XCTestCase {
         let g1 = model.build.generation
         XCTAssertEqual(g1, 1, "no rebuilds triggered by the build itself")
         XCTAssertEqual(model.selectedScene, FakeHostClient.scenes.first?.name)
-        XCTAssertEqual(model.build.scratchPath.path, root.appendingPathComponent(".build/studio").path)
+        // The scratch path is canonical (/var/folders → /private/var/folders).
+        XCTAssertEqual(model.build.scratchPath.path, BuildController.canonical(root).appendingPathComponent(".build/studio").path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".build/studio/debug/swift-render").path))
         let firstPID = try XCTUnwrap(model.host.active?.pid)
 

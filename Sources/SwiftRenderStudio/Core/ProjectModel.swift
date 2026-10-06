@@ -170,8 +170,6 @@ final class ProjectModel {
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
-    /// Our own knob-file writes, so the watcher doesn't echo them back.
-    @ObservationIgnored private var lastKnobWrite: Date?
 
     var isFake: Bool { options.fakeHost || options.fakeProcessHost }
     var title: String { project.root.lastPathComponent }
@@ -204,7 +202,11 @@ final class ProjectModel {
             factory = HostSupervisor.realFactory(project: project)
         }
         host = HostSupervisor(project: project, makeHost: factory)
-        playback = PlaybackEngine()
+        // Settings › Playback.
+        let defaults = UserDefaults.standard
+        let budgetMB = defaults.object(forKey: "cacheBudgetMB") == nil ? 1024 : max(256, defaults.integer(forKey: "cacheBudgetMB"))
+        playback = PlaybackEngine(cache: FrameCache(budgetBytes: budgetMB << 20))
+        playback.quality = defaults.string(forKey: "playbackQuality").flatMap(PlaybackQuality.init(rawValue:)) ?? .auto
         review = ReviewController(project: project)
         agent = AgentController(project: project)
         renders = RenderQueue(project: project)
@@ -222,12 +224,14 @@ final class ProjectModel {
         host.warmWidth = { [weak self] in self?.playback.displayWidth ?? 960 }
         host.onActiveHost = { [weak self] h, info, warm in
             guard let self else { return }
+            if let h, h !== self.host.active { return }        // a retired host's late reply
             if h == nil { self.playback.pause() }
             if let info { self.adopt(info) }
             if !self.host.scenes.isEmpty { self.scenes = self.host.scenes }
             self.playback.attach(host: h, info: info, warmFrame: warm)
         }
         host.onPoison = { [weak self] f in self?.playback.poisoned.insert(f) }
+        host.onPoisonCleared = { [weak self] in self?.playback.poisoned = [] }
         host.onEvent = { [weak self] msg in
             guard let self else { return }
             switch msg.event {
@@ -246,7 +250,7 @@ final class ProjectModel {
             default: break
             }
         }
-        playback.onHang = { [weak self] t in self?.host.reportHang(at: t) }
+        playback.onHang = { [weak self] t, h in self?.host.reportHang(at: t, host: h) }
         renders.inputs = { [weak self] scene in
             guard let self else { return RenderInputs() }
             let current = scene == self.selectedScene
@@ -285,10 +289,12 @@ final class ProjectModel {
     func start() async {
         guard !started else { return }
         started = true
-        selectedScene = options.scene
+        // `--scene X`: the same per-scene state a sidebar pick loads (its saved knobs
+        // included — the host loads them too, so model and viewer agree).
+        if let scene = options.scene { loadSceneState(scene) }
         if let tab = options.tab { ui.inspectorTab = tab }
         if let at = options.at { playback.seek(at) }
-        review.load(scene: options.scene)
+        if options.scene == nil { review.load(scene: nil) }
         applyReviewLaunchOptions()
         startWatching()
         if isFake {
@@ -328,22 +334,27 @@ final class ProjectModel {
                 review.reload()
             case .knobs:
                 guard let scene = selectedScene,
-                      c.paths.contains(where: { $0.hasSuffix("/\(scene).json") }),
-                      Date().timeIntervalSince(lastKnobWrite ?? .distantPast) > 1 else { continue }
+                      c.paths.contains(where: { $0.hasSuffix("/\(scene).json") }) else { continue }
+                // Not a time window after our own save (an agent's set_knobs landing in it was
+                // dropped, then overwritten by the next save): compare contents instead. Our
+                // own write reads back as the live set; anything else is applied.
                 let values = KnobFile.load(project.knobsURL(scene: scene))
+                guard values != knobValues else { continue }
                 Task { await setKnobs(values, dragging: false, replacing: true) }
             }
         }
     }
 
+    /// A build succeeded. The supervisor serializes launches (a build that lands while the
+    /// previous host is still starting queues behind it) and clears the poison set only when
+    /// the new build actually goes live — a failed swap keeps the old build and its poison.
     private func hostBuilt(_ exe: URL, generation gen: Int) async {
-        playback.poisoned = []
-        if host.active == nil, host.state == .idle || host.generation == 0 {
+        if !host.hasStarted {
             await host.start(exe, generation: gen, open: openParams())
-            if selectedScene == nil, let first = host.scenes.first?.name { await select(scene: first) }
         } else {
             await host.swap(to: exe, generation: gen)
         }
+        if selectedScene == nil, let first = host.scenes.first?.name { await select(scene: first) }
     }
 
     // MARK: Scenes
@@ -358,11 +369,7 @@ final class ProjectModel {
     func select(scene: String) async {
         guard scene != selectedScene || info == nil else { return }
         playback.pause()
-        selectedScene = scene
-        propsJSON = nil
-        knobValues = KnobFile.load(project.knobsURL(scene: scene))
-        review.load(scene: scene)
-        ui.selectedClipID = nil
+        loadSceneState(scene)
         do {
             if let info = try await host.reopen(openParams()) {
                 adopt(info)
@@ -371,6 +378,15 @@ final class ProjectModel {
         } catch {
             ui.toast = "Couldn't open \(scene): \(HostSupervisor.describe(error))"
         }
+    }
+
+    /// Per-scene state, before the host opens it: default props, the saved knob file, comments.
+    private func loadSceneState(_ scene: String) {
+        selectedScene = scene
+        propsJSON = nil
+        knobValues = KnobFile.load(project.knobsURL(scene: scene))
+        review.load(scene: scene)
+        ui.selectedClipID = nil
     }
 
     func setAspect(_ a: AspectChoice) async {
@@ -390,6 +406,9 @@ final class ProjectModel {
         // A props-driven length change reaches the transport too, not just the timeline.
         if !first { playback.adopt(i) }
         if first || wasFit { ui.viewport.fit(i.duration) }
+        // `--knob` / `--props` / `--check` apply once the first scene is open, whether or
+        // not an inspector tab is on screen (runs once).
+        if first, inspector.hasLaunchWork { Task { await inspector.sceneOpened() } }
     }
 
     // MARK: Knobs / props
@@ -406,7 +425,6 @@ final class ProjectModel {
 
     func saveKnobs() {
         guard let scene = selectedScene else { return }
-        lastKnobWrite = Date()
         try? KnobFile.save(knobValues, to: project.knobsURL(scene: scene))
     }
 
@@ -429,17 +447,26 @@ final class ProjectModel {
             ui.toast = "This project's CLI has no AppleLaunch scene (swift-render 0.9+ registers it built in)"
             return
         }
-        ui.toast = "Scanning \(project.root.lastPathComponent) for a launch film…"
-        let root = project.root
-        let out = project.cacheDir.appendingPathComponent("launch-props.json")
-        let result = await Task.detached { () -> Result<String, Error> in
-            do {
-                try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let r = try ProcessRunner.run(exe.path, ["launch", root.path, "--no-render", "--props-out", out.path], cwd: root)
-                guard r.status == 0 else { throw LaunchScanFailure(message: r.stderr.split(separator: "\n").last.map(String.init) ?? "launch failed") }
-                return .success(try String(contentsOf: out, encoding: .utf8))
-            } catch { return .failure(error) }
-        }.value
+        let target = Self.launchTarget(project: project, scenes: scenes)
+        let result: Result<String, Error>
+        if let saved = target.props, let json = try? String(contentsOf: saved, encoding: .utf8) {
+            // An `init` scaffold: the app was scanned into this file (asset paths under assets/).
+            result = .success(json)
+        } else {
+            ui.toast = "Scanning \(target.root.lastPathComponent) for a launch film…"
+            let root = target.root, cwd = project.root
+            let out = project.cacheDir.appendingPathComponent("launch-props.json")
+            result = await Task.detached { () -> Result<String, Error> in
+                do {
+                    try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    let r = try ProcessRunner.run(exe.path, ["launch", root.path, "--no-render", "--props-out", out.path], cwd: cwd)
+                    guard r.status == 0 else { throw LaunchScanFailure(message: r.stderr.split(separator: "\n").last.map(String.init) ?? "launch failed") }
+                    let json = try String(contentsOf: out, encoding: .utf8)
+                    // Scanned outside this package: its relative art paths mean nothing to this host.
+                    return .success(root == cwd ? json : Self.absolutizingAssets(json, base: root))
+                } catch { return .failure(error) }
+            }.value
+        }
         switch result {
         case .success(let json):
             await select(scene: "AppleLaunch")
@@ -452,6 +479,40 @@ final class ProjectModel {
         case .failure(let error):
             ui.toast = "Launch scan failed: \(error)"
         }
+    }
+
+    /// What "New Launch Film…" scans. A `swift-render init` scaffold (product "launch") is a
+    /// Launch/ package inside the app: the film is about the app in the parent folder, and
+    /// `init` already scanned it into `.swift-render/launch/<App>Launch.json` (its own scene's
+    /// name), with the art copied into assets/. Anywhere else: the project itself.
+    nonisolated static func launchTarget(project: Project, scenes: [SceneSummary]) -> (root: URL, props: URL?) {
+        guard project.config.product == "launch" else { return (project.root, nil) }
+        let fm = FileManager.default
+        let dir = project.root.appendingPathComponent(".swift-render/launch", isDirectory: true)
+        for s in scenes where s.name != "AppleLaunch" {
+            let f = dir.appendingPathComponent("\(s.name).json")
+            if fm.fileExists(atPath: f.path) { return (project.root.deletingLastPathComponent(), f) }
+        }
+        let parent = project.root.deletingLastPathComponent()
+        let entries = (try? fm.contentsOfDirectory(atPath: parent.path)) ?? []
+        let isApp = entries.contains { $0 == "Package.swift" || $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }
+        return (isApp ? parent : project.root, nil)
+    }
+
+    /// Launch props with relative icon/screenshot paths made absolute against `base`.
+    nonisolated static func absolutizingAssets(_ json: String, base: URL) -> String {
+        guard var props = try? JSONDecoder().decode(LaunchProps.self, from: Data(json.utf8)) else { return json }
+        func abs(_ p: String) -> String {
+            p.isEmpty || p.hasPrefix("/") || p.hasPrefix("~") ? p : base.appendingPathComponent(p).standardizedFileURL.path
+        }
+        if let icon = props.icon {
+            props.icon?.path = abs(icon.path)
+            props.icon?.darkPath = icon.darkPath.map(abs)
+        }
+        for i in props.screenshots.indices { props.screenshots[i].path = abs(props.screenshots[i].path) }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return (try? enc.encode(props)).map { String(decoding: $0, as: UTF8.self) } ?? json
     }
 
     // MARK: Actions
