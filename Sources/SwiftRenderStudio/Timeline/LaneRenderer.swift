@@ -49,6 +49,11 @@ enum LaneDraw {
                       y: CGFloat, height: CGFloat, color: Color, label: String?, labels: inout Int,
                       stroke: Color? = nil, dashed: Bool = false, fill: Double = 0.32, trailing: String? = nil) {
         guard let r = rect(viewport: v, from: a, to: b, y: y, height: height) else { return }
+        if r.width < 5, stroke == nil {
+            // A sliver can't show an outline: draw a solid bar so dense passages read as texture.
+            ctx.fill(Path(r), with: .color(color.opacity(min(1, fill + 0.3))))
+            return
+        }
         let path = Path(roundedRect: r, cornerRadius: min(3, height / 3))
         ctx.fill(path, with: .color(color.opacity(fill)))
         if r.height > 8 {

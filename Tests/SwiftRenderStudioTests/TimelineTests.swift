@@ -1,4 +1,6 @@
 import CoreGraphics
+import QuartzCore
+import SwiftUI
 import XCTest
 import SwiftRenderKit
 @testable import SwiftRenderStudio
@@ -370,5 +372,35 @@ final class TimelineInputTests: XCTestCase {
         XCTAssertEqual(state.hover?.hit?.title, "#1 · hover me")
         input.hoverEnded()
         XCTAssertNil(state.hover)
+    }
+}
+
+/// Lane draw cost at StyleLab density (≈600 events, fit zoom), rasterized offscreen.
+@MainActor
+final class LaneDrawCostTests: XCTestCase {
+    func testDenseScoreLaneDrawsQuickly() {
+        var events: [ScoreEventInfo] = []
+        for i in 0..<600 {
+            let t = Double(i) * 0.07
+            events.append(ScoreEventInfo(lane: i % 3 == 0 ? "drums" : "melodic", kind: i % 3 == 0 ? "hat" : "pluck",
+                                         detail: "C4", time: t, duration: i % 3 == 0 ? 0.05 : 0.9, amp: 0.7))
+        }
+        let v = TimelineViewport(start: 0, pxPerSecond: 1200.0 / 42, width: 1200, duration: 42, fps: 60)
+        let lanes: [any LaneRenderer] = [ScoreLanes.renderer(title: "MUSIC", events: events),
+                                         ScoreLanes.renderer(title: "DRUMS · MARKS", events: events)]
+        for lane in lanes {
+            var times: [Double] = []
+            for _ in 0..<10 {
+                let view = Canvas { ctx, size in lane.draw(in: &ctx, size: size, viewport: v) }
+                    .frame(width: 1200, height: lane.height)
+                let r = ImageRenderer(content: view)
+                let t0 = CACurrentMediaTime()
+                XCTAssertNotNil(r.cgImage)
+                times.append((CACurrentMediaTime() - t0) * 1000)
+            }
+            let median = times.sorted()[times.count / 2]
+            print(String(format: "[timeline] %@ lane: %d events, median %.2f ms per offscreen draw", lane.title, events.count, median))
+            XCTAssertLessThan(median, 40, "\(lane.title) draw is too slow for scrubbing")
+        }
     }
 }
