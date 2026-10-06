@@ -514,6 +514,9 @@ Code outside the engine reaches the bundled shaders and resources through
 
 ## For AI agents
 
+**Start at [AGENTS.md](AGENTS.md)** — the one-page guide for any coding agent: which interface to use (MCP, CLI or
+library), 30-second recipes, the house rules that make output good, and how to build and test this repo.
+
 **Any agent, any Swift repo.** `swift-render-mcp` is a stdio MCP server for Claude Code, Claude
 Desktop, Codex and Cursor. Point it at any Swift codebase and an agent can make a launch film with
 `launch_film`. It sees the result as a contact sheet and edits the copy through props. It can also
