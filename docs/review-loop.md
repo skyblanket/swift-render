@@ -166,7 +166,9 @@ claude -p "<prompt>" --agent swift-render-director --output-format stream-json -
 For fix runs (not just replies) also pre-approve builds — under `-p` an unapproved Bash call is
 denied, while `acceptEdits` already covers Edit/Write: `--allowedTools "mcp__swift-render"
 "Bash(swift build:*)"`. Optional: `--append-system-prompt "<house rules>"`, `--model`,
-`--resume <session_id>` to continue a thread after Reopen, `--include-partial-messages` for token deltas.
+`--resume <session_id>` to continue a thread after Reopen, `--include-partial-messages` for token deltas,
+`--strict-mcp-config` to skip the user's other MCP servers (observed: it also drops plugin servers, so
+use it only with `--mcp-config`).
 
 The verification prompt was: *List the open swift-render review comments and reply to `<id>` with
 the word ack. Do not edit any files.* `python3 scripts/mcp-smoke.py --claude` runs it: it adds a throwaway
