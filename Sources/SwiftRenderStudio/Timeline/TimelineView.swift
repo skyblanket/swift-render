@@ -292,7 +292,17 @@ struct TimelineInput {
     }
 
     func doubleClick(at p: CGPoint) {
-        let (_, h) = hit(p)
+        let (key, h) = hit(p)
+        if key == .notes, h == nil {
+            // Double-click an empty spot in NOTES: a new comment there.
+            let t = min(max(0, viewport.snap(viewport.t(p.x))), model.playback.duration)
+            model.playback.pause()
+            model.playback.seek(t, precise: true)
+            model.review.beginComment(t: t)
+            model.ui.inspectorTab = .comments
+            model.ui.showInspector = true
+            return
+        }
         guard let h else { return }
         switch h.kind {
         case .clip:

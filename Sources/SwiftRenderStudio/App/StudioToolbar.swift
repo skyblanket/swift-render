@@ -62,6 +62,11 @@ struct StudioToolbar: ToolbarContent {
             }
             .help("Guides (G cycles)")
 
+            Button { model.perform(.newComment) } label: {
+                Label("Comment", systemImage: "plus.bubble")
+            }
+            .help("New comment at the playhead (C) · R or ⌥-drag marks a region")
+
             Toggle(isOn: Binding(get: { model.ui.compare != nil }, set: { _ in model.perform(.toggleCompare) })) {
                 Label("A/B", systemImage: "rectangle.split.2x1")
             }

@@ -69,8 +69,12 @@ struct CommentsLane: LaneRenderer {
             let r = CGRect(x: x - s / 2, y: mid - s / 2, width: s, height: s)
             ctx.fill(Path(ellipseIn: r.insetBy(dx: -1.5, dy: -1.5)), with: .color(StudioStyle.laneBackground))
             ctx.fill(Path(ellipseIn: r), with: .color(color.opacity(dim ? 0.55 : 1)))
+            // Agent comments get the violet ring the viewer pins use.
+            let agent = c.author.kind == .agent
+            if agent { ctx.stroke(Path(ellipseIn: r.insetBy(dx: -1.5, dy: -1.5)), with: .color(ReviewStyle.agent), lineWidth: 1.5) }
             if c.id == selection || c.id == preview?.id {
-                ctx.stroke(Path(ellipseIn: r.insetBy(dx: -2.5, dy: -2.5)), with: .color(.white), lineWidth: 1.5)
+                let o: CGFloat = agent ? -3.5 : -2.5
+                ctx.stroke(Path(ellipseIn: r.insetBy(dx: o, dy: o)), with: .color(.white), lineWidth: 1.5)
             }
             let label = c.status == .resolved ? "✓" : c.status == .wontFix ? "–" : "\(i + 1)"
             ctx.draw(Text(label).font(.system(size: i + 1 >= 10 ? 7.5 : 8.5, weight: .bold, design: .rounded))
@@ -147,14 +151,9 @@ enum RetimeMath {
 }
 
 extension ReviewController {
-    /// Move a comment (timeline drag). Written through `ReviewStore` like every
-    /// other edit, so the CLI, MCP and other windows see it via the watcher.
+    /// Move a comment (timeline drag). Goes through `retime`, which writes via
+    /// `ReviewStore`, so the CLI, MCP and other windows see it via the watcher.
     func retimeComment(_ id: String, t: Double, end: Double?) throws {
-        guard let scene else { return }
-        try ReviewStore(project: project).update(scene: scene, id: id) { c in
-            c.t = t
-            c.end = end
-        }
-        reload()
+        try retime(id, t: t, end: end, duration: nil)
     }
 }

@@ -26,8 +26,9 @@ struct ViewerView: View {
                     if !model.playback.hasFrame { placeholder }
                     SafeAreaOverlay(mode: model.ui.guides, canvas: canvas)
                     PinsOverlay(model: model, canvas: canvas)
-                    if model.ui.regionArmed { RegionTool(model: model, canvas: canvas) }
                     if let mode = model.ui.compare { CompareView(model: model, mode: mode, canvas: canvas) }
+                    // Always present: R arms it, ⌥ activates it, and it hosts the region composer.
+                    RegionTool(model: model, canvas: canvas)
                     if let crash = model.host.crash {
                         CrashCard(model: model, crash: crash)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
