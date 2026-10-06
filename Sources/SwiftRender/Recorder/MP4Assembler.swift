@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import SwiftRenderKit
 
 /// Joins already-encoded video segments end to end and muxes an audio file,
 /// **without re-encoding the video**: H.264 samples are copied and retimed, only
@@ -19,6 +20,10 @@ public enum MP4Assembler {
     /// Write `segments` (in order) plus optional `audio` (trimmed to the video) to `output`.
     public static func assemble(video segments: [URL], audio: URL?, to output: URL) async throws {
         precondition(!segments.isEmpty)
+        // Fail before any work if the output can't be replaced (e.g. it's a directory).
+        if OutputPath.isDirectory(output) {
+            throw OutputPathError("output path \(output.path) is a directory — refusing to replace it")
+        }
         // Video readers, one per segment, with each segment's start offset.
         var parts: [(AVAssetReader, AVAssetReaderTrackOutput, CMTime)] = []
         var cursor = CMTime.zero
@@ -114,7 +119,7 @@ public enum MP4Assembler {
         writer.endSession(atSourceTime: total)
         await writer.finishWriting()
         guard writer.status == .completed else { throw Failure.writer(writer.error?.localizedDescription ?? "finish failed") }
-        try? FileManager.default.removeItem(at: output)
+        try OutputPath.removeExistingFile(at: output)
         try FileManager.default.moveItem(at: tmp, to: output)
     }
 
