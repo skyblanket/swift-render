@@ -89,6 +89,11 @@ final class KitTests: XCTestCase {
         let found = try XCTUnwrap(Project.discover(from: inner))
         XCTAssertEqual(found.root.lastPathComponent, "Launch")
         XCTAssertEqual(found.config.product, "launch")
-        XCTAssertEqual(Project.discover(from: outer.root)?.config.product, "swift-render")
+        // From the app root itself, the swift-render package in Launch/ is the project
+        // (Studio opened on the app root used to try to build a "swift-render" product there).
+        XCTAssertEqual(Project.discover(from: outer.root)?.config.product, "launch")
+        XCTAssertEqual(Project.discover(from: outer.root)?.root.lastPathComponent, "Launch")
+        let plain = try tempProject()
+        XCTAssertEqual(Project.discover(from: plain.root)?.config.product, "swift-render")
     }
 }

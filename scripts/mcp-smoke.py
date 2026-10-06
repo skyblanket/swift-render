@@ -221,6 +221,19 @@ def main():
     check(not res.get("isError") and len(imgs) == 1 and png_size(imgs[0])[0] <= 1280, "contact_sheet → 1 PNG ≤ 1280")
     _, res, text, _ = c.call("list_comments", {"status": "all"})
     check(not res.get("isError"), "list_comments (all)")
+    _, res, text, imgs = c.call("render_frames", {"scene": scene, "times": [1.0], "width": 480, "aspect": "9:16"}, args.save)
+    sizes = [png_size(i) for i in imgs]
+    check(not res.get("isError") and sizes and sizes[0][1] > sizes[0][0], f"render_frames aspect 9:16 → portrait {sizes}")
+
+    print("hardening")
+    for times in (["nan"], "inf", [1e19]):
+        _, res, text, _ = c.call("render_frames", {"scene": scene, "times": times})
+        check(res.get("isError") is True and "finite" in text, f"render_frames times={times!r} refused")
+    _, res, text, _ = c.call("set_knobs", {"scene": "../../.mcp", "values": {"x": "pwned"}})
+    check(res.get("isError") is True and "not a scene name" in text, "set_knobs refuses a path as scene")
+    _, res, text, _ = c.call("set_knobs", {"scene": scene + "Typo", "values": {"x": 1}})
+    check(res.get("isError") is True and "unknown scene" in text, "set_knobs refuses an unknown scene")
+    check(c.request("ping").get("result") == {}, "server still answers after bad arguments")
 
     if args.full:
         print("review round trip")
