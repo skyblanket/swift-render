@@ -365,9 +365,7 @@ func run(_ argv: [String]) async throws {
                 let (l, r) = ScoreSynth.render(score)
                 checkAudio = .score(score, left: l, right: r)
                 if runner.reactsToAudio {
-                    var mono = [Float](repeating: 0, count: l.count)
-                    for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
-                    track = try AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: args.fps)
+                    track = try AudioAnalyzer.analyze(samples: mixdown(l, r), sampleRate: scoreSampleRate, fps: args.fps)
                 }
             }
         case .file(let url):

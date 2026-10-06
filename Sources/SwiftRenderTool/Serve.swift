@@ -371,7 +371,9 @@ final class HostSession {
         guard runner.propsTemplate != nil else { throw bad("\(o.scene.name) takes no props") }
         let propsURL = try writeProps(scene: o.scene.name, json: p.propsJSON, runner: runner)
         let duration = o.explicitDuration ?? runner.durationFor(propsURL)
-        let track = runner.reactsToAudio ? audioDone?.ready.track ?? .silent : .silent
+        // Keep hearing the current track until the (possibly new) soundtrack is analyzed.
+        let current = audioDone.flatMap { $0.key == o.audioKey ? $0.ready.track : nil }
+        let track = runner.reactsToAudio ? current ?? .silent : .silent
         o.scene = try preparedScene(name: o.scene.name, runner: runner, duration: duration, size: o.scene.size,
                                     fps: o.scene.fps, postFX: o.scene.postFX,
                                     propsURL: propsURL, track: track)

@@ -21,17 +21,19 @@ struct ScoreAudio: Sendable {
     /// Decoded from disk rather than synthesized.
     let cacheHit: Bool
 
-    /// `(l + r) * 0.5` per sample — the same two IEEE ops as `AudioPlan`'s loop, so the
-    /// analyzed track is bit-identical (HostTests checks); vDSP keeps debug builds fast.
-    var mono: [Float] {
-        let n = left.count
-        guard n > 0 else { return [] }
-        var m = [Float](repeating: 0, count: n)
-        var half: Float = 0.5
-        vDSP_vadd(left, 1, right, 1, &m, 1, vDSP_Length(n))
-        vDSP_vsmul(m, 1, &half, &m, 1, vDSP_Length(n))
-        return m
-    }
+    var mono: [Float] { mixdown(left, right) }
+}
+
+/// `(l + r) * 0.5` per sample — the same two IEEE ops as `AudioPlan`'s loop, so the
+/// analyzed track is bit-identical (HostTests checks); vDSP keeps debug builds fast.
+func mixdown(_ left: [Float], _ right: [Float]) -> [Float] {
+    let n = min(left.count, right.count)
+    guard n > 0 else { return [] }
+    var m = [Float](repeating: 0, count: n)
+    var half: Float = 0.5
+    vDSP_vadd(left, 1, right, 1, &m, 1, vDSP_Length(n))
+    vDSP_vsmul(m, 1, &half, &m, 1, vDSP_Length(n))
+    return m
 }
 
 enum AudioCache {
