@@ -8,11 +8,17 @@ import SwiftUI
 /// Probe a scene into editor/agent metadata: clips, knobs, score events,
 /// captions, loudness and the audio file to play in sync.
 /// `audioPath` is the file the caller will play (score WAV or --audio file).
+///
+/// `analyzeAudio: false` skips the loudness envelope (and with it score
+/// synthesis, ~4 s for a long score in debug); `captions: false` skips voiceover
+/// timing (TTS on first use). `make` reuses an already-built view function;
+/// otherwise the probe runs with a silent track — structure doesn't depend on audio.
 @MainActor
 func buildSceneInfo(name: String, runner: SceneRunner, duration: Double, size: CGSize, fps: Int,
                     audio: AudioSource, propsURL: URL?, audioPath: String?,
-                    loudnessRate: Double = 50) throws -> SceneInfo {
-    let make = try runner.makeView(duration, audio, propsURL)
+                    loudnessRate: Double = 50, analyzeAudio: Bool = true, captions withCaptions: Bool = true,
+                    make: ((Double) -> AnyView)? = nil) throws -> SceneInfo {
+    let make = try make ?? runner.makeViewWithTrack(duration, .silent, propsURL)
     let structure = SceneProbe.probe(duration: duration, size: size, fps: fps, make: make)
 
     var events: [ScoreEventInfo] = []
@@ -21,16 +27,20 @@ func buildSceneInfo(name: String, runner: SceneRunner, duration: Double, size: C
     switch audio {
     case .score(let score):
         events = score.eventInfos
-        captions = CaptionTrack(score).cues.map { CaptionInfo(start: $0.start, end: $0.end, text: $0.text) }
-        let (l, r) = ScoreSynth.render(score)
-        var mono = [Float](repeating: 0, count: l.count)
-        for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
-        if let track = try? AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: Int(loudnessRate)) {
-            loudness = envelope(track, duration: duration, rate: loudnessRate)
+        if withCaptions {
+            captions = CaptionTrack(score).cues.map { CaptionInfo(start: $0.start, end: $0.end, text: $0.text) }
+        }
+        if analyzeAudio {
+            let (l, r) = ScoreSynth.render(score)
+            var mono = [Float](repeating: 0, count: l.count)
+            for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
+            if let track = try? AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: Int(loudnessRate)) {
+                loudness = loudnessEnvelope(track, duration: duration, rate: loudnessRate)
+            }
         }
     case .file(let url):
-        if let track = try? AudioAnalyzer.analyze(url: url, fps: Int(loudnessRate)) {
-            loudness = envelope(track, duration: duration, rate: loudnessRate)
+        if analyzeAudio, let track = try? AudioAnalyzer.analyze(url: url, fps: Int(loudnessRate)) {
+            loudness = loudnessEnvelope(track, duration: duration, rate: loudnessRate)
         }
     case .none:
         break
@@ -49,7 +59,8 @@ func buildSceneInfo(name: String, runner: SceneRunner, duration: Double, size: C
                      loudness: loudness, loudnessRate: loudnessRate, sourcePath: runner.sourcePath)
 }
 
-private func envelope(_ track: AudioTrack, duration: Double, rate: Double) -> [Float] {
+/// `track.level` sampled at `rate` per second over `duration` (SceneInfo.loudness).
+func loudnessEnvelope(_ track: AudioTrack, duration: Double, rate: Double) -> [Float] {
     let n = max(0, Int((duration * rate).rounded(.up)))
     return (0..<n).map { Float(track.level(at: Double($0) / rate)) }
 }
@@ -88,15 +99,14 @@ func runInfo(_ args: [String]) throws {
     else if let score = runner.soundtrack(dur, props.map { URL(fileURLWithPath: $0) }) { audio = .score(score) }
     else { audio = .none }
 
+    // Neither output shows loudness (serve carries the envelope), so skip synthesis.
     let info = try buildSceneInfo(name: name, runner: runner, duration: dur, size: aspect.size, fps: fps,
                                   audio: audio, propsURL: props.map { URL(fileURLWithPath: $0) },
-                                  audioPath: audioFile)
+                                  audioPath: audioFile, analyzeAudio: false)
     if json {
-        var slim = info
-        slim.loudness = []      // keep agent-facing JSON small; serve carries the envelope
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        print(String(decoding: try enc.encode(slim), as: UTF8.self))
+        print(String(decoding: try enc.encode(info), as: UTF8.self))
         return
     }
     print(String(format: "%@ · %@ · %.2fs · %d×%d @ %dfps", name, info.kind.rawValue, info.duration,

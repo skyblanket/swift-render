@@ -151,6 +151,96 @@ func audioReport(left: [Float], right: [Float], rate: Double, events: [ScoreEven
     return lines
 }
 
+// MARK: - Contact sheet + check (CLI `contact`/`check`, host `check`)
+
+/// The audio a check reports on. Score samples are passed in so callers that
+/// already synthesized (the host's cache, the CLI's track analysis) don't again.
+enum CheckAudio {
+    case none
+    case file(URL)
+    case score(Score, left: [Float], right: [Float])
+}
+
+struct ContactSheetResult {
+    /// Sample time and luminance spread (nil = unreadable) per cell.
+    var samples: [(t: Double, spread: Double?)]
+    /// Seconds between samples.
+    var step: Double
+    var msPerThumb: Double
+}
+
+struct CheckResult {
+    var contact: URL
+    var report: [String]
+    var reportURL: URL
+}
+
+/// Renders `cols×rows` 384-px-wide thumbnails into a labelled grid PNG at `out`.
+/// Layout stays at the scene's full size; ImageRenderer downscales.
+@MainActor
+func renderContactSheet(_ scene: PreparedScene, cols: Int, rows: Int, to out: URL) throws -> ContactSheetResult {
+    let n = cols * rows
+    // Sample each cell's midpoint: endpoints land on beat-grid cuts and fades,
+    // which are exactly the frames that don't represent the shot.
+    let step = scene.duration / Double(max(1, n))
+    let scale = 384.0 / scene.size.width
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-contact-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    var cells: [(t: Double, url: URL)] = []
+    let t0 = Date()
+    for i in 0..<n {
+        let t = (Double(i) + 0.5) * step
+        HostCrashLog.note("check \(scene.name) t=\(t)")
+        guard let image = scene.image(at: t, scale: scale), let png = FrameEncoding.encode(image, format: "png") else {
+            throw NSError(domain: "check", code: 3, userInfo: [NSLocalizedDescriptionKey: "frame at t=\(t) produced no image"])
+        }
+        let cell = tmpDir.appendingPathComponent(String(format: "c%03d.png", i))
+        try png.write(to: cell)
+        cells.append((t, cell))
+    }
+    let perFrame = Date().timeIntervalSince(t0) / Double(max(1, n))
+    try composeContactSheet(cells: cells, columns: cols, to: out)
+    return ContactSheetResult(samples: cells.map { ($0.t, luminanceSpread($0.url)) }, step: step,
+                              msPerThumb: perFrame * 1000)
+}
+
+/// `check`: contact sheet, blank-frame scan and audio report; also writes the
+/// report next to the sheet as `<name>.txt`.
+@MainActor
+func runCheck(_ scene: PreparedScene, audio: CheckAudio, cols: Int = 4, rows: Int = 4,
+              contact out: URL) throws -> CheckResult {
+    let sheet = try renderContactSheet(scene, cols: cols, rows: rows, to: out)
+    let duration = scene.duration
+    var report: [String] = []
+    report.append(String(format: "scene %@ · %.2fs · %d×%d @ %dfps · %d frames · %.0f ms/thumb",
+                         scene.name, duration, Int(scene.size.width), Int(scene.size.height), scene.fps,
+                         Int(duration * Double(scene.fps)), sheet.msPerThumb))
+    let flat = sheet.samples.compactMap { s -> Double? in
+        guard let sd = s.spread else { return nil }
+        return sd < 0.015 ? s.t : nil
+    }
+    if flat.isEmpty { report.append("frames: no blank samples") }
+    else {
+        let edge = flat.allSatisfy { $0 < sheet.step || $0 > duration - sheet.step }
+        report.append("frames: flat/blank at " + flat.map { String(format: "%.2fs", $0) }.joined(separator: ", ")
+                      + (edge ? " (start/end fades — fine)" : "  ⚠︎ check these"))
+    }
+    switch audio {
+    case .score(let score, let l, let r):
+        report += audioReport(left: l, right: r, rate: scoreSampleRate, events: score.events)
+        report += mediaReport(score)
+    case .file(let url):
+        let a = try loadAudioFile(url)
+        report += audioReport(left: a.left, right: a.right, rate: a.rate, events: nil)
+    case .none:
+        report.append("audio: none — add `soundtrack(duration:)` or pass --audio")
+    }
+    let txt = out.deletingPathExtension().appendingPathExtension("txt")
+    try (report.joined(separator: "\n") + "\n").write(to: txt, atomically: true, encoding: .utf8)
+    return CheckResult(contact: out, report: report, reportURL: txt)
+}
+
 // MARK: - Scaffold
 
 func scaffoldScene(name: String, kind: String) throws -> URL {
