@@ -3,11 +3,51 @@ import SwiftRenderKit
 
 // MARK: - Sidebar
 //
-// Scenes (kind icon, open-comment badge) · Comments (Open, Ready for Review: each opens
-// that segment) · Exports (recent files) · a + menu to add a scene or a launch film.
+// Scenes grouped by what you do with them — Templates (editable content), Music-driven,
+// Films — each collapsible, with a filter field · Comments (Open, Ready for Review: each
+// opens that segment) · Exports (recent files) · a + menu to add a scene or a launch film.
+
+/// How the sidebar groups scenes: by what you can do with them, not how they're coded.
+enum SceneCategory: String, CaseIterable, Identifiable {
+    case templates, music, films
+    var id: String { rawValue }
+
+    init(_ s: SceneSummary) {
+        if s.hasProps { self = .templates }
+        else if s.kind == .audio || s.kind == .propsAudio { self = .music }
+        else { self = .films }
+    }
+
+    var title: String {
+        switch self {
+        case .templates: return "Templates"
+        case .music: return "Music-driven"
+        case .films: return "Films"
+        }
+    }
+
+    /// One icon per section, so a row's icon never needs decoding.
+    var symbol: String {
+        switch self {
+        case .templates: return "slider.horizontal.3"
+        case .music: return "waveform"
+        case .films: return "film"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .templates: return "Fill in your own words, colors and images in the Content tab"
+        case .music: return "Move with the soundtrack"
+        case .films: return "Finished scenes, edited in code"
+        }
+    }
+}
 
 struct SidebarView: View {
     @Bindable var model: ProjectModel
+    @State private var filter = ""
+    @State private var collapsed: Set<SceneCategory> = []
 
     var body: some View {
         // The footer sits below the list (not in a safe-area inset) so rows never scroll under it.
@@ -30,28 +70,48 @@ struct SidebarView: View {
         List(selection: Binding(get: { model.selectedScene }, set: { name in
             if let name { Task { await model.select(scene: name) } }
         })) {
-            Section("Scenes") {
-                if model.scenes.isEmpty {
-                    if case .failed = model.build.phase {
-                        Text("Scenes appear after a good build.")
-                            .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
-                    } else {
-                        HStack(spacing: StudioStyle.Space.s) {
-                            ProgressView().controlSize(.small)
-                            Text("Getting your scenes ready…").foregroundStyle(.secondary).lineLimit(1)
+            if model.scenes.isEmpty || sceneListIsStale {
+                Section("Scenes") {
+                    if model.scenes.isEmpty {
+                        if case .failed = model.build.phase {
+                            Text("Scenes appear after a good build.")
+                                .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: StudioStyle.Space.s) {
+                                ProgressView().controlSize(.small)
+                                Text("Getting your scenes ready…").foregroundStyle(.secondary).lineLimit(1)
+                            }
                         }
+                    } else {
+                        Text("Scenes come back after the next good build.")
+                            .font(StudioStyle.Fonts.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                ForEach(model.scenes, id: \.name) { s in
-                    SceneRow(scene: s, openCount: model.review.openCounts[s.name] ?? 0)
-                        .tag(s.name)
-                        .id(s.name)
-                        .opacity(sceneListIsStale ? 0.5 : 1)
+            }
+            ForEach(SceneCategory.allCases) { category in
+                let scenes = visibleScenes(in: category)
+                if !scenes.isEmpty {
+                    Section(isExpanded: expansion(category)) {
+                        ForEach(scenes, id: \.name) { s in
+                            SceneRow(scene: s, category: category, openCount: model.review.openCounts[s.name] ?? 0)
+                                .tag(s.name)
+                                .id(s.name)
+                                .opacity(sceneListIsStale ? 0.5 : 1)
+                        }
+                    } header: {
+                        HStack {
+                            Text(category.title)
+                            Spacer()
+                            Text("\(scenes.count)").monospacedDigit().foregroundStyle(.tertiary)
+                        }
+                        .help(category.help)
+                    }
                 }
-                if sceneListIsStale {
-                    Text("Scenes come back after the next good build.")
-                        .font(StudioStyle.Fonts.subheadline)
-                        .foregroundStyle(.secondary)
+            }
+            if !filter.isEmpty && SceneCategory.allCases.allSatisfy({ visibleScenes(in: $0).isEmpty }) {
+                Section("Scenes") {
+                    Text("No scenes match “\(filter)”").foregroundStyle(.secondary)
                 }
             }
             Section("Comments") {
@@ -76,6 +136,20 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        .searchable(text: $filter, placement: .sidebar, prompt: "Filter scenes")
+    }
+
+    private func visibleScenes(in category: SceneCategory) -> [SceneSummary] {
+        let q = filter.trimmingCharacters(in: .whitespaces)
+        return model.scenes.filter {
+            SceneCategory($0) == category && (q.isEmpty || $0.name.localizedCaseInsensitiveContains(q))
+        }
+    }
+
+    /// Sections start open; while filtering, every section with a match shows.
+    private func expansion(_ c: SceneCategory) -> Binding<Bool> {
+        Binding(get: { !filter.isEmpty || !collapsed.contains(c) },
+                set: { open in if open { collapsed.remove(c) } else { collapsed.insert(c) } })
     }
 
     /// A failed build with no live preview: the list is the last good one.
@@ -125,18 +199,19 @@ struct SidebarView: View {
 
 struct SceneRow: View {
     var scene: SceneSummary
+    var category: SceneCategory
     var openCount: Int
 
     var body: some View {
-        Label(scene.name, systemImage: StudioStyle.symbol(scene.kind))
+        Label(scene.name, systemImage: category.symbol)
             .badge(openCount)
             .help(help)
     }
 
     private var help: String {
         var parts: [String] = []
-        if scene.hasProps { parts.append("Has editable content") }
-        if scene.kind == .audio || scene.kind == .propsAudio { parts.append("Moves to the music") }
+        if scene.hasProps { parts.append("Editable content in the Content tab") }
+        if scene.kind == .audio || scene.kind == .propsAudio { parts.append("Moves with the music") }
         if openCount > 0 { parts.append("\(openCount) open comment\(openCount == 1 ? "" : "s")") }
         return parts.joined(separator: ". ")
     }
