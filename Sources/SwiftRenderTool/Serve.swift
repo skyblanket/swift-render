@@ -10,7 +10,9 @@ import SwiftUI
 // needs it) handles control requests in order, renders only the newest pending
 // `frame`, then one stream frame per turn so requests stay responsive during
 // playback. Score audio is synthesized on a background queue and comes back
-// through the inbox, so frames never wait for it.
+// through the inbox, so frames never wait for it. With `deferProbe`, `open` replies
+// (and renders its first frame) before the structure probe, which runs in a turn
+// that brings no requests and reaches the client as an "info" event.
 
 @MainActor
 func runServe(_ args: [String]) async throws {
@@ -31,7 +33,7 @@ func runServe(_ args: [String]) async throws {
     inbox.startReading(fd: STDIN_FILENO)
 
     while true {
-        let items = await inbox.take(wait: !session.hasStreamWork)
+        let items = await inbox.take(wait: !session.hasStreamWork, timeout: session.deferredDelay(now: hostNow()))
         var batch: [HostRequest] = []
         var eof = false
         for item in items {
@@ -51,7 +53,20 @@ func runServe(_ args: [String]) async throws {
             exit(0)
         }
         for packet in session.streamStep() { output.send(packet) }
+        // Idle turn: the deferred probe (after `open` with `deferProbe`).
+        if batch.isEmpty { for packet in session.runDeferred(now: hostNow()) { output.send(packet) } }
     }
+}
+
+/// Monotonic seconds (deferred-work scheduling).
+func hostNow() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
+
+/// Which background audio job is current; older jobs stop between stages.
+final class AudioJobToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = 0
+    func set(_ g: Int) { lock.lock(); current = g; lock.unlock() }
+    func isCurrent(_ g: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return current == g }
 }
 
 // MARK: - Session
@@ -80,6 +95,21 @@ final class HostSession {
         var explicitDuration: Double?
         var audioFile: URL?
         var binaryFrames: Bool
+        /// The props text `open`/`setProps` sent (nil = scene defaults): part of the probe cache key.
+        var propsJSON: String?
+    }
+
+    /// What the structure probe found (cached per scene/size/props/knobs for this process).
+    private struct Structure {
+        var clips: [ClipInfo]
+        var knobs: [KnobInfo]
+        var events: [ScoreEventInfo]
+    }
+
+    /// A probe owed to the open scene (`open` with `deferProbe`).
+    private struct PendingProbe {
+        var scene: String
+        var notBefore: Double
     }
 
     private struct Stream {
@@ -98,7 +128,19 @@ final class HostSession {
     private var opened: Opened?
     private var stream: Stream?
     private var audioGeneration = 0
-    private var audioDone: (key: String, ready: AudioReady)?
+    private let audioJobs = AudioJobToken()
+    /// Prepared audio by key, most recent last (switching back to a scene reuses it).
+    private var audioReady: [(key: String, ready: AudioReady)] = []
+    private var structures: [String: Structure] = [:]
+    private var structureOrder: [String] = []
+    private var pendingProbe: PendingProbe?
+    /// One audio job at a time: superseded scenes don't compete with frames for CPU.
+    private static let audioQueue = DispatchQueue(label: "swift-render.serve.audio", qos: .userInitiated)
+    static let audioMemory = 6
+    static let structureMemory = 32
+    /// Grace after a deferred `open` before probing: a client's first `frame` (sent once the
+    /// reply lands) renders first.
+    static let probeGrace = 0.03
     private lazy var summaries: [SceneSummary] = runners.keys.sorted().map { runners[$0]!.summary(name: $0) }
 
     static let loudnessRate = 50.0
@@ -120,6 +162,11 @@ final class HostSession {
 
     var hasStreamWork: Bool { (stream?.credits ?? 0) > 0 && opened != nil }
 
+    /// Seconds until deferred work is due (0 = now), nil when there is none.
+    func deferredDelay(now: Double) -> Double? {
+        pendingProbe.map { max(0, $0.notBefore - now) }
+    }
+
     // MARK: Dispatch
 
     /// One turn's worth of requests, handled in arrival order — except that a `frame`
@@ -129,6 +176,12 @@ final class HostSession {
     func process(_ batch: [HostRequest], send: (HostPacket) -> Void) {
         let lastFrame = batch.lastIndex { $0.method == .frame }
         for (i, r) in batch.enumerated() {
+            // A deferred-probe `open` directly followed by another `open`: only the newer one runs.
+            if r.method == .open, r.params?.deferProbe == true, i + 1 < batch.count, batch[i + 1].method == .open {
+                send(HostPacket(.failure(r.id, HostError(code: HostError.Code.superseded,
+                                                         message: "a newer open replaced this one"))))
+                continue
+            }
             if r.method == .frame, i != lastFrame {
                 send(HostPacket(.failure(r.id, HostError(code: HostError.Code.superseded,
                                                          message: "a newer frame request replaced this one"))))
@@ -210,27 +263,60 @@ final class HostSession {
             let audio = audioSource(runner: runner, duration: duration, propsURL: propsURL, file: audioFile)
             let key = audioKey(audio, fps: fps, duration: duration)
             // A degraded mix (TTS/sample failed) is retried on every open, never reused.
-            let reuse = audioDone.flatMap { $0.key == key && $0.ready.degraded.isEmpty ? $0.ready : nil }
+            let reuse = cachedAudio(key).flatMap { $0.degraded.isEmpty ? $0 : nil }
             laps.lap("score")
             HostCrashLog.note("open \(name)")
             let scene = try preparedScene(name: name, runner: runner, duration: duration, size: size, fps: fps,
                                           postFX: p.postFX ?? true, propsURL: propsURL,
                                           track: runner.reactsToAudio ? reuse?.track ?? .silent : .silent)
-            var info = try buildSceneInfo(name: name, runner: runner, duration: duration, size: size, fps: fps,
+            let structureKey = Self.structureKey(scene: name, duration: duration, size: size, fps: fps,
+                                                 propsJSON: p.propsJSON)
+            var info: SceneInfo
+            var probing = false
+            if let known = structures[structureKey] {
+                info = baseInfo(name: name, runner: runner, duration: duration, size: size, fps: fps,
+                                propsURL: propsURL, audio: audio)
+                Self.apply(known, to: &info)
+                touchStructure(structureKey)
+                laps.lap("probe (cached)")
+            } else if p.deferProbe == true {
+                info = baseInfo(name: name, runner: runner, duration: duration, size: size, fps: fps,
+                                propsURL: propsURL, audio: audio)
+                probing = true
+            } else {
+                info = try buildSceneInfo(name: name, runner: runner, duration: duration, size: size, fps: fps,
                                           audio: audio, propsURL: propsURL, audioPath: knownAudioPath(audio),
                                           loudnessRate: Self.loudnessRate, analyzeAudio: false, captions: false,
                                           make: scene.make)
+                remember(Structure(clips: info.clips, knobs: info.knobs, events: info.events), key: structureKey)
+                laps.lap("probe")
+            }
             if let reuse { apply(reuse, to: &info) }
-            laps.lap("probe")
 
             var out: [HostPacket] = []
             if let s = stream { out.append(HostPacket(.streamEnd(s.id, message: "scene reopened"))); stream = nil }
             opened = Opened(scene: scene, info: info, audio: audio, audioKey: key, explicitDuration: p.duration,
-                            audioFile: audioFile, binaryFrames: p.binaryFrames ?? false)
-            if reuse == nil { startAudio() }
-            fputs(String(format: "[swift-render serve] open %@ %d×%d@%d %.2fs in %.0f ms (%@)\n", name, width, height, fps,
-                         duration, Date().timeIntervalSince(t0) * 1000, laps.summary), stderr)
-            return out + [HostPacket(.response(id, HostResult(info: info)))]
+                            audioFile: audioFile, binaryFrames: p.binaryFrames ?? false, propsJSON: p.propsJSON)
+            pendingProbe = probing ? PendingProbe(scene: name, notBefore: hostNow() + Self.probeGrace) : nil
+            if reuse == nil { startAudio() } else { cancelAudio() }
+            // The first frame rides on the reply: one round trip, before any probe.
+            var frame: HostFrame? = nil, payload: Data? = nil
+            if let t = p.t, t.isFinite {
+                do {
+                    let format = try frameFormat(p.format, binary: p.binaryFrames ?? false)
+                    (frame, payload, _) = try render(t: max(0, min(duration, t)), maxWidth: p.maxWidth,
+                                                      format: format, quality: p.quality)
+                    laps.lap("frame")
+                } catch {
+                    fputs("[swift-render serve] open \(name): first frame failed: \(error)\n", stderr)
+                }
+            }
+            fputs(String(format: "[swift-render serve] open %@ %d×%d@%d %.2fs in %.0f ms (%@)%@\n", name, width, height, fps,
+                         duration, Date().timeIntervalSince(t0) * 1000, laps.summary, probing ? " · probe deferred" : ""),
+                  stderr)
+            // `render` may have found knobs: the reply carries the scene as it is now.
+            let result = HostResult(info: opened?.info ?? info, frame: frame, probing: probing ? true : nil)
+            return out + [HostPacket(.response(id, result), payload: payload)]
         } catch {
             KnobStore.shared.set(previousKnobs)     // a failed open leaves the previous scene intact
             throw error
@@ -246,6 +332,71 @@ final class HostSession {
             throw bad(e.shortDescription)
         }
     }
+
+    /// The cheap part of SceneInfo: everything but the probe's clips, knobs and score events.
+    private func baseInfo(name: String, runner: SceneRunner, duration: Double, size: CGSize, fps: Int,
+                          propsURL: URL?, audio: AudioSource) -> SceneInfo {
+        var propsJSON: String? = nil
+        if runner.propsTemplate != nil {
+            if let propsURL, let text = try? String(contentsOf: propsURL, encoding: .utf8) { propsJSON = text }
+            else { propsJSON = runner.propsTemplate?() }
+        }
+        return SceneInfo(name: name, kind: runner.kind, duration: duration, width: Int(size.width),
+                         height: Int(size.height), fps: fps, propsJSON: propsJSON, audioPath: knownAudioPath(audio),
+                         loudnessRate: Self.loudnessRate, sourcePath: runner.sourcePath)
+    }
+
+    /// Probe results depend on the scene, its size, length, props and every knob value.
+    private static func structureKey(scene: String, duration: Double, size: CGSize, fps: Int, propsJSON: String?) -> String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = .sortedKeys
+        let knobs = (try? enc.encode(KnobStore.shared.values)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        return "\(scene)|\(duration)|\(Int(size.width))x\(Int(size.height))@\(fps)|\(propsJSON ?? "-")|\(knobs)"
+    }
+
+    /// Probe knobs, plus any knob a frame declared that the probe didn't see.
+    private static func apply(_ s: Structure, to info: inout SceneInfo) {
+        info.clips = s.clips
+        info.events = s.events
+        let probed = Set(s.knobs.map(\.key))
+        info.knobs = (s.knobs + info.knobs.filter { !probed.contains($0.key) }).sorted { $0.key < $1.key }
+    }
+
+    private func remember(_ s: Structure, key: String) {
+        structures[key] = s
+        touchStructure(key)
+        while structureOrder.count > Self.structureMemory { structures[structureOrder.removeFirst()] = nil }
+    }
+
+    private func touchStructure(_ key: String) {
+        structureOrder.removeAll { $0 == key }
+        structureOrder.append(key)
+    }
+
+    /// A probe owed to the open scene, once due: clips, knobs and score events → "info".
+    func runDeferred(now: Double) -> [HostPacket] {
+        guard let job = pendingProbe, now >= job.notBefore else { return [] }
+        pendingProbe = nil
+        guard var o = opened, o.scene.name == job.scene else { return [] }
+        let start = Date()
+        let s = o.scene
+        HostCrashLog.note("probe \(s.name)")
+        let structure = probeStructure(runner: s.runner, duration: s.duration, size: s.size, fps: s.fps,
+                                       propsURL: s.propsURL, make: s.make)
+        var events: [ScoreEventInfo] = []
+        if case .score(let score) = o.audio { events = score.eventInfos }
+        let found = Structure(clips: structure.clips, knobs: structure.knobs, events: events)
+        remember(found, key: Self.structureKey(scene: s.name, duration: s.duration, size: s.size, fps: s.fps,
+                                               propsJSON: o.propsJSON))
+        Self.apply(found, to: &o.info)
+        opened = o
+        fputs(String(format: "[swift-render serve] probe %@ in %.0f ms (deferred)\n", s.name,
+                     Date().timeIntervalSince(start) * 1000), stderr)
+        return [HostPacket(.infoChanged(o.info))]
+    }
+
+    /// Pending deferred work, for tests.
+    var hasDeferredWork: Bool { pendingProbe != nil }
 
     // MARK: frames
 
@@ -381,13 +532,14 @@ final class HostSession {
         let propsURL = try writeProps(scene: o.scene.name, json: p.propsJSON, runner: runner)
         let duration = o.explicitDuration ?? runner.durationFor(propsURL)
         // Keep hearing the current track until the (possibly new) soundtrack is analyzed.
-        let current = audioDone.flatMap { $0.key == o.audioKey ? $0.ready.track : nil }
+        let current = cachedAudio(o.audioKey)?.track
         let track = runner.reactsToAudio ? current ?? .silent : .silent
         o.scene = try preparedScene(name: o.scene.name, runner: runner, duration: duration, size: o.scene.size,
                                     fps: o.scene.fps, postFX: o.scene.postFX,
                                     propsURL: propsURL, track: track)
         o.info.duration = duration
         o.info.propsJSON = p.propsJSON ?? runner.propsTemplate?()
+        o.propsJSON = p.propsJSON
         if p.reprobe != false { reprobe(&o) }
         opened = o
         if var s = stream { s.to = min(s.to, duration); stream = s }
@@ -457,7 +609,7 @@ final class HostSession {
             // The cache holds exactly the synthesized samples; synthesize now only if the job hasn't run.
             let samples = try AudioCache.load(score, in: try audioCacheDir())
             audio = .score(score, left: samples.left, right: samples.right)
-            if scene.runner.reactsToAudio, audioDone?.key != o.audioKey {
+            if scene.runner.reactsToAudio, cachedAudio(o.audioKey) == nil {
                 let track = try AudioAnalyzer.analyze(samples: samples.mono, sampleRate: scoreSampleRate, fps: scene.fps)
                 try scene.setTrack(track)
             }
@@ -521,7 +673,7 @@ final class HostSession {
     /// Synthesize/load + analyze off the main thread; the result returns via `schedule`.
     private func startAudio() {
         guard let o = opened else { return }
-        audioGeneration += 1
+        cancelAudio()
         if case .none = o.audio { return }
         let generation = audioGeneration, key = o.audioKey, audio = o.audio
         let fps = o.scene.fps, duration = o.scene.duration, name = o.scene.name
@@ -529,19 +681,39 @@ final class HostSession {
         do { dir = try audioCacheDir() } catch {
             emit(HostPacket(.warning("audio: \(error.localizedDescription)"))); return
         }
-        let schedule = self.schedule, rate = Self.loudnessRate
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try AudioCache.prepare(audio, fps: fps, duration: duration,
-                                                         loudnessRate: rate, cacheDir: dir) }
+        let schedule = self.schedule, rate = Self.loudnessRate, jobs = audioJobs
+        Self.audioQueue.async {
+            // Superseded while queued or between stages: stop, report nothing.
+            guard jobs.isCurrent(generation) else { return }
+            let result = Result { try AudioCache.prepare(audio, fps: fps, duration: duration, loudnessRate: rate,
+                                                         cacheDir: dir, isCancelled: { !jobs.isCurrent(generation) }) }
+            if case .failure(let e) = result, e is CancellationError { return }
             schedule { [weak self] in self?.audioFinished(result, generation: generation, key: key, scene: name) }
         }
+    }
+
+    /// Older audio jobs are moot (another scene, or its audio is already in memory).
+    private func cancelAudio() {
+        audioGeneration += 1
+        audioJobs.set(audioGeneration)
+    }
+
+    /// Prepared audio for `key`, if this host has it in memory.
+    private func cachedAudio(_ key: String) -> AudioReady? {
+        audioReady.last { $0.key == key }?.ready
+    }
+
+    private func rememberAudio(_ ready: AudioReady, key: String) {
+        audioReady.removeAll { $0.key == key }
+        audioReady.append((key, ready))
+        if audioReady.count > Self.audioMemory { audioReady.removeFirst(audioReady.count - Self.audioMemory) }
     }
 
     private func audioFinished(_ result: Result<AudioReady, Error>, generation: Int, key: String, scene name: String) {
         guard generation == audioGeneration, var o = opened, o.audioKey == key else { return }
         switch result {
         case .success(let ready):
-            audioDone = (key, ready)
+            rememberAudio(ready, key: key)
             let captionsChanged = !ready.captions.isEmpty && ready.captions != o.info.captions
             apply(ready, to: &o.info)
             if o.scene.runner.reactsToAudio { try? o.scene.setTrack(ready.track) }

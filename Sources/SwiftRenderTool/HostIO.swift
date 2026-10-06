@@ -90,6 +90,8 @@ final class HostInbox: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [Item] = []
     private var waiter: CheckedContinuation<Void, Never>?
+    /// Identifies the parked waiter, so a timeout never resumes a later one.
+    private var waiterToken = 0
 
     func post(_ item: Item) {
         lock.lock()
@@ -99,17 +101,31 @@ final class HostInbox: @unchecked Sendable {
         w?.resume()
     }
 
-    /// Everything queued now. With `wait`, suspends until at least one item arrives.
-    func take(wait: Bool) async -> [Item] {
-        if wait {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in park(c) }
+    /// Everything queued now. With `wait`, suspends until at least one item arrives, or
+    /// at most `timeout` seconds when one is given (deferred work is due then).
+    func take(wait: Bool, timeout: Double? = nil) async -> [Item] {
+        if wait, timeout.map({ $0 > 0 }) ?? true {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in park(c, timeout: timeout) }
         }
         return drain()
     }
 
-    private func park(_ c: CheckedContinuation<Void, Never>) {
+    private func park(_ c: CheckedContinuation<Void, Never>, timeout: Double?) {
         lock.lock()
-        if items.isEmpty { waiter = c; lock.unlock() } else { lock.unlock(); c.resume() }
+        guard items.isEmpty else { lock.unlock(); c.resume(); return }
+        waiter = c
+        waiterToken += 1
+        let token = waiterToken
+        lock.unlock()
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [self] in
+                lock.lock()
+                let w = waiterToken == token ? waiter : nil
+                if w != nil { waiter = nil }
+                lock.unlock()
+                w?.resume()
+            }
+        }
     }
 
     private func drain() -> [Item] {

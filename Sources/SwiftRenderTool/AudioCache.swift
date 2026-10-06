@@ -230,8 +230,11 @@ struct AudioReady: Sendable {
 
 extension AudioCache {
     /// Synthesize-or-load, analyze, and time the voiceover captions. Blocking; any thread.
+    /// `isCancelled` is checked between stages (a newer `open` made this job moot): synthesis
+    /// still finishes and lands in the disk cache, the analysis after it is skipped.
     static func prepare(_ source: AudioSource, fps: Int, duration: Double, loudnessRate: Double,
-                        cacheDir: URL) throws -> AudioReady {
+                        cacheDir: URL, isCancelled: () -> Bool = { false }) throws -> AudioReady {
+        if isCancelled() { throw CancellationError() }
         let start = Date()
         switch source {
         case .none:
@@ -245,8 +248,10 @@ extension AudioCache {
             var laps = Laps()
             let audio = try load(score, in: cacheDir)
             laps.lap(audio.cacheHit ? "load" : "synth")
+            if isCancelled() { throw CancellationError() }
             let track = try AudioAnalyzer.analyze(samples: audio.mono, sampleRate: scoreSampleRate, fps: fps)
             laps.lap("analyze")
+            if isCancelled() { throw CancellationError() }
             // Speech lines are in the TTS cache by now, so this is cheap.
             let captions = CaptionTrack(score).cues.map { CaptionInfo(start: $0.start, end: $0.end, text: $0.text) }
             laps.lap("captions")

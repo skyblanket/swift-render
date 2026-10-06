@@ -461,4 +461,72 @@ final class HostTests: XCTestCase {
         XCTAssertNotEqual(AudioCache.fingerprint(a), AudioCache.fingerprint(c))
         XCTAssertNotEqual(AudioCache.fingerprint(a), AudioCache.fingerprint(Score(duration: 3) { tick(at: 0.5); blip(.midi(70), at: 1) }))
     }
+
+    // MARK: Fast scene switch (deferProbe, first frame on open)
+
+    func testDeferredOpenRepliesWithFirstFrameThenProbes() throws {
+        let s = session(try tempProject())
+        let packets = call(s, 1, .open, HostParams(scene: "TimelineDemo", width: 320, height: 180, fps: 30,
+                                                   t: 1.0, maxWidth: 320, format: "bgra8", binaryFrames: true,
+                                                   deferProbe: true))
+        let r = try result(packets)
+        XCTAssertEqual(r.probing, true, "the probe is deferred")
+        let info = try XCTUnwrap(r.info)
+        XCTAssertEqual(info.duration, 9.9)
+        XCTAssertTrue(info.clips.isEmpty, "clips come with the deferred probe")
+        let frame = try XCTUnwrap(r.frame, "the first frame rides on the reply")
+        XCTAssertEqual([frame.width, frame.height, frame.index], [320, 180, 30])
+        XCTAssertEqual(packets.first { $0.message.id != nil }?.payload?.count, 320 * 180 * 4, "bgra8 payload follows")
+        XCTAssertTrue(s.hasDeferredWork)
+        XCTAssertTrue(s.runDeferred(now: 0).isEmpty, "not before the grace period")
+
+        let probed = s.runDeferred(now: .infinity)
+        let event = try XCTUnwrap(probed.first { $0.message.event == "info" }?.message.info)
+        XCTAssertEqual(event.clips.count, 5, "clips arrive in an info event")
+        XCTAssertFalse(s.hasDeferredWork)
+        XCTAssertEqual(s.info?.clips.count, 5)
+
+        // A revisit (same scene, size, props and knobs) answers complete from the probe cache.
+        _ = call(s, 2, .open, HostParams(scene: "KnobBox", width: 320, height: 180, deferProbe: true))
+        let again = try result(call(s, 3, .open, HostParams(scene: "TimelineDemo", width: 320, height: 180, fps: 30,
+                                                            deferProbe: true)))
+        XCTAssertNil(again.probing)
+        XCTAssertEqual(again.info?.clips.count, 5)
+        XCTAssertNil(again.frame, "no `t`, no frame")
+        XCTAssertFalse(s.hasDeferredWork, "the pending KnobBox probe was dropped by the newer open")
+    }
+
+    func testOpenWithoutDeferProbeStaysComplete() throws {
+        let s = session(try tempProject())
+        let r = try result(call(s, 1, .open, HostParams(scene: "TimelineDemo", fps: 30)))
+        XCTAssertNil(r.probing)
+        XCTAssertEqual(r.info?.clips.count, 5, "old clients get the probe in the reply")
+        XCTAssertFalse(s.hasDeferredWork)
+    }
+
+    func testBackToBackDeferredOpensOnlyRunTheNewest() throws {
+        let s = session(try tempProject())
+        var out: [HostPacket] = []
+        s.process([HostRequest(id: 1, method: .open, params: HostParams(scene: "KnobBox", deferProbe: true)),
+                   HostRequest(id: 2, method: .open, params: HostParams(scene: "TimelineDemo", deferProbe: true))]) { out.append($0) }
+        XCTAssertEqual(out.first { $0.message.id == 1 }?.message.error?.code, HostError.Code.superseded)
+        XCTAssertEqual(out.first { $0.message.id == 2 }?.message.result?.info?.name, "TimelineDemo")
+        XCTAssertEqual(s.info?.name, "TimelineDemo")
+        // Without deferProbe (an older client) both still answer.
+        out = []
+        s.process([HostRequest(id: 3, method: .open, params: HostParams(scene: "KnobBox")),
+                   HostRequest(id: 4, method: .open, params: HostParams(scene: "TimelineDemo"))]) { out.append($0) }
+        XCTAssertNotNil(out.first { $0.message.id == 3 }?.message.result?.info)
+    }
+
+    func testInboxTakeTimesOut() async {
+        let inbox = HostInbox()
+        let start = Date()
+        let items = await inbox.take(wait: true, timeout: 0.05)
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        inbox.post(.eof)
+        let more = await inbox.take(wait: true, timeout: 5)
+        XCTAssertEqual(more.count, 1)
+    }
 }

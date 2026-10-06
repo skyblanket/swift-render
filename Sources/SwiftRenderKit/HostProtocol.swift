@@ -39,6 +39,12 @@ import Foundation
 //   For audio-reactive kinds (`audio`, `propsAudio`) frames rendered before the
 //   "audio" event used a silent track: drop cached frames when it arrives.
 // - "info" is also sent when a frame declares a knob the probe didn't see.
+// - `open` with `deferProbe: true` answers right after the scene is built (plus the
+//   first frame when `t` is set) with `probing: true`; the probe runs once the host is
+//   idle and its clips/knobs/events arrive in an "info" event. Probe results are
+//   cached per scene/size/props/knobs for the host's lifetime, so a revisit replies
+//   complete. Score audio prepared for a scene is kept in memory (a few scenes), so
+//   switching back needs no re-analysis; a newer `open` cancels older audio work.
 // - A stream that reaches `to` (or the scene end) sends `{"event":"streamEnd",
 //   "streamID":N}` after its last frame; `message` is set if it stopped on an error.
 //   `cancel` answers `{}` and sends no streamEnd; no frame for that stream follows
@@ -119,6 +125,12 @@ public struct HostParams: Codable, Sendable, Equatable {
     public var reprobe: Bool?
     /// On `open`: the client accepts header-line + raw "bgra8" payload frames.
     public var binaryFrames: Bool?
+    /// On `open`: reply before the structure probe (clips, knobs, score events). The reply's
+    /// `result.probing` is true and the full SceneInfo follows in an "info" event. Also opts
+    /// in to `superseded` for an `open` directly followed by another `open` in one batch.
+    /// With `t` (plus `maxWidth`/`format`/`quality`), `open` also renders that first frame
+    /// and returns it in `result.frame` (raw payload follows for "bgra8").
+    public var deferProbe: Bool?
     // stream / credit / cancel
     public var from: Double?
     public var to: Double?
@@ -132,12 +144,13 @@ public struct HostParams: Codable, Sendable, Equatable {
                 t: Double? = nil, maxWidth: Int? = nil, format: String? = nil, quality: Double? = nil,
                 knobs: [String: KnobValue]? = nil, persist: Bool? = nil, reprobe: Bool? = nil,
                 binaryFrames: Bool? = nil, from: Double? = nil, to: Double? = nil, credits: Int? = nil,
-                streamID: Int? = nil, path: String? = nil) {
+                streamID: Int? = nil, path: String? = nil, deferProbe: Bool? = nil) {
         self.scene = scene; self.duration = duration; self.width = width; self.height = height
         self.fps = fps; self.postFX = postFX; self.propsJSON = propsJSON; self.audioPath = audioPath
         self.t = t; self.maxWidth = maxWidth; self.format = format; self.quality = quality
         self.knobs = knobs; self.persist = persist; self.reprobe = reprobe; self.binaryFrames = binaryFrames
         self.from = from; self.to = to; self.credits = credits; self.streamID = streamID; self.path = path
+        self.deferProbe = deferProbe
     }
 }
 
@@ -192,9 +205,12 @@ public struct HostResult: Codable, Sendable, Equatable {
     public var path: String?
     /// `check` report lines.
     public var report: [String]?
+    /// `open` with `deferProbe`: `info` has no clips/knobs/events yet; an "info" event follows.
+    public var probing: Bool?
     public init(scenes: [SceneSummary]? = nil, info: SceneInfo? = nil, frame: HostFrame? = nil,
-                path: String? = nil, report: [String]? = nil) {
+                path: String? = nil, report: [String]? = nil, probing: Bool? = nil) {
         self.scenes = scenes; self.info = info; self.frame = frame; self.path = path; self.report = report
+        self.probing = probing
     }
 }
 
