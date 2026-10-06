@@ -216,6 +216,7 @@ swift run swift-render render StyleReel --audio out/reel.wav
 
 | | |
 |---|---|
+| `Release090` — the 0.9 release reel: --jobs, seams, smoke, voice check, Vision, narrated | `swift run swift-render render Release090 --jobs auto` |
 | `NeverHeard` — a 93 s narrated short: local TTS voiceover, karaoke captions, dither dissolves | `swift run swift-render render NeverHeard` |
 | `StyleLab` — one scene re-rendered 16 ways: pixel, dither, ASCII, halftone, CMYK, mosaic, LED… | `swift run swift-render render StyleLab` |
 | `SpiderNoir` — a 1-bit charcoal-and-cream noir short | `swift run swift-render render SpiderNoir` |

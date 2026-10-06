@@ -14,6 +14,7 @@
 - `Bundle.swiftRender`, `ShaderLibrary.swiftRender`, public `PostFX.init`.
 - `NeverHeard` — a 93 s first-person short narrated with local TTS (Kokoro, `say` fallback).
 - `SlipDueLaunch` — 28 s vertical launch spot.
+- `Release090` — a 40 s narrated tour of this release.
 
 ### Changed
 - Demo scenes moved to a separate **`SwiftRenderScenes`** target/product — the library no
