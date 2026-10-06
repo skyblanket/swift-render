@@ -25,7 +25,7 @@ your project.
 
 ```
  Studio (SwiftUI, Foundation + SwiftRenderKit only)
-   ├─ FileWatcher  Sources/ Plugins/ Package.swift assets/ .swift-render/{reviews,knobs}
+   ├─ FileWatcher  Sources/ Plugins/ Package.swift(.resolved) swift-render.json assets/ .swift-render/{reviews,knobs}
    ├─ BuildController   swift build --product <p> --scratch-path .build/studio   (one at a time)
    ├─ HostSupervisor    <p> serve  ← JSON lines + binary BGRA frames on stdio   (blue/green swap per build)
    ├─ PlaybackEngine    stream/credit playback, frame cache, scrub, sharpen-on-pause, audio
@@ -40,9 +40,22 @@ your project.
   terminal's `swift build` holds. A change that lands mid-build queues exactly one more build.
   A failed build keeps the last good host running and shows the errors over the viewer;
   click an error to open the file at that line.
+- **What the watcher acts on.** Files under `Sources/` and `Plugins/`, plus `Package.swift`,
+  `Package.resolved` and `swift-render.json`, trigger a rebuild; `assets/` reopens the scene on
+  the running host; `.swift-render/reviews` and `.swift-render/knobs` reload threads and knobs
+  without a build. Swift files elsewhere
+  (`Tests/`, `scripts/`), `.build`, `.git`, `.swiftpm` and `node_modules` at any depth, and hidden
+  top-level folders other than `.swift-render` (such as `.claude/` worktrees) are ignored.
 - **The render host** is your CLI running `serve`. Every successful build starts a new host,
   warms it on the current frame, and then swaps it in, so the viewer never shows a blank frame.
-  If a host crashes, Studio shows a crash card with the stderr tail and restarts it.
+  Starts, swaps, crash restarts and shutdown run one at a time: a host that is no longer wanted
+  (a newer build is waiting, or the window closed) shuts itself down instead of going live, so an
+  older build never replaces a newer one and no `serve` process is left without an owner. A scene,
+  aspect, knob or props change made during a swap is replayed on the new host before it goes live.
+- **Crashes.** If a host crashes, Studio shows a crash card with the stderr tail and restarts it.
+  The card's time and the frames playback skips come from the host's own crash message (the
+  frame that actually crashed), not the playhead, and a playback stream stops just before that
+  frame. The next build that goes live clears the card, the skipped frames and the restart budget.
 
 ## The window
 
@@ -60,14 +73,15 @@ your project.
   open-comment badge), review counts, and recent renders. Right-click a render to reveal it
   in Finder.
 - **Viewer.** Aspect canvas (16:9, 9:16, 1:1), zoom, title/action-safe guides, region tool for
-  comments, comment pins, and A/B compare.
+  comments, comment pins, and A/B compare. A comment's region pin is drawn only on a canvas of the
+  same shape as the one it was made on (a 9:16 note is hidden at 16:9; its thread still lists it).
 - **Timeline.** The ruler, then the clips the engine probed (nested rows; each clip links to its
   `file:line`), score lanes by kind, the loudness envelope, and comment markers.
 - **Inspector.** Comments (filter, thread, resolve), Knobs (`Knob.double/bool/text/color`, live,
   with Save writing `.swift-render/knobs/<Scene>.json`), Props JSON, and Info (canvas, structure,
   host pid/generation).
 - **Agent panel.** Shows the live transcript of a headless Claude Code run working through your
-  comments (see [review-loop.md](review-loop.md)).
+  comments (see [review-loop.md](review-loop.md) and [Agent runs and Revert Run](#agent-runs-and-revert-run)).
 
 ### Keys
 
@@ -120,13 +134,21 @@ The sheet also lets you set:
   them to the file first. Live props are passed as `--props`. Both are snapshotted when you
   queue the job, so moving a slider during an export doesn't change it.
 - **Output.** The default is `out/<Scene>-<preset>-<yyyyMMdd-HHmm>.mp4|gif`; **Change…** picks
-  another path.
+  another path. When a preset change swaps the extension of a custom output, the sheet picks an
+  unused name (e.g. `demo-2.gif`) instead of overwriting.
+
+The render, GIF encode and audio mux write a hidden `.<name>.<tag>.partial.<ext>` file next to
+the destination, which replaces the destination only when the job succeeds. A failed build, a
+failed render or a Stop removes only that partial file, so an export never deletes a file you
+chose to replace. Partial files are not listed under recent renders.
 
 The sheet refuses to start a job that can't succeed:
 
 - **App Store previews** must be 15–30 s, which App Store Connect enforces. A longer scene needs
   an In→Out range within that window, and the preset tiles stay dimmed until one exists.
 - **GIF** needs `ffmpeg` on the login-shell PATH (`brew install ffmpeg`).
+- App Store presets warn when the export will have no audio track (a silent scene, or an In→Out
+  range without ffmpeg).
 - Presets that change the aspect (9:16, 1:1, the App Store sizes) warn that the scene was
   authored at 16:9 and offer **Preview 9:16 / 1:1** to check the layout in the viewer first.
   A scene that reads `renderContext.size` adapts; one with fixed 16:9 positions will not.
@@ -181,6 +203,20 @@ The other panels have snapshot options too:
 | Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
 | Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
 | Launch | `--new-launch-film` runs **New Launch Film…**: the project CLI's `launch --no-render` scan, then AppleLaunch opens with those props |
+
+`--knob`, `--props` and `--check` apply as soon as the first scene's info arrives, whether or not
+an inspector tab is shown (no `--tab` needed). `--scene X` loads X's saved knobs, props and
+comments exactly as picking it in the sidebar does.
+
+**New Launch Film…** in a `swift-render init` scaffold (product `launch`) uses the props init wrote
+for the app (`.swift-render/launch/<App>Launch.json`, art in `assets/`). Without that file it scans
+the app in the parent folder and makes its relative art paths absolute; it never scans the
+`Launch/` package itself. Opening the app root itself also works: a folder whose `Launch/` holds
+`swift-render.json` resolves to `Launch/`, and a props file scanned from another root keeps its
+icon and screenshots (their paths are made absolute for the host).
+
+**Settings › Playback.** *Frame cache* and *Default quality* take effect when a project window
+opens.
 
 ```
 swift run swift-render-studio . --scene KnobLab --tab knobs --knob title.scale=1.3 --knob debug.safe=true --snapshot out/knobs.png
@@ -261,6 +297,32 @@ ditto -c -k --keepParent "$APP" "out/Studio/swift-render-Studio-0.10.0.zip"   # 
   bundle) or a missing timestamp.
 - `spctl` rejects ad-hoc builds. That is expected; Gatekeeper only affects copies that arrive
   with a quarantine flag.
+
+## Agent runs and Revert Run
+
+**Ask Claude…** (⇧⌘A) runs headless Claude Code on the comments you select. Fix runs use
+`--permission-mode default` and pre-approve only the swift-render MCP tools, `Edit`, `Write`,
+`MultiEdit`, `NotebookEdit` and `Bash(swift build:*)`. Plan and reply runs get only the read-only
+swift-render tools plus `reply_comment`; edits, Bash, `set_knobs`, `claim_comment`,
+`resolve_comment` and `render_video` are denied. Studio never uses `acceptEdits`, which would also
+allow Bash `rm`/`mv`/`cp` and shell redirections that the checkpoint can't see. A file that changed
+during a run outside Edit/Write is listed in a notice. The exact command lines are in
+[review-loop.md](review-loop.md#headless-run-what-studio-executes).
+
+Before a fix run Studio takes a git checkpoint of the working tree (ignored files are recorded,
+and small ones are kept so they can be restored; a nested repo, dangling symlink, unreadable file,
+a repo with no commits or a merge in progress don't stop it). A file counts as touched only when
+its Edit or Write succeeded. **Revert Run**:
+
+- saves the touched files' current content to `refs/swift-render/pre-revert/<run>` before it
+  overwrites anything;
+- keeps files you edited again after the run unless you pick **Revert All, Discard Later Edits**;
+- puts files back or leaves them alone, and moves a file to the Trash only when it did not exist
+  at checkpoint time;
+- restores gitignored files that existed before the run from their saved copy, or leaves them and
+  reports them; files inside submodules or nested repos are left alone;
+- matches paths literally (`GIT_LITERAL_PATHSPECS=1`), so `Scene[ab].swift` never also reverts
+  `Scenea.swift`.
 
 ## Tools Studio needs
 

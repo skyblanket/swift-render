@@ -49,7 +49,7 @@ The film follows the grammar of an Apple keynote. It opens with "Introducing", t
 hero, the title, a feature triad, the code or terminal, stats, "What's new", platforms and an end
 card. The score is synthesized on whole bars at 100 BPM, and the cuts land on downbeats. There is
 one dissolve. There is no camera shake, no flash frame, and no whoosh. Every layout restacks for
-9:16.
+9:16, and `--aspect 1:1` stacks into a square layout.
 
 `init` scaffolds a `Launch/` package that depends on swift-render. The film becomes
 `Sources/LaunchScenes/<App>Launch.swift`, which is built from **LaunchKit** components
@@ -89,8 +89,10 @@ scripts/package-studio.sh                             # → out/Studio/swift-ren
   `check` report.
 - **Comments.** Timecoded, with an optional time range and region box. They are stored as plain
   JSON files in `.swift-render/reviews/` that you commit.
-- **Agent panel.** Runs headless Claude Code on the comments you select. It takes a git checkpoint
-  first, so **Revert** undoes the run.
+- **Agent panel.** Runs headless Claude Code on the comments you select, with only the edit tools,
+  the swift-render tools and `swift build` pre-approved. It takes a git checkpoint first, so
+  **Revert Run** undoes the run; it backs up the current content first and keeps files you edited
+  again afterwards.
 - **Render queue.** Presets for Master 1080p60, 4K, 9:16, 1:1, App Store previews (which enforce
   15–30 s), preview and GIF. It shows progress, ETA and stop, and can attach the result to a
   comment.
@@ -130,8 +132,10 @@ claude --agent swift-render-director "work through the open swift-render comment
   ```
 
   From a shell, the same commands are `claude plugin marketplace add skyblanket/swift-render` and
-  `claude plugin install swift-render@swift-render`. In an app repo where you've run `swift-render init`,
-  the plugin builds the MCP server from `./Launch` by itself.
+  `claude plugin install swift-render@swift-render`. The plugin runs `swift-render-mcp` from
+  `$SWIFT_RENDER_MCP`, your `PATH` or `swift-render Studio.app`. It builds the server from the
+  project (or `./Launch` after `swift-render init`) only in a project you trust: add its path to
+  `~/.config/swift-render/trusted-projects`, or set `SWIFT_RENDER_MCP_BUILD=1`.
 
 The CLI, the MCP server, the agent definition and the plugin manifests are covered by tests and
 smoke scripts (`scripts/mcp-smoke.py`). A real model turn from end to end has not been observed
@@ -416,13 +420,17 @@ swift-render smoke                                       one frame of every scen
 
 swift-render launch [path=.] [--out f.mp4] [--aspect 16:9|9:16|1:1] [--preview] [--open]
                     [--voiceover] [--rescan] [--no-render] [--eject] [--no-manifest] [--props-out f.json]
-swift-render init   [path=.] [--local <swift-render checkout>] [--force]     scaffold a Launch/ package
+swift-render init   [path=.] [--local <swift-render checkout>] [--force] [--rescan] [--no-manifest]
+                                                         scaffold a Launch/ package (never overwrites without --force)
 swift-render review list|show|add|reply|status|frame|delete|scenes …        timecoded review comments
 swift-render serve                                       Studio's render host (JSON lines + binary frames on stdio)
 
 swift-render-studio [project] [--scene X] [--at t] [--tab comments|knobs|props|info] [--snapshot out.png]
 swift-render-mcp                                         MCP server for the review loop (stdio, 13 tools)
 ```
+
+A valued option with no value or a malformed value exits 64, and `--out` refuses an empty path, a
+path ending in `/`, or an existing directory.
 
 **Knobs** override per-scene constants without touching code. `.swift-render/knobs/<Scene>.json`
 applies to every render, and `--knobs file.json` swaps in another set for one run. `--scale 2`

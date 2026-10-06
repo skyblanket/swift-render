@@ -61,11 +61,18 @@ In a project whose `.mcp.json` registers `swift-render` (this repo, or a `Launch
 
 ```sh
 claude -p "Address the open swift-render review comments on TimelineDemo." \
-  --agent swift-render-director --mcp-config .mcp.json --allowedTools "mcp__swift-render" \
-  --permission-mode acceptEdits --output-format stream-json --verbose --max-budget-usd 2
+  --agent swift-render-director --mcp-config .mcp.json --permission-mode default \
+  --allowedTools mcp__swift-render Edit Write MultiEdit NotebookEdit "Bash(swift build:*)" \
+  --output-format stream-json --verbose --max-budget-usd 2
 ```
 
+Not `acceptEdits`: it also auto-allows Bash `rm`/`mv`/`cp` and shell redirections, which Studio's
+checkpoint can't see or revert. Plan and reply runs pre-approve only the read-only tools plus
+`reply_comment` and deny the edit tools, Bash, `set_knobs`, `claim_comment`, `resolve_comment` and
+`render_video`.
+
 With only the plugin installed, the names are namespaced and there is no `--mcp-config`:
-`--agent swift-render:swift-render-director --allowedTools "mcp__plugin_swift-render_swift-render"`.
+`--agent swift-render:swift-render-director --allowedTools "mcp__plugin_swift-render_swift-render"`
+(plus the same edit tools and `"Bash(swift build:*)"` for a fix run).
 
 See `docs/review-loop.md` for the event stream and the full flow.

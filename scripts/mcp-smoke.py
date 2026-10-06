@@ -117,11 +117,20 @@ def cli(*argv):
     return subprocess.run([os.path.join(bin_path, "swift-render"), *argv], cwd=ROOT, capture_output=True, text=True)
 
 
+READ_ONLY_TOOLS = ["list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene",
+                   "list_comments", "get_comment", "reply_comment"]
+WRITING_TOOLS = ["claim_comment", "resolve_comment", "set_knobs", "render_video"]
+
+
 def claude_command(prompt, budget):
-    """Exactly what Studio runs (cwd = project root); see docs/review-loop.md."""
+    """Exactly what Studio runs for a reply run (cwd = project root); see docs/review-loop.md
+    and ClaudeCodeBackend.arguments. The prompt only asks for a reply, so edits and Bash are denied."""
     return ["claude", "-p", prompt, "--agent", "swift-render-director", "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "acceptEdits", "--allowedTools", "mcp__swift-render", "--mcp-config", ".mcp.json",
-            "--max-budget-usd", str(budget)]
+            "--permission-mode", "default",
+            "--allowedTools", *["mcp__swift-render__" + t for t in READ_ONLY_TOOLS],
+            "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash",
+            *["mcp__swift-render__" + t for t in WRITING_TOOLS],
+            "--mcp-config", ".mcp.json", "--max-budget-usd", str(budget)]
 
 
 def claude_e2e(scene, budget):

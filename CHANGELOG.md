@@ -91,6 +91,68 @@ codebases. It adds a native editor and an agent review loop on top of the engine
 - `Transition` has a public `init(_ name:duration:apply:)` and a `name`, so custom transitions
   can be built outside the module and show up by name in Studio. SwiftUI also has a `Transition`,
   so write `SwiftRender.Transition` when you name the type.
+- **Clip times come from each Timeline's fitted clock.** The probe records every (scene time,
+  local time) pair a `Timeline` is seen at and fits a piecewise-linear clock through them, so
+  `Timeline(t * speed)`, clamped clocks like `Timeline(max(0, t - k))` and nested retimed
+  Timelines report where their clips are actually on screen (a clamp's held first frame counts,
+  so `Timeline(max(0, t - 1))`'s first clip spans 0–3, not 1–3). Clip content is only evaluated
+  inside its visible span and local `0..<length`, so clips never on screen (starting after the
+  end, NaN length) no longer appear; a Timeline built only to read `.duration` no longer shows up
+  as phantom clips; a NaN or infinite duration gives an empty structure; and the structural pass
+  is capped at 4096 content evaluations, breadth-first.
+- **Knob overrides are read leniently**: a number for a text knob reads as `"2026"`, a bool as
+  text, a finite numeric string as a number, and `0`/`1` or `"true"`/`"false"` (any case) as a
+  bool. Other mismatches keep the default, visible as `KnobInfo.value`.
+- `MP4Assembler.assemble` takes `audioOffset:`, and `Recorder.render(startTime:audioURL:)` plays
+  scene-timed audio from `startTime`, in sync with the first frame of a range render.
+- **CLI input is validated.** A valued option with no value or a malformed value exits 64.
+  `--out` and `--snapshot` may not be empty, end in `/`, or name an existing directory (an empty
+  `--out` used to delete the working directory). `--aspect` accepts only `16:9`, `9:16` or `1:1`.
+  `render --jobs N --progress json` prints aggregated progress.
+- `Project.discover`: an explicit folder wins over `SWIFT_RENDER_ROOT`, and an app root whose
+  `Launch/` holds `swift-render.json` resolves to `Launch/`. Scene names map to one safe file name
+  in every `.swift-render/` path.
+- Review: any status change, or a different resolution text, clears `acceptedBy`; claim, resolve
+  and reply-reopen re-check the status under the review lock; an unreadable review file is
+  reported instead of silently hiding its comments.
+- **swift-render-mcp**: `render_frames`, `contact_sheet` and `check_scene` take `comment` (render
+  on that note's canvas) and `aspect`. Scene arguments must be Swift type names; times must be
+  finite and within 0…86400 s. `set_knobs` fails for an unknown scene and never overwrites a knob
+  file that isn't valid knob JSON. `initialize`/`ping`/`tools/list` answer immediately, other calls
+  run on a serial worker with time limits (`SWIFT_RENDER_MCP_TIMEOUT`,
+  `SWIFT_RENDER_MCP_RENDER_TIMEOUT`, `SWIFT_RENDER_MCP_BUILD_TIMEOUT`, `SWIFT_RENDER_MCP_EOF_GRACE`),
+  and `notifications/cancelled` kills the call's process group.
+- The plugin launcher no longer builds code from the current directory by default: it runs
+  `$SWIFT_RENDER_MCP`, then `swift-render-mcp` on `PATH`, then the server in `swift-render
+  Studio.app`, and builds in the project only when it is trusted (`SWIFT_RENDER_MCP_BUILD=1` or
+  `~/.config/swift-render/trusted-projects`).
+- Launch-film house rules (no shake, no flash or white frames, no crash or boom) are shared by the
+  MCP instructions, Studio's agent prompt, the director agent and the skill.
+- **Studio agent runs** use `--permission-mode default` (never `acceptEdits`, which also allows
+  Bash `rm`/`mv`/`cp`): fix runs pre-approve the swift-render tools, the edit tools and
+  `Bash(swift build:*)`; plan and reply runs get only the read-only tools plus `reply_comment`.
+- **Revert Run** backs up current content to `refs/swift-render/pre-revert/<run>` first, keeps
+  files edited after the run unless you pick *Revert All, Discard Later Edits*, trashes only files
+  that did not exist at checkpoint time, and matches paths literally.
+- Studio exports write a hidden `.partial` file and replace the destination only on success.
+- Studio's file watcher acts only on `Sources/`, `Plugins/`, the manifests, `assets/` and
+  `.swift-render/{reviews,knobs}`; `.claude/` worktrees, nested `.build` folders, `Tests/` and
+  `scripts/` no longer trigger rebuilds. `--knob`/`--props`/`--check` apply without `--tab`, and
+  `--scene X` loads X's saved knobs.
+- **`init` never clobbers**: it refuses when any file it would write exists (`--force` overwrites
+  and lists each file), reuses the kept props at `.swift-render/launch/<Name>.json` unless
+  `--rescan`, and copies icons and screenshots only from inside the project.
+- **LaunchKit**: `--aspect 1:1` is a stacked square layout instead of a letterboxed 16:9 film; the
+  terminal shot is 2–4 bars, sized to its session (at most 3 commands, 3 output lines each, 8 lines
+  in all); feature details are capped at 80 characters; headline lines share one fitted size;
+  `KeynoteTitle.lineStart` no longer adds 0.12 s, so shots are on screen on their cut. New API:
+  `LaunchTerminal`, `LaunchScanner.contained(_:in:)`, `LaunchLayout.isSquare`/`.stacks`,
+  `LaunchScore.Cue.terminalSpeed`/`heroSweep`/`heroName`/`heroTagline`,
+  `LaunchTheme.displayNSFont`/`displayWidth`/`fittedDisplaySize`, `TerminalCard.fittedFontSize`,
+  `FeatureCard(detailLines:)`, `CodeReveal(maxHeight:)`.
+- `launch` writes `out/.gitignore` (`*`) when it creates the default `out/`. The scanner detects
+  SwiftPM `@main` App executables as apps, reads `.github/screenshots` and CRLF files, and skips a
+  `Launch/` scaffold.
 
 ### Fixed
 - `--scale` and `--preview` used to encode at the base size, rendering at the reduced scale and
@@ -99,6 +161,33 @@ codebases. It adds a native editor and an agent review loop on top of the engine
   module since 0.9), and the README's `Hello` returns its view explicitly, so the snippet
   compiles.
 - `docs/studio.md` pointed at the wrong path for `StudioAppIcon.swift`.
+- `launch --eject` in this repo failed: it looked for the pre-0.9 `Sources/SwiftRender/Scenes`.
+  It now writes into `Sources/SwiftRenderScenes`, and the ejected file's usage comment names the
+  project's CLI product.
+- The launch scanner sentence-cased product names in changelog items and feature details
+  (`Swift-render launch`); names spelled lowercase on purpose (the product's own name, `iOS`,
+  `config.json`, `v2`) are left alone.
+- Probe: content was called at times the render never reaches, which trapped on scenes like
+  `RecHUD` (`for: .infinity`) in `info`, `serve` and `review add`; a Timeline's offset was locked in
+  from its first sighting; NaN durations hung and infinite ones trapped.
+- Engine caches (samples, images, video) are keyed by file size, modification time and inode, so
+  an edited file is decoded again. A failed TTS line or sample is never cached as a voiceless mix,
+  and the host sends a warning instead.
+- Path traversal through scene names, attachment paths and comment ids; `KnobFile.save` replacing
+  a broken file; the host crashing on huge `t`, non-finite stream ranges or huge credits;
+  `--jobs` reading `CommandLine.arguments` instead of the arguments passed in.
+- MCP calls could hang forever; `render_frames` with `nan`/`inf` crashed the server.
+- Studio: overlapping builds could leave an orphaned `serve` or put an older build live; changes
+  made during a swap were lost; the crash card used the playhead instead of the crashing frame;
+  `openStream` didn't send `fps`; a failed or cancelled export deleted the file it was replacing;
+  Revert Run could trash files that existed before the run and treated paths as globs; New Launch
+  Film in an init scaffold scanned the Launch package instead of the app; the Comments empty state
+  made the window content taller than the window, clipping the sidebar footer and agent panel;
+  Settings › Playback values were never read.
+- LaunchKit: title lines rendered at different sizes, feature details and terminal lines were
+  truncated, the terminal session was cut off at the shot end, the stage was empty for 9–15 frames
+  after each cut, the hero hits drifted at 90/120 BPM, a symlinked root or a capped scan hid the
+  README, and corrupt icon metadata or out-of-root icon paths were trusted.
 
 ## 0.9.0 — 2026-10-06
 

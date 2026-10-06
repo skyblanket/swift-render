@@ -80,6 +80,16 @@ Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio.
 - Also `notifications/*` (never answered), `ping`, `tools/list`, `tools/call`, and JSON-RPC batches.
   Unknown methods → `-32601`, unknown tool → `-32602`, unparsable line → `-32700`; unknown fields
   are ignored. A failing tool returns a normal result with `isError: true` and the reason as text.
+- **Concurrency and cancellation**: `initialize`, `ping` and `tools/list` are answered immediately;
+  every other call runs on one serial worker. `notifications/cancelled` stops that call (its CLI
+  child's whole process group is killed) and a cancelled request gets no response. SIGTERM, SIGINT,
+  SIGHUP and stdin EOF stop running children too (after EOF, calls already asked get
+  `SWIFT_RENDER_MCP_EOF_GRACE` seconds, default 30, to finish).
+- **Time limits** on each CLI child (seconds; env overrides): frames and `info` 180 and contact sheets
+  and `check` 600 (`SWIFT_RENDER_MCP_TIMEOUT` sets both), `render_video` 3600
+  (`SWIFT_RENDER_MCP_RENDER_TIMEOUT`), builds 1800 (`SWIFT_RENDER_MCP_BUILD_TIMEOUT`).
+- **Validation**: `scene` arguments must be Swift type names (letters, digits, `_`) — anything that
+  looks like a path is refused before a file is touched. `times` must be finite and within 0…86400 s.
 - **stdout is protocol only**: at start the server dups fd 1 for responses and points fd 1 at
   stderr. Logs go to stderr as `[swift-render-mcp] …` (one line per tool call with its time).
 - **Project**: `$SWIFT_RENDER_ROOT`, else `Project.discover()` from the cwd (nearest
@@ -99,17 +109,27 @@ Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio.
 |---|---|---|
 | `list_scenes` | — | one line per scene: kind, length, score/props, active comment count |
 | `scene_info` | `scene` | clips (start–end, transition, `file:line`), knobs, captions, score events (first 80) |
-| `render_frames` | `scene`, `times[]` (≤ 8), `width?` (160–1280, default 960) | a label + PNG per time, rendered at ≈`width` |
-| `contact_sheet` | `scene` | grid PNG (≤ 1280 wide) |
-| `check_scene` | `scene` | the `check` report (blank frames, loudness, clipping, whoosh/riser warning) + sheet PNG |
+| `render_frames` | `scene`, `times[]` (≤ 8), `width?` (160–1280, default 960), `comment?`, `aspect?` | a label + PNG per time, rendered at ≈`width` |
+| `contact_sheet` | `scene`, `comment?`, `aspect?` | grid PNG (≤ 1280 wide) |
+| `check_scene` | `scene`, `comment?`, `aspect?` | the `check` report (blank frames, loudness, clipping, whoosh/riser warning) + sheet PNG |
 | `build` | — | `BUILD OK …` or `BUILD FAILED …` + `file:line:col: error: …` (`isError` on failure) |
 | `list_comments` | `scene?`, `status?` (`open,inProgress` / `active` default / `all`) | each comment: id · scene · timecode · status · region · author, body, reply count |
 | `get_comment` | `id` | `ReviewEntry` JSON; the clips active at `t` with `file:line` (or the scene source); current frame at `t` with the region boxed in pink (≤ 1280) |
 | `claim_comment` | `id` | status `inProgress`, assignee `Claude` (agent); captures `<id>-before.png` if the comment has none. Refuses resolved/wontFix |
 | `reply_comment` | `id`, `body`, `attach_frame?`, `reopen?` | agent reply; `attach_frame` renders + attaches the current frame (and returns it); `reopen` gives a claim back (inProgress → open) |
 | `resolve_comment` | `id`, `summary` | renders the after-frame first (fails without changing anything if that fails), adds it on a reply with `summary`, status `resolved`, `resolution = summary`; returns the frame |
-| `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare |
+| `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare. Fails for an unknown scene, and never overwrites a knob file that isn't valid knob JSON |
 | `render_video` | `scene`, `preview?` | renders `out/<Scene>.mp4` (or `-preview.mp4`, half-res 30 fps) |
+
+`comment` (a comment id) renders on that note's canvas — its size, fps and pinned duration — the
+same composition `get_comment` and `resolve_comment` show; the director passes it when checking a
+9:16 or 1:1 note. Without it, `aspect` (`16:9`, `9:16`, `1:1`) picks the canvas; the default is the
+scene's own.
+
+Knob values are read leniently by the engine: a number for a text knob reads as text (`2026`, not
+`2026.0`), a bool as `true`/`false`, a finite numeric string as a number, and `0`/`1` or
+`"true"`/`"false"` (any case) as a bool. Any other mismatch (e.g. `"abc"` for a number knob) is
+still written, but the scene keeps its default — `scene_info` shows the value actually used.
 
 ### Registering it
 
@@ -150,9 +170,14 @@ The same commands from a shell are `claude plugin marketplace add skyblanket/swi
 `claude plugin install swift-render@swift-render`. To try the plugin without installing it, run
 `claude --plugin-dir /path/to/swift-render/claude-plugin`.
 
-The launcher execs `$SWIFT_RENDER_MCP`, else builds `swift-render-mcp` from the project in the cwd
-(or `./Launch`) — SwiftPM builds a dependency's executable product, so any package that depends on
-swift-render works — else `swift-render-mcp` on `PATH`. Plugin MCP tools are namespaced
+Plugin MCP servers start in every session and every directory without a project's approval, so
+the launcher never builds code from the cwd by default. It execs, in order: `$SWIFT_RENDER_MCP`;
+`swift-render-mcp` on `PATH`; the server inside `swift-render Studio.app` (`/Applications` or
+`~/Applications`); and only then a build from the project in the cwd (or `./Launch`) — and only
+when that project is trusted (`SWIFT_RENDER_MCP_BUILD=1`, or its absolute path on a line of
+`~/.config/swift-render/trusted-projects`), depends on swift-render, and builds with
+`--disable-automatic-resolution`. SwiftPM builds a dependency's executable product, so any trusted
+package that depends on swift-render works. Plugin MCP tools are namespaced
 `mcp__plugin_swift-render_swift-render__<tool>` and the plugin's agent/skill are
 `swift-render:swift-render-director` / `swift-render:swift-render-review`, so the plugin copy of the
 agent differs from `.claude/agents` only in those tool prefixes (`ReviewLoopTests` keeps the two in sync).
@@ -162,14 +187,27 @@ agent differs from `.claude/agents` only in those tool prefixes (`ReviewLoopTest
 cwd = project root:
 
 ```sh
+# fix runs (edit, build, resolve)
 claude -p "<prompt>" --agent swift-render-director --output-format stream-json --verbose \
-  --permission-mode acceptEdits --allowedTools "mcp__swift-render" --mcp-config .mcp.json \
-  --max-budget-usd 1
+  --permission-mode default \
+  --allowedTools mcp__swift-render Edit Write MultiEdit NotebookEdit "Bash(swift build:*)" \
+  --mcp-config .mcp.json --max-budget-usd 1
+
+# plan and reply runs (look and answer in the thread only)
+claude -p "<prompt>" --agent swift-render-director --output-format stream-json --verbose \
+  --permission-mode default \
+  --allowedTools mcp__swift-render__list_scenes mcp__swift-render__scene_info \
+    mcp__swift-render__render_frames mcp__swift-render__contact_sheet mcp__swift-render__check_scene \
+    mcp__swift-render__list_comments mcp__swift-render__get_comment mcp__swift-render__reply_comment \
+  --disallowedTools Edit Write MultiEdit NotebookEdit Bash mcp__swift-render__set_knobs \
+    mcp__swift-render__claim_comment mcp__swift-render__resolve_comment mcp__swift-render__render_video \
+  --mcp-config .mcp.json --max-budget-usd 1
 ```
 
-For fix runs (not just replies) also pre-approve builds — under `-p` an unapproved Bash call is
-denied, while `acceptEdits` already covers Edit/Write: `--allowedTools "mcp__swift-render"
-"Bash(swift build:*)"`. Optional: `--append-system-prompt "<house rules>"`, `--model`,
+Under `-p` in the `default` mode anything not pre-approved is denied. Studio does not use
+`acceptEdits`: it also auto-allows Bash `rm`/`mv`/`cp`/`mkdir`/`touch` and shell redirections,
+writes the checkpoint can't see (it tracks Edit/Write) and Revert Run can't undo. Studio lists any
+file that changed during a run outside Edit/Write in a notice. Optional: `--append-system-prompt "<house rules>"`, `--model`,
 `--resume <session_id>` to continue a thread after Reopen, `--include-partial-messages` for token deltas,
 `--strict-mcp-config` to skip the user's other MCP servers (observed: it also drops plugin servers, so
 use it only with `--mcp-config`).
@@ -228,6 +266,7 @@ Gotchas seen while verifying:
   `mcp__plugin_swift-render_swift-render__*` tools. `claude plugin validate` passes for
   `claude-plugin/` and the marketplace (it checks manifests only, not agent/skill front matter).
 - The plugin launcher, run from an app repo after `swift-render init` (so a `Launch/` package
-  depends on swift-render): it built `swift-render-mcp` from `./Launch`, and the server answered
-  `initialize` and listed all 13 tools. The `marketplace add` / `install` commands were not run,
+  depends on swift-render) with that repo trusted: it built `swift-render-mcp` from `./Launch`, and
+  the server answered `initialize` and listed all 13 tools. Untrusted, it builds nothing and exits
+  with a message saying how to trust the project. The `marketplace add` / `install` commands were not run,
   because they change the user's Claude Code configuration.
