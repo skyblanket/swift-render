@@ -18,6 +18,11 @@ final class RealHostReviewTests: XCTestCase {
         }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
+        // Leave no review file behind when there wasn't one.
+        let reviewFile = Project.open(root).reviewURL(scene: "TimelineDemo")
+        if !FileManager.default.fileExists(atPath: reviewFile.path) {
+            addTeardownBlock { try? FileManager.default.removeItem(at: reviewFile) }
+        }
         var options = LaunchOptions()
         options.scene = "TimelineDemo"
         options.at = 3
