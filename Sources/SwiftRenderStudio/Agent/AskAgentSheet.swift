@@ -68,7 +68,7 @@ struct AskAgentSheet: View {
 
             footer
         }
-        .frame(width: 560, height: optionsExpanded ? 680 : 540)
+        .frame(width: 560, height: optionsExpanded ? 740 : 600)
         .onAppear(perform: prefill)
         // A build that fails (or recovers) while the sheet is open.
         .onChange(of: buildErrors.isEmpty) { _, clean in fixBuild = !clean }

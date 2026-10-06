@@ -77,7 +77,7 @@ struct RenderSheet: View {
             footer
                 .padding(.horizontal, StudioStyle.Space.xl).padding(.vertical, StudioStyle.Space.l)
         }
-        .frame(width: 680, height: 540)
+        .frame(width: 680, height: 486)
         .onAppear {
             guard !appeared else { return }
             appeared = true
@@ -310,10 +310,13 @@ struct PresetTile: View {
                 Text(preset.tileTitle)
                     .font(StudioStyle.Fonts.calloutEmphasis)
                     .lineLimit(1)
-                Text(verbatim: "\(preset.sizeLabel) · \(preset.fps) fps")
-                    .font(StudioStyle.Fonts.footnote).monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                ViewThatFits(in: .horizontal) {
+                    Text(verbatim: "\(preset.sizeLabel) · \(preset.fps) fps")
+                    Text(verbatim: preset.sizeLabel)
+                }
+                .font(StudioStyle.Fonts.footnote).monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -325,7 +328,7 @@ struct PresetTile: View {
             .strokeBorder(selected ? StudioStyle.accent : .clear, lineWidth: 2))
         .opacity(disabled && !selected ? 0.45 : 1)
         .contentShape(Rectangle())
-        .help(preset.summary)
+        .help("\(preset.sizeLabel) · \(preset.fps) fps")
     }
 }
 
