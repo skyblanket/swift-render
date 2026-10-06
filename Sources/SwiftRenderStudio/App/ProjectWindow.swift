@@ -28,6 +28,8 @@ final class ProjectStore {
         await m.shutdown()
     }
 
+    var allModels: [ProjectModel] { Array(models.values) }
+
     func shutdownAll() async {
         let all = models.values
         models = [:]
@@ -77,6 +79,7 @@ struct ProjectWindowContent: View {
             router?.install(window: window)
         })
         .task { await model.start() }
+        .onDisappear { router?.uninstall() }
         .preferredColorScheme(.dark)
     }
 }

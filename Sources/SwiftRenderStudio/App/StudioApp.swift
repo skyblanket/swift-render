@@ -23,6 +23,9 @@ enum StudioMain {
             if let out = options.snapshot {
                 SnapshotRunner.run(options, out: out)
             } else {
+                // AppKit would turn the positional project path into an "open documents"
+                // event, and then SwiftUI opens no initial window at all. We parse it.
+                UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
                 StudioApp.main()
             }
         }
