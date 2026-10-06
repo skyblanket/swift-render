@@ -79,11 +79,11 @@ public struct NeverHeard: RenderScene {
         for k in 0..<12 {
             let a: Double = panelStart(k)
             let b: Double = k == 11 ? resolve : panelEnd(k)
-            ev += chordPad(chords[k], at: a, duration: b - a + 0.8, amp: 0.026)
+            ev += chordPad(chords[k], at: a, duration: b - a + 0.8, amp: 0.011)
         }
         for k in 1..<12 {
             let note: Note = chords[k].transposed(12).notes[k % 3]
-            ev += bell(note, at: panelStart(k) + 0.15, amp: 0.045, duration: 2.2, pan: k % 2 == 0 ? -0.3 : 0.3)
+            ev += bell(note, at: panelStart(k) + 0.15, amp: 0.03, duration: 2.2, pan: k % 2 == 0 ? -0.3 : 0.3)
         }
         ev += melody([(0, .e5), (1.2, .a5), (2.4, .c6)], start: 0.3, bpm: 120, amp: 0.05)
 
@@ -107,7 +107,7 @@ public struct NeverHeard: RenderScene {
             ev += tick(at: starts[9] + 0.8 + Double(i) / Double(noteBody.count) * 2.8, amp: 0.028)
         }
         // resolve
-        ev += swell(Chord.major7(.f3), into: starts[13], duration: 2.0, amp: 0.028)
+        ev += swell(Chord.major7(.f3), into: starts[13], duration: 2.0, amp: 0.014)
         ev += chordPad(.major7(.c4), at: resolve, duration: duration - resolve, amp: 0.03)
         ev += melody([(0, .c5), (1, .e5), (2, .g5), (3.5, .c6)], start: resolve + 0.2, bpm: 120, amp: 0.055)
         return Score(duration: duration) { ev }

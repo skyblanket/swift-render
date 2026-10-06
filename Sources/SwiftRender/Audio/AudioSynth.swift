@@ -378,14 +378,15 @@ extension Voice {
 public struct Mixer {
     public let n: Int
     var L: [Float], R: [Float]                            // music bus (ducked)
-    var KL: [Float], KR: [Float]                          // clean bus (kicks/booms)
+    var KL: [Float], KR: [Float]                          // clean bus (kicks/booms/samples)
+    var VL: [Float], VR: [Float]                          // voice bus (never ducked)
     public private(set) var kickTimes: [Double] = []
     /// (start, end) of voiceover lines — the music bus ducks under them.
     public private(set) var voiceSpans: [(Double, Double)] = []
 
     public init(duration: Double) {
         n = Int(duration * Double(SR))
-        L = [Float](repeating: 0, count: n); R = L; KL = L; KR = L
+        L = [Float](repeating: 0, count: n); R = L; KL = L; KR = L; VL = L; VR = L
     }
     private static func mixInto(_ dst: inout [Float], _ src: [Float], at i: Int, count m: Int, gain: Float) {
         src.withUnsafeBufferPointer { s in
@@ -425,9 +426,15 @@ public struct Mixer {
             Self.mixInto(&R, r, at: i, count: m, gain: gr)
         }
     }
-    /// Voiceover onto the clean bus; its span ducks the music bus ~6 dB.
+    /// Voiceover onto its own bus. While it speaks, the music bus ducks ~6 dB and the
+    /// clean bus (kicks, booms, samples) ~4.5 dB, so hits can't bury the line.
     public mutating func addVoice(_ l: [Float], _ r: [Float], at t: Double, gain: Float = 1, pan: Float = 0) {
-        addStereo(l, r, at: t, gain: gain, pan: pan, clean: true)
+        let i = Int(t * Double(SR))
+        guard i >= 0, i < n else { return }
+        let m = min(l.count, n - i)
+        guard m > 0 else { return }
+        Self.mixInto(&VL, l, at: i, count: m, gain: gain * (1 - max(0, pan)))
+        Self.mixInto(&VR, r, at: i, count: m, gain: gain * (1 + min(0, pan)))
         voiceSpans.append((t, t + Double(l.count) / Double(SR)))
     }
     /// Kick onto the clean bus; its onset also drives the sidechain pump.
@@ -446,6 +453,7 @@ public struct Mixer {
             for j in 0..<max(0, min(dn, n - i0)) { duck[i0 + j] = min(duck[i0 + j], curve[j]) }
         }
         let vAttack = Double(SR) * 0.08, vRelease = Double(SR) * 0.3
+        var voiceDuck = [Float](repeating: 1, count: n)
         for (a, b) in voiceSpans {
             let s0 = max(0, Int(a * Double(SR) - vAttack)), e0 = min(n, Int(b * Double(SR) + vRelease))
             guard s0 < e0 else { continue }
@@ -453,15 +461,18 @@ public struct Mixer {
             for j in s0..<e0 {
                 let x = Double(j)
                 let ramp = x < a0 ? 1 - (a0 - x) / vAttack : (x > b0 ? 1 - (x - b0) / vRelease : 1)
-                duck[j] = min(duck[j], Float(1 - 0.5 * max(0, min(1, ramp))))
+                let r = Float(max(0, min(1, ramp)))
+                duck[j] = min(duck[j], 1 - 0.5 * r)                 // music: −6 dB
+                voiceDuck[j] = min(voiceDuck[j], 1 - 0.4 * r)       // clean: −4.5 dB
             }
         }
-        func renderBus(_ music: [Float], _ clean: [Float]) -> [Float] {
+        func renderBus(_ music: [Float], _ clean: [Float], _ voice: [Float]) -> [Float] {
             var ch = vDSP.multiply(music, duck)
-            vDSP.add(ch, clean, result: &ch)
+            vDSP.add(ch, vDSP.multiply(clean, voiceDuck), result: &ch)
+            vDSP.add(ch, voice, result: &ch)
             return vForce.tanh(vDSP.multiply(1.15, ch))   // soft-clip master
         }
-        var left = renderBus(L, KL), right = renderBus(R, KR)
+        var left = renderBus(L, KL, VL), right = renderBus(R, KR, VR)
         let fn = min(n, samples(Float(fadeOut)))
         for j in 0..<fn {                                  // linear fade to silence
             let g = Float(fn - 1 - j) / Float(max(1, fn - 1))

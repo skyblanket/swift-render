@@ -20,7 +20,7 @@ public struct MediaDemo: RenderScene {
 
     public static func soundtrack(duration: Double) -> Score? {
         Score(duration: duration) {
-            sample(clip, at: 0.3, amp: 0.55)
+            sample(clip, at: 0.3, amp: 0.13)
             chordPad(.minor7(.a3), at: 0, duration: 4.5)
             chordPad(.major7(.f3), at: 4.5, duration: duration - 4.5)
             sample("openear-foley/card_2.wav", at: 0.3, amp: 0.35)

@@ -162,7 +162,7 @@ public func samples(_ path: String, at times: [Double], amp: Double = 1, pan: Do
     times.flatMap { sample(path, at: $0, amp: amp, pan: pan) }
 }
 /// A voiceover line at `t`, synthesized locally and cached (see Speech). The music
-/// bus ducks ~6 dB under it. `CaptionTrack(score)` turns these into captions.
+/// bus ducks ~6 dB and the clean bus ~4.5 dB under it. `CaptionTrack(score)` turns these into captions.
 public func speak(_ text: String, at t: Double, engine: TTSEngine = .say(), amp: Double = 1,
                   pan: Double = 0) -> [ScoreEvent] {
     [ScoreEvent(t, .speech(SpeechSpec(text, engine: engine)), amp: amp, pan: pan)]

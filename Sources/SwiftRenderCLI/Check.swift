@@ -239,6 +239,96 @@ func mediaReport(_ score: Score) -> [String] {
         let cues = CaptionTrack(score).cues.count
         lines.append(String(format: "voiceover: %d lines · %.1fs of speech · %d caption cues (swift-render captions)",
                             speech.count, secs, cues))
+        lines += voiceBalanceReport(score)
     }
     return lines
+}
+
+// MARK: - Voice vs music
+
+/// How far the voiceover sits above the (ducked) music while someone is speaking.
+/// Renders the full mix and a voice-only stem un-normalized; music = mix − voice.
+func voiceBalanceReport(_ score: Score) -> [String] {
+    let speechEvents = score.events.filter { if case .speech = $0.sound { return true }; return false }
+    guard !speechEvents.isEmpty, speechEvents.count < score.events.count else { return [] }
+    let mix = ScoreSynth.render(score, normalize: false)
+    let voiceOnly = Score(duration: score.duration) { speechEvents }
+    let voice = ScoreSynth.render(voiceOnly, normalize: false)
+    let n = min(mix.left.count, voice.left.count)
+    let win = Int(scoreSampleRate * 0.5)
+    var windows: [(t: Double, v: Double, m: Double)] = []
+    var i = 0
+    while i + win <= n {
+        var v = 0.0, m = 0.0
+        for j in i..<(i + win) {
+            let vl = Double(voice.left[j]), vr = Double(voice.right[j])
+            let ml = Double(mix.left[j]) - vl, mr = Double(mix.right[j]) - vr
+            v += (vl * vl + vr * vr) * 0.5; m += (ml * ml + mr * mr) * 0.5
+        }
+        windows.append((Double(i) / scoreSampleRate, dB((v / Double(win)).squareRoot()), dB((m / Double(win)).squareRoot())))
+        i += win
+    }
+    // Judge only windows where the voice is really talking (within 10 dB of its typical
+    // level) — half-second windows that catch a line's tail would read as "buried".
+    let voiced = windows.filter { $0.v > -60 }.map(\.v).sorted()
+    guard !voiced.isEmpty else { return [] }
+    let typical = voiced[voiced.count / 2]
+    let speaking = windows.filter { $0.v > typical - 10 && $0.m > -90 }
+    let gaps = speaking.map { $0.v - $0.m }
+    let buried = speaking.filter { $0.v - $0.m < 6 }.map(\.t)
+    guard !gaps.isEmpty else { return [] }
+    let sorted = gaps.sorted()
+    let median = sorted[sorted.count / 2], low = sorted[max(0, sorted.count / 10)]
+    var line = String(format: "voice vs music: voice sits %+.1f dB above the music (median while speaking; 10th pct %+.1f dB)",
+                      median, low)
+    if low < 6 { line += "  ⚠︎ voice may be buried in places — lower pads/drums under speech" }
+    else if median > 30 { line += "  · music bed is very quiet under speech" }
+    var out = [line]
+    if low < 6 && !buried.isEmpty {
+        var spans: [(Double, Double)] = []
+        for t in buried {
+            if let last = spans.last, t - last.1 < 0.01 { spans[spans.count - 1].1 = t + 0.5 }
+            else { spans.append((t, t + 0.5)) }
+        }
+        out.append("  buried (< 6 dB) at: " + spans.prefix(8).map { String(format: "%.1f–%.1fs", $0.0, $0.1) }
+            .joined(separator: ", ") + (spans.count > 8 ? ", …" : ""))
+    }
+    return out
+}
+
+// MARK: - Smoke test
+
+/// Renders one small frame of every registered scene and checks every soundtrack
+/// for noise sweeps. Exit status 1 on any failure — run in CI.
+@MainActor
+func runSmoke(scale: Double) -> Bool {
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("sr-smoke-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let recorder = Recorder(config: Recorder.Config(fps: 30, size: AspectPreset.landscape16x9.size, scale: scale))
+    var failures: [String] = []
+    let started = Date()
+    for name in sceneRunners.keys.sorted() {
+        let runner = sceneRunners[name]!
+        let t0 = Date()
+        let duration = runner.defaultDuration
+        let score = runner.soundtrack(duration)
+        do {
+            try runner.frame(recorder, tmp.appendingPathComponent("\(name).png"), duration * 0.5, duration,
+                             score.map { .score($0) } ?? .none, nil)
+            let sweeps = (score?.events ?? []).filter {
+                switch $0.sound { case .whoosh, .riser: return true; default: return false }
+            }.count
+            if sweeps > 0 { failures.append("\(name): \(sweeps) whoosh/riser event(s) — house rule: no swish transitions") }
+            let padded = name.padding(toLength: 24, withPad: " ", startingAt: 0)
+            print(String(format: "  ok  %@ %5.0f ms", padded, Date().timeIntervalSince(t0) * 1000))
+        } catch {
+            failures.append("\(name): \(error)")
+            print("  FAIL \(name): \(error)")
+        }
+    }
+    print(String(format: "[swift-render] smoke: %d scenes in %.1fs, %d failure(s)",
+                 sceneRunners.count, Date().timeIntervalSince(started), failures.count))
+    for f in failures { fputs("  ✗ \(f)\n", stderr) }
+    return failures.isEmpty
 }
