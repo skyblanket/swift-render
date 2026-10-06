@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Claude Code stream-json   // S8
+// MARK: - Claude Code stream-json
 //
 // `claude -p --output-format stream-json --verbose` prints one JSON object per line:
 // `system/init` (session, model, MCP servers), `assistant` (text + tool_use blocks),

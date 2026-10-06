@@ -1,7 +1,7 @@
 import Foundation
 import SwiftRenderKit
 
-// MARK: - Agent prompt   // S8
+// MARK: - Agent prompt
 //
 // What Studio tells the director (studio-ux §4.8): the project, scene, source and
 // canvas; each comment as `id @ timecode (frame)`, its region in normalized and scene

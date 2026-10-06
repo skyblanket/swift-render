@@ -2,7 +2,7 @@ import AVFoundation
 import Accelerate
 import Foundation
 
-// MARK: - Waveform mips   // S5: wire into WaveformLane (silence shading, loudness overlay)
+// MARK: - Waveform mips
 //
 // Min/max per 256-sample bucket from the score WAV, then ×4 mip levels, so drawing
 // any zoom reads at most ~2 points per pixel from the level with ≥1 bucket per pixel.

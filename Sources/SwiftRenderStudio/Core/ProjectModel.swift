@@ -69,6 +69,8 @@ struct LaunchOptions: Equatable, Sendable {
     var agentReplay: String?
     /// Snapshot mode: capture with the Ask Claude sheet open.
     var askSheet = false
+    /// Snapshot mode: run "New Launch Film…" (scan, open AppleLaunch with the props) first.
+    var newLaunchFilm = false
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -97,6 +99,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--draft-text": o.draftText = v; i += 2
             case "--agent-replay": o.agentReplay = v; i += 2
             case "--ask-sheet": o.askSheet = true; i += 1
+            case "--new-launch-film": o.newLaunchFilm = true; i += 1
             case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
             case "--render-wait": o.renderWaitDone = v == "done"; i += 2
             case "--show": o.show = v; i += 2
@@ -158,7 +161,7 @@ final class ProjectModel {
     let review: ReviewController
     let agent: AgentController
     let renders: RenderQueue
-    /// Knobs / Props / Info tab state (S7).
+    /// Knobs / Props / Info tab state.
     @ObservationIgnored private(set) lazy var inspector = InspectorController(model: self)
 
     @ObservationIgnored private var watcher: FileWatcher?
@@ -263,7 +266,7 @@ final class ProjectModel {
                                       aspect: self.aspect == .landscape ? nil : self.aspect.rawValue,
                                       generation: self.host.generation)
         }
-        // S8: while an agent edits, its half-done states don't shout, and a multi-file edit is one build.
+        // While an agent edits, its half-done states don't shout, and a multi-file edit is one build.
         agent.onRunningChanged = { [weak self] running in
             guard let self else { return }
             self.build.agentEditing = running
@@ -381,7 +384,7 @@ final class ProjectModel {
         if first { ui.viewport.fit(i.duration) }
     }
 
-    // MARK: Knobs / props (S7 builds the UI on these)
+    // MARK: Knobs / props
 
     /// `dragging`: skip the structure re-probe (`reprobe: false`) while a slider moves.
     /// `replacing`: `values` is the whole live set, else it's merged in. Either way the
@@ -405,6 +408,42 @@ final class ProjectModel {
         propsJSON = json ?? info?.propsJSON
         if let info { adopt(info) }
         playback.invalidate()
+    }
+
+    /// "New Launch Film…": the project CLI scans the codebase (`launch --no-render`, which keeps
+    /// an already-edited `.swift-render/launch/<Name>.json`), then AppleLaunch opens with those props.
+    func newLaunchFilm() async {
+        guard !isFake, let exe = build.lastGoodExecutable else {
+            ui.toast = "New launch film needs a successful build of the project CLI"
+            return
+        }
+        guard scenes.contains(where: { $0.name == "AppleLaunch" }) else {
+            ui.toast = "This project's CLI has no AppleLaunch scene (swift-render 0.9+ registers it built in)"
+            return
+        }
+        ui.toast = "Scanning \(project.root.lastPathComponent) for a launch film…"
+        let root = project.root
+        let out = project.cacheDir.appendingPathComponent("launch-props.json")
+        let result = await Task.detached { () -> Result<String, Error> in
+            do {
+                try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let r = try ProcessRunner.run(exe.path, ["launch", root.path, "--no-render", "--props-out", out.path], cwd: root)
+                guard r.status == 0 else { throw LaunchScanFailure(message: r.stderr.split(separator: "\n").last.map(String.init) ?? "launch failed") }
+                return .success(try String(contentsOf: out, encoding: .utf8))
+            } catch { return .failure(error) }
+        }.value
+        switch result {
+        case .success(let json):
+            await select(scene: "AppleLaunch")
+            do {
+                try await setProps(json)
+                ui.toast = "Launch film props: .swift-render/launch/ — edit them in the Props tab"
+            } catch {
+                ui.toast = "Couldn't apply launch props: \(HostSupervisor.describe(error))"
+            }
+        case .failure(let error):
+            ui.toast = "Launch scan failed: \(error)"
+        }
     }
 
     // MARK: Actions
@@ -489,4 +528,10 @@ final class ProjectModel {
         case .failed(let errs, _): return "\(errs.count) error\(errs.count == 1 ? "" : "s")"
         }
     }
+}
+
+/// `launch --no-render` exited non-zero; the message is its last stderr line.
+private struct LaunchScanFailure: Error, CustomStringConvertible {
+    var message: String
+    var description: String { message }
 }

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Review widgets   // S6
+// MARK: - Review widgets
 //
 // Pieces the comments list, thread, pins, lane and compare share: the numbered
 // status badge, author avatars (initials for people, a sparkle for agents), the

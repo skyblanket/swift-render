@@ -4,7 +4,7 @@ import Foundation
 import Observation
 import SwiftRenderKit
 
-// MARK: - Review controller   // S6
+// MARK: - Review controller
 //
 // Comments for the selected scene, read from `.swift-render/reviews/<Scene>.json`
 // (reloaded by the file watcher, so CLI/MCP/agent edits appear within ~250 ms) and

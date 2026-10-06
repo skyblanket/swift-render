@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Comments tab   // S6
+// MARK: - Comments tab
 //
 // Search + author menu, status chips (open / working / resolved / won't fix, with
 // counts), the time-only composer, the list (numbered like the pins, agent threads

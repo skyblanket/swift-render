@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Region tool   // S6
+// MARK: - Region tool
 //
 // Armed with R, or live while ⌥ is held: drag → normalized `ReviewRegion` rect, click
 // → point pin. While active, a readout follows the cursor in scene points (scenes are

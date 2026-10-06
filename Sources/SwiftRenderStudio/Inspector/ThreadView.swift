@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Thread   // S6
+// MARK: - Thread
 //
 // Header (number, timecode, frame, status menu), where the note points (region in
 // scene points, clip source ↗, revision, canvas), BEFORE/AFTER thumbnails with

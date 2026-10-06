@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Ask Claude sheet   // S8
+// MARK: - Ask Claude sheet
 //
 // Pick comments (and/or "fix the build" when the last build failed), mode, scope,
 // model, budget, continue-last-session and extra instructions → `AgentController.ask`.

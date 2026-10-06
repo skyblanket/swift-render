@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Pins   // S6
+// MARK: - Pins
 //
 // Comments within ±0.25 s of the playhead (`PlaybackEngine.visibleCommentIDs`,
 // republished only when the set changes), numbered in scene order, colored by status,

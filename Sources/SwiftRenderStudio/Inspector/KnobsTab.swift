@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Knobs tab   // S7
+// MARK: - Knobs tab
 //
 // One row per `SceneInfo.knobs` entry: a slider + field for ranged doubles, a
 // toggle, a text field, or a color well. Changes go live through

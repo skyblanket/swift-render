@@ -1,7 +1,7 @@
 import Foundation
 import SwiftRenderKit
 
-// MARK: - Checkpoints   // S8
+// MARK: - Checkpoints
 //
 // Taken before an agent run that may edit files; never touches the user's branch,
 // index or stash stack (studio-ux §2.5):

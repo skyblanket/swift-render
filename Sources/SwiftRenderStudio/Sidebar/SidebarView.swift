@@ -70,10 +70,12 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider().padding(.bottom, 2)
             footerButton("New Scene", symbol: "plus") {
-                model.ui.toast = "New scene — coming with the launch kit"
+                // No scene template writer yet: point at the file-based path, which Studio already watches.
+                let dir = model.project.config.scenesDir ?? "your scenes target"
+                model.ui.toast = "Add a RenderScene file under \(dir) — Studio rebuilds and lists it on save"
             }
             footerButton("New Launch Film…", symbol: "sparkles") {
-                model.ui.toast = "New launch film — runs `\(model.project.config.product) launch`"
+                Task { await model.newLaunchFilm() }
             }
         }
         .padding(.horizontal, 10)

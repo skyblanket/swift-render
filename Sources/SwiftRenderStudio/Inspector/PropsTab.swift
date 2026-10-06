@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Props tab   // S7
+// MARK: - Props tab
 //
 // The scene's props JSON as a form (toggles, number fields, color wells, media
 // pickers, arrays with + / −, objects as disclosure rows) or as raw JSON. Apply

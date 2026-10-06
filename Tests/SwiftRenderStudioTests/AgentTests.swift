@@ -2,7 +2,7 @@ import XCTest
 import SwiftRenderKit
 @testable import SwiftRenderStudio
 
-/// S8: stream-json decoding (recorded + documented lines), the claude command line, the
+/// Stream-json decoding (recorded + documented lines), the claude command line, the
 /// prompt, checkpoints in a scratch git repo, and the controller's run lifecycle.
 @MainActor
 final class AgentTests: XCTestCase {

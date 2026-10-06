@@ -1,7 +1,7 @@
 import Foundation
 import SwiftRenderKit
 
-// MARK: - Agent seam   // S8
+// MARK: - Agent seam
 //
 // Studio drives agents through this protocol: `ClaudeCodeBackend` (headless
 // `claude -p … --output-format stream-json`) today; an in-house backend (Claude API

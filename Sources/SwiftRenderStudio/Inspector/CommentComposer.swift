@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Comment composer   // S6
+// MARK: - Comment composer
 //
 // One composer for every entry point (C, R/⌥-drag, timeline, toolbar). Region drafts
 // float next to their rect in the viewer; time-only drafts sit atop the Comments tab.

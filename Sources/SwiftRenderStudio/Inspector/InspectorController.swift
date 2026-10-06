@@ -4,7 +4,7 @@ import ImageIO
 import Observation
 import SwiftRenderKit
 
-// MARK: - Inspector controller   // S7
+// MARK: - Inspector controller
 //
 // State behind the Knobs, Props and Info tabs that must outlive a tab switch:
 // the paced knob sender, the props being edited, and the last `check` result.

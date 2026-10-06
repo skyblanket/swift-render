@@ -2,7 +2,7 @@ import CoreImage
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - A/B compare   // S6
+// MARK: - A/B compare
 //
 // BEFORE = the comment's `.before` still (captured when it was posted). AFTER = the
 // newest `.after` attachment on a reply, or LIVE: the current build rendered at the

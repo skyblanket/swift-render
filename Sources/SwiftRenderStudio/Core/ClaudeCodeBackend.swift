@@ -1,7 +1,7 @@
 import Foundation
 import SwiftRenderKit
 
-// MARK: - Claude Code backend   // S8
+// MARK: - Claude Code backend
 //
 // Runs the headless command verified in docs/review-loop.md, cwd = project root:
 //

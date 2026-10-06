@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Agent panel   // S8
+// MARK: - Agent panel
 //
 // Header: run state with live elapsed time (cost and duration once finished), comment
 // chips that open their threads, Revert run, Stop. Body: the transcript — the agent's

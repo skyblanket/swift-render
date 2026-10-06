@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Info tab   // S7
+// MARK: - Info tab
 //
 // Scene metadata, sources, structure counts, audio (loudness sparkline, peak/RMS
 // from the last check) and host stats. Run Check asks the host for `check`: the

@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import SwiftRenderKit
 
-// MARK: - Agent controller   // S8
+// MARK: - Agent controller
 //
 // Run lifecycle (studio-ux §2.4):
 //   checkpoint (fix runs) → claim the comments (inProgress, assignee Claude) → prompt →
