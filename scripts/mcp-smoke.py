@@ -3,6 +3,7 @@
 
     python3 scripts/mcp-smoke.py                    # launch via .mcp.json, quick checks
     python3 scripts/mcp-smoke.py --full             # + a review round trip, check_scene, build, knobs
+    python3 scripts/mcp-smoke.py --full --init      # + init_project, write_scene and a real Launch/ build
     python3 scripts/mcp-smoke.py --bin .build/debug/swift-render-mcp --save /tmp/frames
 
     python3 scripts/mcp-smoke.py --claude           # one real headless Claude Code run (needs `claude` logged in)
@@ -10,7 +11,9 @@
 --full adds a throwaway comment with `swift-render review add`, walks it through
 get/claim/reply/resolve over MCP, then deletes it (and its attachments) again; and starts a
 second server in a throwaway Swift package outside the repo (standalone mode) to make a launch
-film there, edit its props and check the creation tools' refusals.
+film there, edit its props, follow a render job with render_status and check the creation tools'
+refusals. --init also gives that package a Launch/ (init_project), writes a scene with write_scene
+and builds it for real (minutes: it compiles swift-render).
 --claude adds a throwaway comment, runs the exact `claude -p … --agent swift-render-director`
 command Studio uses, asks it to reply "ack", checks the reply landed in the review file,
 prints the stream-json events it saw, and deletes the comment again.
@@ -30,7 +33,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REVIEW_TOOLS = {"list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene", "build",
                 "list_comments", "get_comment", "claim_comment", "reply_comment", "resolve_comment",
                 "set_knobs", "render_video"}
-CREATE_TOOLS = {"docs", "launch_film", "new_scene", "init_project", "get_props", "set_props"}
+CREATE_TOOLS = {"docs", "launch_film", "new_scene", "write_scene", "init_project", "get_props", "set_props",
+                "render_status"}
 TOOLS = REVIEW_TOOLS | CREATE_TOOLS
 failures = []
 
@@ -124,7 +128,7 @@ def cli(*argv):
 
 
 READ_ONLY_TOOLS = ["list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene",
-                   "list_comments", "get_comment", "reply_comment"]
+                   "list_comments", "get_comment", "reply_comment", "render_status"]
 WRITING_TOOLS = ["claim_comment", "resolve_comment", "set_knobs", "render_video"]
 
 
@@ -209,6 +213,50 @@ Count anything, beautifully. Live counters with springy SwiftUI digits.
 }
 
 
+def follow(c, job, limit=900):
+    """render_status until the job is no longer queued or running."""
+    deadline = time.time() + limit
+    while True:
+        _, res, text, imgs = c.call("render_status", {"job": job, "wait": 30})
+        first = text.splitlines()[0] if text else ""
+        if (" · running" not in first and " · queued" not in first) or time.time() > deadline:
+            return res, text, imgs
+
+
+def job_id(text):
+    for word in text.replace('"', " ").split():
+        if word.startswith("j") and word[1:].isdigit():
+            return word
+    return None
+
+
+SCENE_SOURCE = """import SwiftUI
+import SwiftRender
+
+/// Written over MCP by scripts/mcp-smoke.py --init.
+public struct TallyTeaser: RenderScene {
+    public static let defaultDuration: Double = 4
+
+    public static func soundtrack(duration: Double) -> Score? {
+        Score(duration: duration) {
+            chordPad(.major7(.c3), at: 0, duration: duration)
+            thump(at: 2)
+        }
+    }
+
+    @MainActor public static func body(at t: Double, duration: Double) -> some View {
+        let p = Ease.easeOut(Ease.clip(t, 0.2, 1.2))
+        return ZStack {
+            Color.black
+            Text("Tally").font(.system(size: 160, weight: .bold)).foregroundStyle(.white)
+                .opacity(p).scaleEffect(Ease.spring(t, from: 1.2, to: 1, response: 0.5, dampingFraction: 0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+"""
+
+
 def standalone_e2e(args):
     """A second server in a Swift package that has never seen swift-render (outside the repo):
     standalone mode, with the swift-render CLI next to the server binary."""
@@ -236,8 +284,13 @@ def standalone_e2e(args):
         res = r.get("result", {})
         check("mode: standalone" in res.get("instructions", ""), "initialize in a plain package → mode: standalone")
         _, res, text, _ = c.call("list_scenes")
-        check(not res.get("isError") and text.startswith("mode: standalone") and "AppleLaunch" in text,
-              "list_scenes → built-in scenes, mode line first")
+        check(not res.get("isError") and text.startswith("mode: standalone") and "AppleLaunch" in text
+              and "built-in demo films (list_scenes {all:true}" in text and "TimelineDemo" not in text,
+              "list_scenes → the templates, demos summarized, mode line first")
+        _, res, text, _ = c.call("list_scenes", {"all": True})
+        check("TimelineDemo" in text and "· demo" in text, "list_scenes {all} → the demo films too, tagged")
+        _, res, text, _ = c.call("docs", {"topic": "scenes"})
+        check("typecheck-budget" not in text, "docs scenes leaves out this repo's CI rules")
         _, res, text, imgs = c.call("launch_film", {"preview": True}, args.save)
         film = next((line.split("film: ", 1)[1].split("  (")[0] for line in text.splitlines()
                      if line.startswith("film: ")), "")
@@ -257,9 +310,57 @@ def standalone_e2e(args):
         check(res.get("isError") is True and "init_project" in text, "new_scene outside a project → points to init_project")
         _, res, text, _ = c.call("launch_film", {"path": "/etc"})
         check(res.get("isError") is True, "launch_film refuses a system folder")
+        bare = os.path.join(tmp, "NotACodebase")
+        os.makedirs(bare)
+        _, res, text, _ = c.call("launch_film", {"path": bare})
+        check(res.get("isError") is True and "doesn't look like a codebase" in text,
+              "launch_film refuses a folder that isn't a codebase")
+        _, res, text, _ = c.call("new_scene", {"name": "Score"})
+        check(res.get("isError") is True and "already a type" in text, "new_scene refuses a name that shadows a type")
+        outside = os.path.join(tmp, "outside")
+        os.makedirs(outside)
+        os.makedirs(os.path.join(pkg, ".swift-render"), exist_ok=True)
+        link = os.path.join(pkg, ".swift-render/props")
+        os.symlink(outside, link)
+        _, res, text, _ = c.call("set_props", {"scene": "KnobLab", "props": {"title": "x"}})
+        check(res.get("isError") is True and not os.listdir(outside), "set_props refuses a symlinked props folder")
+        os.remove(link)
+
+        print("jobs")
+        _, res, text, _ = c.call("render_video", {"scene": "AppleLaunch", "preview": True, "wait": False})
+        job = job_id(text)
+        check(not res.get("isError") and "started as job" in text and job, f"render_video wait:false → job {job}")
+        _, res, text, _ = c.call("render_status", {"job": job, "wait": 0})
+        check(not res.get("isError") and job in text, "render_status reports the running job")
+        res, text, _ = follow(c, job)
+        mp4 = os.path.join(pkg, "out/AppleLaunch-preview.mp4")
+        check(not res.get("isError") and " · done" in text and "rendered AppleLaunch" in text
+              and os.path.exists(mp4) and os.path.getsize(mp4) > 10_000, "render_status → done, the MP4 exists")
+        _, res, text, _ = c.call("render_status")
+        check(job in text, "render_status {} lists the jobs")
+
+        if args.init:
+            print("init_project + write_scene (real build)")
+            _, res, text, _ = c.call("init_project")
+            build = job_id(text.split("as job", 1)[1]) if "as job" in text else None
+            check(not res.get("isError") and build, f"init_project → Launch/ + first build as job {build}")
+            res, text, _ = follow(c, build, limit=1800)
+            check(not res.get("isError") and "BUILD OK" in text, "the first Launch/ build finishes OK")
+            _, res, text, _ = c.call("new_scene", {"name": "TallyTeaser"})
+            check(not res.get("isError") and "public struct TallyTeaser" in text, "new_scene returns the scaffold's source")
+            _, res, text, _ = c.call("write_scene", {"name": "TallyTeaser", "source": SCENE_SOURCE, "wait": True})
+            check(not res.get("isError") and "replaced" in text and "BUILD OK" in text, "write_scene → builds OK")
+            _, res, text, imgs = c.call("contact_sheet", {"scene": "TallyTeaser"}, args.save)
+            check(not res.get("isError") and len(imgs) == 1, "contact_sheet of the written scene")
+            broken = SCENE_SOURCE.replace("Ease.clip(t, 0.2, 1.2)", "Ease.clip(t, 0.2)")
+            _, res, text, _ = c.call("write_scene", {"name": "TallyTeaser", "source": broken, "wait": True})
+            check(res.get("isError") is True and "BUILD FAILED" in text and "TallyTeaser.swift:" in text,
+                  "write_scene with an error → compiler diagnostics")
+            c.call("write_scene", {"name": "TallyTeaser", "source": SCENE_SOURCE, "wait": True})
         wrote = sorted(os.path.relpath(os.path.join(d, f), pkg) for d, _, fs in os.walk(pkg) for f in fs
                        if not os.path.relpath(os.path.join(d, f), pkg).startswith(("Sources", "Package", "README")))
-        check(all(w.startswith((".swift-render/", "out/")) for w in wrote), f"writes stay in .swift-render/ and out/ ({len(wrote)})")
+        check(all(w.startswith((".swift-render/", "out/", "Launch/", ".mcp.json")) for w in wrote),
+              f"writes stay in .swift-render/, out/ (and Launch/ with --init) ({len(wrote)})")
     finally:
         c.close()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -270,6 +371,7 @@ def main():
     ap.add_argument("--bin", help="server binary (default: the command in .mcp.json)")
     ap.add_argument("--scene", default="TimelineDemo")
     ap.add_argument("--full", action="store_true", help="also run the review round trip, check, build, knobs")
+    ap.add_argument("--init", action="store_true", help="with --full: init_project + write_scene + a real Launch/ build")
     ap.add_argument("--claude", action="store_true", help="only the headless Claude Code end-to-end run")
     ap.add_argument("--budget", default="1", help="--max-budget-usd for --claude (default 1)")
     ap.add_argument("--save", help="write every returned image here")

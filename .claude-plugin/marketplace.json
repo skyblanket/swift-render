@@ -9,10 +9,10 @@
     {
       "name": "swift-render",
       "source": "./claude-plugin",
-      "description": "The swift-render-director agent, the swift-render-review skill and the swift-render MCP server: address timecoded, region-boxed review comments by editing scene Swift, re-rendering and resolving.",
+      "description": "Make and review swift-render videos (SwiftUI scenes rendered to MP4) from any Swift codebase: the swift-render MCP server (21 tools: launch films, scenes, props, frames, renders as jobs, the API guide, the review loop), the swift-render-make and swift-render-review skills and the swift-render-director agent.",
       "version": "0.10.0",
       "category": "media",
-      "homepage": "https://github.com/skyblanket/swift-render/blob/main/docs/review-loop.md",
+      "homepage": "https://github.com/skyblanket/swift-render/blob/main/docs/agents.md",
       "license": "MIT"
     }
   ]

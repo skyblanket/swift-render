@@ -67,11 +67,43 @@ protocol SceneCLI: AnyObject {
     /// The running tool call's cancel token (set by ToolBox for the call's duration):
     /// `notifications/cancelled` or server shutdown stops the build/render it started.
     var cancel: ProcessCancel? { get set }
-    /// The binary to run, built first if needed.
-    func executable() throws -> URL
+    /// The binary to run, built first if needed; `cancel` stops that build.
+    func executable(cancel: ProcessCancel?) throws -> URL
 }
 
 extension SceneCLI {
+    /// The binary to run, built first if needed (stopped by the call's cancel token).
+    func executable() throws -> URL { try executable(cancel: cancel) }
+
+    /// `<cli> args…` as part of a job: output lines reach `onLine` as they come (progress),
+    /// and the job's cancel stops the child. Same time limits and errors as `run`.
+    func runStreaming(_ args: [String], cwd dir: URL? = nil, job: Job,
+                      onLine: @escaping (_ stderr: Bool, _ line: String) -> Void) throws -> StreamResult {
+        let exe = try executable(cancel: job.token)
+        let limit = CLITimeouts.forCommand(args)
+        let r: StreamResult
+        do {
+            r = try StreamingRunner.run(exe.path, args, cwd: dir ?? cwd, timeout: limit, job: job, onLine: onLine)
+        } catch let e as ProcessRunnerError {
+            switch e {
+            case .timedOut:
+                let knob = ["render", "launch"].contains(args.first ?? "") ? "SWIFT_RENDER_MCP_RENDER_TIMEOUT"
+                    : "SWIFT_RENDER_MCP_TIMEOUT"
+                throw ToolError("`\(label) \(args.joined(separator: " "))` \(e). Set \(knob) (seconds) to allow longer.")
+            case .cancelled:
+                throw ToolError("`\(label) \(args.first ?? "")` cancelled")
+            }
+        }
+        guard r.status == 0 else {
+            // Progress lines aren't the error.
+            let err = r.stderr.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+                .filter { !$0.hasPrefix("{\"progress\"") && $0.range(of: #"^\[swift-render\] \d+%$"#, options: .regularExpression) == nil }
+                .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            throw ToolError("`\(label) \(args.joined(separator: " "))` failed (exit \(r.status)):\n" + String(err.suffix(2000)))
+        }
+        return r
+    }
+
     /// `<cli> args…` in `cwd` (or `dir`); builds first if needed. The child is stopped after
     /// `timeout` (default: by command, see `CLITimeouts`) or on cancel.
     func run(_ args: [String], timeout: TimeInterval? = nil, cwd dir: URL? = nil,
@@ -127,7 +159,7 @@ final class StandaloneCLI: SceneCLI {
 
     var label: String { "swift-render" }
 
-    func executable() throws -> URL {
+    func executable(cancel: ProcessCancel?) throws -> URL {
         guard FileManager.default.isExecutableFile(atPath: url.path) else {
             throw ToolError("the swift-render CLI at \(url.path) is gone — rebuild it or set SWIFT_RENDER_CLI")
         }
@@ -135,13 +167,31 @@ final class StandaloneCLI: SceneCLI {
     }
 }
 
+/// Another CLI with its own cancel token. A job runs its children through one of these, so
+/// the token a concurrent tool call sets on the shared CLI never reaches them.
+final class BoundCLI: SceneCLI {
+    let base: SceneCLI
+    var cancel: ProcessCancel?
+
+    init(_ base: SceneCLI, cancel: ProcessCancel) { self.base = base; self.cancel = cancel }
+
+    var label: String { base.label }
+    var cwd: URL { base.cwd }
+    func executable(cancel: ProcessCancel?) throws -> URL { try base.executable(cancel: cancel) }
+}
+
 /// The project's own CLI product, rebuilt when its sources change.
 final class ProjectCLI: SceneCLI {
     let project: Project
+    /// Guards the fields below: a job and a tool call can use this CLI at once.
+    private let state = NSLock()
+    /// One build at a time (held for the whole build).
+    private let building = NSLock()
     /// Newest source mtime seen when the current binary was built.
     private var builtFrom: Date?
     private var executableURL: URL?
-    private(set) var lastBuild: BuildResult?
+    private var _lastBuild: BuildResult?
+    /// The running tool call's token (worker thread only; jobs pass their own).
     var cancel: ProcessCancel?
 
     init(project: Project) { self.project = project }
@@ -149,42 +199,56 @@ final class ProjectCLI: SceneCLI {
     var product: String { project.config.product }
     var label: String { product }
     var cwd: URL { project.root }
+    var lastBuild: BuildResult? { state.lock(); defer { state.unlock() }; return _lastBuild }
 
-    func executable() throws -> URL { try ensureBuilt() }
+    func executable(cancel: ProcessCancel?) throws -> URL { try ensureBuilt(cancel: cancel) }
+
+    /// The up-to-date binary, or nil when a build is due (never builds).
+    func freshExecutable(cancel: ProcessCancel? = nil) -> URL? {
+        let newest = newestSourceDate()
+        state.lock()
+        let known = executableURL, stamp = builtFrom
+        state.unlock()
+        if let known, let stamp, newest <= stamp, FileManager.default.fileExists(atPath: known.path) { return known }
+        if stamp == nil, let exe = try? ProjectBuilder.executable(project, cancel: cancel),
+           let built = modificationDate(exe), newest <= built {
+            state.lock(); executableURL = exe; builtFrom = newest; state.unlock()
+            return exe
+        }
+        return nil
+    }
 
     /// Rebuilds when sources changed since the last build (or the binary is missing/older).
     @discardableResult
-    func ensureBuilt(force: Bool = false) throws -> URL {
+    func ensureBuilt(force: Bool = false, cancel: ProcessCancel? = nil) throws -> URL {
+        if !force, let exe = freshExecutable(cancel: cancel) { return exe }
+        building.lock(); defer { building.unlock() }
+        // Another thread may have built while this one waited for the lock.
+        if !force, let exe = freshExecutable(cancel: cancel) { return exe }
         let newest = newestSourceDate()
-        if !force, let exe = executableURL, let stamp = builtFrom, newest <= stamp,
-           FileManager.default.fileExists(atPath: exe.path) {
-            return exe
-        }
-        if !force, builtFrom == nil, let exe = try? ProjectBuilder.executable(project, cancel: cancel),
-           let built = modificationDate(exe), newest <= built {
-            executableURL = exe; builtFrom = newest
-            return exe
-        }
         log("building \(product) (sources newer than the last build)…")
-        let result = try buildNow()
-        lastBuild = result
+        let result = try buildNow(cancel: cancel)
+        state.lock(); _lastBuild = result; state.unlock()
         log(BuildReport.text(result, product: product).components(separatedBy: "\n").first ?? "")
         guard result.success, let exe = result.executable else { throw BuildFailure(result: result) }
-        executableURL = exe; builtFrom = newest
+        state.lock(); executableURL = exe; builtFrom = newest; state.unlock()
         return exe
     }
 
     /// Unconditional build (the `build` tool).
-    func build() throws -> BuildResult {
+    func build(cancel: ProcessCancel? = nil) throws -> BuildResult {
+        building.lock(); defer { building.unlock() }
         let newest = newestSourceDate()
-        let result = try buildNow()
-        lastBuild = result
+        let result = try buildNow(cancel: cancel)
+        state.lock()
+        _lastBuild = result
         if result.success, let exe = result.executable { executableURL = exe; builtFrom = newest }
+        state.unlock()
         return result
     }
 
     /// `swift build` with the build time limit; a timeout or cancel becomes a ToolError.
-    private func buildNow() throws -> BuildResult {
+    private func buildNow(cancel: ProcessCancel?) throws -> BuildResult {
         do {
             return try ProjectBuilder.build(project, timeout: CLITimeouts.build, cancel: cancel)
         } catch let e as ProcessRunnerError {

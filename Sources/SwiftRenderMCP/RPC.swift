@@ -51,8 +51,28 @@ final class MCPServer {
 
     let tools: ToolBox
     let version: String
+    /// Sends a notification to the client (set by main.swift; nil in tests that call handle directly).
+    var notify: ((JSONObject) -> Void)?
 
     init(tools: ToolBox, version: String) { self.tools = tools; self.version = version }
+
+    /// `notifications/progress` for a request that carried `_meta.progressToken` (MCP: progress
+    /// must increase; the token is echoed as given).
+    func progressSink(_ params: JSONObject) -> ProgressSink? {
+        guard let notify, let meta = params["_meta"] as? JSONObject, let token = meta["progressToken"],
+              token is String || token is NSNumber else { return nil }
+        let lock = NSLock()
+        var last = -Double.infinity
+        return { progress, total, message in
+            lock.lock()
+            guard progress > last else { lock.unlock(); return }
+            last = progress
+            lock.unlock()
+            var p: JSONObject = ["progressToken": token, "progress": progress, "message": message]
+            if let total { p["total"] = total }
+            notify(["jsonrpc": "2.0", "method": "notifications/progress", "params": p])
+        }
+    }
 
     /// Answered on the reader thread, never queued behind a running tool call (none of
     /// them touches a CLI: the docs are compiled in).
@@ -131,7 +151,7 @@ final class MCPServer {
             }
             let args = params["arguments"] as? JSONObject ?? [:]
             let started = Date()
-            let result = tools.call(name, args, cancel: cancel)
+            let result = tools.call(name, args, cancel: cancel, progress: progressSink(params))
             log(String(format: "%@ %@ in %.2fs", name, result.isError ? "failed" : "ok", Date().timeIntervalSince(started)))
             return response(id: id, result: result.json)
         default:

@@ -31,6 +31,11 @@ final class MCPServerTests: XCTestCase {
         echo "$2 takes no props" >&2; exit 1 ;;
       review)
         echo '[]'; exit 0 ;;
+      render)
+        props=""; prev=""
+        for a in "$@"; do [ "$prev" = "--props" ] && props="$a"; prev="$a"; done
+        [ -n "$props" ] && cp "$props" "$FAKE_LOG.props"
+        exit 0 ;;
     esac
     exit 0
 
@@ -332,10 +337,14 @@ final class MCPServerTests: XCTestCase {
         let calls = try String(contentsOf: fake.log, encoding: .utf8)
         let render = try XCTUnwrap(calls.split(separator: "\n").first { $0.hasPrefix("render Known") })
         XCTAssertTrue(render.contains("--out \(out) --aspect 9:16 --preview --props "), String(render))
-        XCTAssertTrue(render.hasSuffix(".swift-render/cache/mcp/props-Known.json"), String(render))
+        // Its own scratch props (a queued job must not read a later call's), progress for render_status.
+        XCTAssertTrue(render.range(of: #"\.swift-render/cache/mcp/props-Known-[0-9A-F]{8}\.json --progress json$"#,
+                                   options: .regularExpression) != nil, String(render))
         // Inline props merge over the scene's defaults (JSON decoding needs complete payloads).
-        let props = try String(contentsOf: fake.project.cacheDir.appendingPathComponent("mcp/props-Known.json"), encoding: .utf8)
+        let props = try String(contentsOf: URL(fileURLWithPath: fake.log.path + ".props"), encoding: .utf8)
         XCTAssertTrue(props.contains("\"title\" : \"Hi\"") && props.contains("\"speed\" : 1"), props)
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: fake.project.cacheDir.appendingPathComponent("mcp").path)) ?? []
+        XCTAssertFalse(leftovers.contains { $0.hasPrefix("props-Known-") }, "the job removes its scratch props: \(leftovers)")
 
         XCTAssertTrue(c.tool("render_video", ["scene": "Known", "aspect": "4:3"]).text.contains("aspect must be"))
         XCTAssertTrue(c.tool("list_scenes").text.hasPrefix("mode: project"))

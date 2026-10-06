@@ -15,13 +15,22 @@ import SwiftRenderKit
 extension ToolBox {
     var creationCatalog: [JSONObject] {
         func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
-                  required: [String] = [], readOnly: Bool = false) -> JSONObject {
-            Self.tool(name, title, description, props, required: required, readOnly: readOnly)
+                  required: [String] = [], readOnly: Bool = false, idempotent: Bool = false,
+                  destructive: Bool = false, openWorld: Bool = false) -> JSONObject {
+            Self.tool(name, title, description, props, required: required, readOnly: readOnly, idempotent: idempotent,
+                      destructive: destructive, openWorld: openWorld)
         }
         let topics = Guide.topicIDs
         let path: JSONObject = ["type": "string",
-                                "description": "The codebase folder (absolute, ~/…, or relative to the workspace). "
-                                    + "Default: the workspace — the Swift package / Xcode project the server runs in."]
+                                "description": "The codebase folder (absolute, ~/…, or relative to the workspace): it must "
+                                    + "hold a Package.swift, .xcodeproj, .xcworkspace or .git. Default: the workspace — "
+                                    + "the Swift package / Xcode project the server runs in."]
+        let anyFolder: JSONObject = ["type": "boolean",
+                                     "description": "Accept a folder with none of those markers (default false). Hidden "
+                                        + "folders, ~/Library and system folders are always refused."]
+        let sceneName: JSONObject = ["type": "string", "pattern": "^[A-Z][A-Za-z0-9_]{0,99}$",
+                                     "description": "UpperCamelCase Swift type name, e.g. \"ProductTeaser\" — not one "
+                                        + "SwiftUI or swift-render already uses (Text, Score, Timeline…)."]
         return [
             tool("docs", "swift-render docs",
                  "The swift-render API guide, one topic at a time — read {topic:\"scenes\"} before writing a scene, so it "
@@ -29,15 +38,16 @@ extension ToolBox {
                  + "Also served as resources swift-render://docs/<topic>.",
                  ["topic": ["type": "string", "enum": topics,
                             "description": "index (default), tools, scenes, timeline, easing, sound, knobs, launch, looks, "
-                                + "cli, review, or all (the whole quickstart)."] as JSONObject],
-                 readOnly: true),
+                                + "cli, review, contributing (this repo only), or all (the whole quickstart)."] as JSONObject],
+                 readOnly: true, idempotent: true),
             tool("launch_film", "Make a launch film",
                  "Scan a Swift codebase (Package.swift, Xcode project, asset catalog, README, CHANGELOG, git) and render an "
                  + "Apple-style launch film with the AppleLaunch scene. Returns the MP4 path, what it detected (name, "
                  + "tagline, features, version, platforms — each with its source file), the props file that defines the "
                  + "film, and a contact sheet so you can see it. Edit the film by passing props (merged into that file) "
-                 + "and calling again. Writes only inside the codebase (.swift-render/launch/, out/).",
-                 ["path": path,
+                 + "and calling again. Writes only inside the codebase (.swift-render/launch/, out/). A full-quality film "
+                 + "can take over a minute: past ~45 s the answer is a job id — poll render_status {job} for the result.",
+                 ["path": path, "any_folder": anyFolder, "wait": Self.waitArg,
                   "aspect": Self.aspectArg,
                   "preview": ["type": "boolean",
                               "description": "Half resolution at 30 fps — several times faster; use it until the film "
@@ -60,20 +70,32 @@ extension ToolBox {
                     as JSONObject]),
             tool("new_scene", "New scene",
                  "Scaffold an auto-registered scene file (<Name>.swift with a Timeline, a Score and a fade) in the "
-                 + "project's scenes folder and return its path plus a short guide to writing it. Needs a swift-render "
-                 + "project — call init_project first in any other codebase. Then edit the file and call contact_sheet.",
-                 ["name": ["type": "string", "pattern": "^[A-Z][A-Za-z0-9_]{0,99}$",
-                           "description": "UpperCamelCase Swift type name, e.g. \"ProductTeaser\"."] as JSONObject,
+                 + "project's scenes folder and return its path, its source and a short guide to writing it. Needs a "
+                 + "swift-render project — call init_project first in any other codebase. Then edit the file (or, without "
+                 + "file tools, send the whole new source to write_scene) and call contact_sheet.",
+                 ["name": sceneName,
                   "kind": ["type": "string", "enum": ["render", "audio"],
                            "description": "render (default) or audio — an AudioReactiveScene that gets band levels per frame."]
                     as JSONObject],
                  required: ["name"]),
+            tool("write_scene", "Write scene source",
+                 "Create or replace <Name>.swift in the project's scenes folder with `source`, then build and return the "
+                 + "compiler diagnostics (file:line:col). For clients that can't edit files (Claude Desktop); with file "
+                 + "tools, edit the file instead. The source must declare `public struct <Name>: RenderScene` (or "
+                 + "AudioReactiveScene / PropsScene) — that registers it. Read a scene first with scene_info {scene, "
+                 + "source:true}. Needs a swift-render project (init_project).",
+                 ["name": sceneName,
+                  "source": ["type": "string", "description": "The complete Swift file (import SwiftUI, import SwiftRender, …)."]
+                    as JSONObject,
+                  "wait": Self.waitArg],
+                 required: ["name", "source"], idempotent: true, destructive: true),
             tool("init_project", "Set up a Launch package",
                  "Give a codebase its own swift-render package: <path>/Launch/ with the launch film as editable Swift "
                  + "(LaunchKit), a `launch` CLI, swift-render.json and .mcp.json. Refuses to overwrite files unless "
                  + "force. Afterwards this server works in that package: new_scene, list_scenes, render_* and review "
-                 + "tools (the first render builds it, which fetches swift-render and can take a few minutes).",
-                 ["path": path,
+                 + "tools. It starts the first build at once as a job (it fetches swift-render and can take minutes): "
+                 + "render_status {job} shows it.",
+                 ["path": path, "any_folder": anyFolder,
                   "local": ["type": "string",
                             "description": "A swift-render checkout to depend on by path. Default: the checkout this server "
                                 + "was built from, if any; else github.com/skyblanket/swift-render."] as JSONObject,
@@ -84,7 +106,8 @@ extension ToolBox {
                     as JSONObject,
                   "run_manifest": ["type": "boolean",
                                    "description": "As in launch_film: execute Package.swift outside the workspace."]
-                    as JSONObject]),
+                    as JSONObject],
+                 destructive: true, openWorld: true),
             tool("get_props", "Get scene props",
                  "The JSON a data-driven scene renders (AppleLaunch, any PropsScene): the props in use — saved with "
                  + "set_props, or for AppleLaunch the film launch_film made — else the scene's defaults with every key.",
@@ -92,7 +115,7 @@ extension ToolBox {
                   "file": ["type": "string",
                            "description": "Read this instead: a variant name, a .json path in the project, or "
                             + "\"defaults\"."] as JSONObject],
-                 required: ["scene"], readOnly: true),
+                 required: ["scene"], idempotent: true),
             tool("set_props", "Save scene props",
                  "Save props for a data-driven scene. Merges `props` into the current props (or the defaults; null "
                  + "removes a key) and writes .swift-render/props/<Scene>.json — or the launch film's props file for "
@@ -107,7 +130,7 @@ extension ToolBox {
                             + "or .swift-render/launch/."] as JSONObject,
                   "replace": ["type": "boolean",
                               "description": "Write props exactly as given instead of merging (default false)."] as JSONObject],
-                 required: ["scene", "props"]),
+                 required: ["scene", "props"], idempotent: true),
         ]
     }
 
@@ -128,14 +151,15 @@ extension ToolBox {
     /// The codebase a launch/init call is about: `path`, else the workspace.
     private func codebase(_ a: Args) throws -> URL {
         let home = Workspace.homeDirectory(ProcessInfo.processInfo.environment)
+        let any = a.bool("any_folder") ?? false
         if let raw = a.optionalString("path") {
-            return try SafePath.codebase(raw, base: workspace.root ?? project?.root, home: home)
+            return try SafePath.codebase(raw, base: workspace.root ?? project?.root, home: home, anyFolder: any)
         }
         guard let root = workspace.root else {
             throw ToolError("no workspace (the server was started in \(FileManager.default.currentDirectoryPath)) — "
                             + "pass path: the codebase folder")
         }
-        return try SafePath.codebase(root.path, base: nil, home: home)
+        return try SafePath.codebase(root.path, base: nil, home: home, anyFolder: any)
     }
 
     /// Whether `swift package dump-package` may run for `root`: the workspace and the
@@ -153,7 +177,8 @@ extension ToolBox {
         let aspect = try Self.aspect(a) ?? "16:9"
         let preview = a.bool("preview") ?? false
         let voiceover = a.bool("voiceover")
-        var rescan = a.bool("rescan") ?? false
+        let rescan = a.bool("rescan") ?? false
+        let open = a.bool("open") ?? false
         var notes: [String] = []
         let common = [root.path] + manifestArgs(a, root: root, notes: &notes)
         let edits: JSONObject?
@@ -167,14 +192,49 @@ extension ToolBox {
             edits = o
         default: throw ToolError("props must be a JSON object of keys to change")
         }
-
-        // Edits go into the kept props file — the film — before the render reads it.
-        if edits != nil || voiceover == false {
-            let mistyped = Self.mistyped(edits ?? [:], against: try defaultProps("AppleLaunch", cli))
+        // launch writes .swift-render/launch/ and out/: neither may lead out of the codebase.
+        try SafePath.confined(root.appendingPathComponent(".swift-render/launch"), root: root, sub: ".swift-render/launch")
+        try SafePath.confined(root.appendingPathComponent("out"), root: root, sub: "out")
+        // A wrong type is refused before anything is written, rendered or queued.
+        if let edits {
+            let mistyped = Self.mistyped(edits, against: try defaultProps("AppleLaunch", cli))
             guard mistyped.isEmpty else {
                 throw ToolError("nothing was written or rendered — wrong value type:\n  " + mistyped.joined(separator: "\n  ")
                                 + "\n(get_props {scene:\"AppleLaunch\"} shows every key)")
             }
+        }
+
+        let title = "launch_film \(root.lastPathComponent)" + " (\(aspect)\(preview ? ", preview" : ""))"
+        let job = jobs.start(.launch, title, output: rescan ? nil : Self.plannedFilm(root: root, aspect: aspect)) { job in
+            try self.runLaunchFilm(job, cli: BoundCLI(cli, cancel: job.token), root: root, common: common, aspect: aspect,
+                                   preview: preview, voiceover: voiceover, rescan: rescan, open: open, edits: edits,
+                                   notes: notes)
+        }
+        return waitFor(job, a)
+    }
+
+    /// The film `launch` will write when the codebase already has one kept props file:
+    /// `out/<name>-launch[-9x16|-1x1].mp4` (launch's own naming).
+    static func plannedFilm(root: URL, aspect: String) -> URL? {
+        let kept = launchPropsFiles(in: root)
+        guard kept.count == 1, let data = try? Data(contentsOf: kept[0]),
+              let props = try? JSONDecoder().decode(LaunchProps.self, from: data) else { return nil }
+        let name = props.validated().props.name
+        let safe = String(name.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" })
+        let stem = safe.trimmingCharacters(in: CharacterSet(charactersIn: "-")).isEmpty ? "launch" : safe
+        let suffix = aspect == "9:16" ? "-9x16" : aspect == "1:1" ? "-1x1" : ""
+        return root.appendingPathComponent("out/\(stem.lowercased())-launch\(suffix).mp4")
+    }
+
+    /// The launch_film job: props edits into the kept file, the render (with progress), a contact sheet.
+    private func runLaunchFilm(_ job: Job, cli: SceneCLI, root: URL, common: [String], aspect: String, preview: Bool,
+                               voiceover: Bool?, rescan initialRescan: Bool, open: Bool, edits: JSONObject?,
+                               notes initialNotes: [String]) throws -> ToolResult {
+        var notes = initialNotes
+        var rescan = initialRescan
+        job.setPhase("scanning")
+        // Edits go into the kept props file — the film — before the render reads it.
+        if edits != nil || voiceover == false {
             let scan = try cli.runChecked(["launch"] + common + ["--no-render"] + (rescan ? ["--rescan"] : []), cwd: root)
             rescan = false
             let kept = try keptLaunchProps(stdout: scan.stdout, root: root)
@@ -186,22 +246,32 @@ extension ToolBox {
                 throw ToolError("those props don't fit AppleLaunch (nothing was written): \(Self.decodingProblem(error))"
                                 + " — get_props {scene:\"AppleLaunch\"} shows every key")
             }
-            try data.write(to: kept, options: .atomic)
+            try data.write(to: try SafePath.confined(kept, root: root, sub: ".swift-render/launch"), options: .atomic)
             if !changed.isEmpty { notes.append("props: set \(changed.joined(separator: ", ")) in \(SafePath.display(kept, from: root))") }
+            if job.output == nil { job.output = Self.plannedFilm(root: root, aspect: aspect) }
         }
 
         var args = ["launch"] + common + ["--aspect", aspect]
         if preview { args.append("--preview") }
         if voiceover == true { args.append("--voiceover") }
         if rescan { args.append("--rescan") }
-        if a.bool("open") ?? false { args.append("--open") }
+        if open { args.append("--open") }
         let started = Date()
-        let r = try cli.runChecked(args, cwd: root)
+        let r = try cli.runStreaming(args, cwd: root, job: job) { isErr, line in
+            if !isErr, line.hasPrefix("[swift-render] rendering") {
+                job.setPhase("rendering")
+            } else if isErr, let m = line.range(of: #"\] (\d+)%$"#, options: .regularExpression),
+                      let pct = Double(line[m].dropFirst(2).dropLast()) {
+                job.setPhase("rendering")
+                job.setProgress(done: pct, total: 100)
+            }
+        }
         let seconds = Date().timeIntervalSince(started)
         let kept = try keptLaunchProps(stdout: r.stdout, root: root)
-        guard let film = Self.filmPath(r.stdout), FileManager.default.fileExists(atPath: film.path) else {
+        guard let film = Self.filmPath(r.stdout)?.canonical, FileManager.default.fileExists(atPath: film.path) else {
             throw ToolError("launch finished but reported no film:\n" + String(r.stdout.suffix(1500)))
         }
+        job.output = film
 
         var lines = [String(format: "film: %@  (%@%@, rendered in %.0fs)", film.path, aspect, preview ? ", preview" : "", seconds)]
         lines += Self.scanSummary(r.stdout)
@@ -219,6 +289,7 @@ extension ToolBox {
         out.text(lines.joined(separator: "\n"))
 
         // The contact sheet: the same props, the same canvas.
+        job.setPhase("contact sheet")
         do {
             let sheet = try scratch("launch-contact.png", in: root)
             try cli.runChecked(["contact", "AppleLaunch", "--props", kept.path, "--aspect", aspect, "--out", sheet.path],
@@ -291,12 +362,23 @@ extension ToolBox {
 
     // MARK: new_scene
 
-    func newScene(_ a: Args) throws -> ToolResult {
+    /// A name for a new scene type: UpperCamelCase, and not a type the scene's imports
+    /// already declare (a scene called `Score` or `Text` breaks the whole package's build).
+    static func newSceneName(_ a: Args) throws -> String {
         let name = try a.string("name")
         guard name.range(of: #"^[A-Z][A-Za-z0-9_]{0,99}$"#, options: .regularExpression) != nil else {
             throw ToolError("name must be an UpperCamelCase Swift type name (letters, digits, _; e.g. \"ProductTeaser\"), "
                             + "got '\(name.prefix(80))'")
         }
+        if ReservedNames.all.contains(name) {
+            throw ToolError("\(name) is already a type in SwiftUI, Foundation or swift-render — a scene with that name "
+                            + "would shadow it and break the build. Pick another, e.g. \"\(name)Scene\" or \"My\(name)\".")
+        }
+        return name
+    }
+
+    func newScene(_ a: Args) throws -> ToolResult {
+        let name = try Self.newSceneName(a)
         let kind = a.optionalString("kind") ?? "render"
         guard kind == "render" || kind == "audio" else { throw ToolError("kind must be render or audio (got \(kind))") }
         guard let project else {
@@ -315,7 +397,78 @@ extension ToolBox {
         out.text("created \(SafePath.display(created, from: project.root)) (\(created.path)) — scene \"\(name)\", "
                  + "registered automatically at the next build (never edit main.swift).\n\n"
                  + Guide.newSceneNote(name: name, kind: kind))
+        if let source = try? String(contentsOf: created, encoding: .utf8) {
+            out.text("The scaffold (edit the file, or send a whole new version to write_scene {name, source}):\n\n" + source)
+        }
         return out
+    }
+
+    // MARK: write_scene
+
+    /// `public struct Name: …RenderScene…` — what SceneRegistryPlugin registers.
+    static let sceneDecl = try! NSRegularExpression(pattern: #"public\s+struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^{]+)\{"#)
+    static let sceneProtocols: Set<String> = ["RenderScene", "AudioReactiveScene", "PropsScene", "PropsAudioScene"]
+
+    func writeScene(_ a: Args) throws -> ToolResult {
+        let name = try Self.newSceneName(a)
+        guard let source = a.raw["source"] as? String, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToolError("missing required argument 'source' (the whole Swift file)")
+        }
+        guard source.utf8.count <= 300_000 else { throw ToolError("source is \(source.utf8.count / 1000) KB — split it up") }
+        guard let project, let cli else {
+            throw ToolError("write_scene needs a swift-render project to put the scene in (\(workspace.summary)). "
+                            + "Call init_project first, then new_scene {name} or write_scene.")
+        }
+        let ns = source as NSString
+        let declares = Self.sceneDecl.matches(in: source, range: NSRange(location: 0, length: ns.length)).contains { m in
+            ns.substring(with: m.range(at: 1)) == name
+                && ns.substring(with: m.range(at: 2)).split(whereSeparator: { ",: \n\t".contains($0) })
+                    .contains { Self.sceneProtocols.contains(String($0)) }
+        }
+        guard declares else {
+            throw ToolError("nothing was written — the source must declare `public struct \(name): RenderScene` (or "
+                            + "AudioReactiveScene, PropsScene, PropsAudioScene); that is how scenes register. "
+                            + "docs {topic:\"scenes\"} has a template.")
+        }
+        let sub = project.config.scenesDir ?? "Sources/SwiftRenderScenes"
+        guard !sub.hasPrefix("/"), !sub.split(separator: "/").contains("..") else {
+            throw ToolError("swift-render.json's scenesDir '\(sub)' must be a folder inside the project")
+        }
+        let dir = project.root.appendingPathComponent(sub, isDirectory: true)
+        let file = dir.appendingPathComponent("\(name).swift")
+        try SafePath.confined(file, root: project.root, sub: sub)
+        // Another file declaring the type would fail the build with a confusing redeclaration.
+        let others = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != file.lastPathComponent }
+        if let clash = others.first(where: { url in
+            (try? String(contentsOf: url, encoding: .utf8))?
+                .range(of: #"(struct|class|enum)\s+\#(name)\b"#, options: .regularExpression) != nil
+        }) {
+            throw ToolError("nothing was written — \(SafePath.display(clash, from: project.root)) already declares \(name); "
+                            + "edit that file's scene instead (scene_info {scene, source:true}) or pick another name")
+        }
+        let existed = FileManager.default.fileExists(atPath: file.path)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = try SafePath.confined(file, root: project.root, sub: sub)
+        try Data(source.utf8).write(to: target, options: .atomic)
+        let head = "\(existed ? "replaced" : "created") \(SafePath.display(target, from: project.root)) "
+            + "(\(source.split(separator: "\n", omittingEmptySubsequences: false).count) lines) — scene \"\(name)\""
+
+        // Build now so the answer carries the compiler's verdict (the next scene tool would build anyway).
+        let job = buildJob(cli, title: "build \(cli.product) (write_scene \(name))", fresh: true)
+        var r = waitFor(job, a)
+        var out = ToolResult()
+        if job.isFinished, job.result != nil {
+            out.text(head + (r.isError ? " — but the build failed; fix these and write_scene again:" : " — it builds."))
+            out.content += r.content
+            out.isError = r.isError
+            if !r.isError { out.text("next: contact_sheet {scene:\"\(name)\"} to see it.") }
+        } else {
+            out.text(head + ".")
+            out.content += r.content
+        }
+        r = out
+        return r
     }
 
     static func createdPath(_ stdout: String) -> URL? {
@@ -353,6 +506,7 @@ extension ToolBox {
             notes.append("depends on github.com/skyblanket/swift-render")
         }
         if force { args.append("--force") }
+        try SafePath.confined(root.appendingPathComponent("Launch"), root: root, sub: "Launch")
         let r = try cli.runChecked(args, cwd: root)
         let launch = root.appendingPathComponent("Launch", isDirectory: true)
         guard FileManager.default.fileExists(atPath: launch.appendingPathComponent("swift-render.json").path) else {
@@ -365,8 +519,14 @@ extension ToolBox {
         lines += notes
         if project == nil {
             adopt(project: Project.open(launch))
-            lines.append("This server now works in \(launch.path) (\(workspace.summary)). The first scene tool builds "
-                         + "the package — fetching swift-render can take a few minutes.")
+            lines.append("This server now works in \(launch.path) (\(workspace.summary)).")
+            // Start the first build now (it fetches swift-render): by the time the agent asks for
+            // a frame it is done or under way, and no call has to sit through all of it.
+            if let pcli = self.cli, FileManager.default.fileExists(atPath: launch.appendingPathComponent("Package.swift").path) {
+                let job = buildJob(pcli, title: "build \(pcli.product) (first build of Launch/)")
+                lines.append("Building the package now as job \(job.id) — the first build fetches swift-render and can "
+                             + "take a few minutes. Scene tools wait for it; render_status {job:\"\(job.id)\"} shows it.")
+            }
         } else {
             lines.append("This server stays on \(project!.root.path); start one in \(launch.path) to work there.")
         }
@@ -388,7 +548,12 @@ extension ToolBox {
 
     // MARK: props
 
-    struct PropsChoice { var args: [String] = []; var note: String? = nil }
+    struct PropsChoice {
+        var args: [String] = []
+        var note: String? = nil
+        /// The scratch file inline props were written to (the caller may remove it when done).
+        var scratch: URL? = nil
+    }
 
     /// `.swift-render/props/<Scene>.json` under home.
     func savedPropsURL(_ scene: String) throws -> URL {
@@ -428,11 +593,7 @@ extension ToolBox {
         }
         let resolved = url.canonical
         if forWriting {
-            let allowed = roots.flatMap { [$0.appendingPathComponent(".swift-render/props"), $0.appendingPathComponent(".swift-render/launch")] }
-            guard allowed.contains(where: { SafePath.isInside(resolved, $0) }), !resolved.lastPathComponent.hasSuffix(".scan.json") else {
-                throw ToolError("props can only be saved under .swift-render/props/ or .swift-render/launch/ in the project "
-                                + "(not \(resolved.path))")
-            }
+            try Self.checkPropsWrite(resolved, roots: roots)
         } else {
             guard roots.contains(where: { SafePath.isInside(resolved, $0) }) else {
                 throw ToolError("props file must be inside the project or workspace (not \(resolved.path))")
@@ -444,8 +605,22 @@ extension ToolBox {
         return resolved
     }
 
+    /// Props are written only under `<root>/.swift-render/props/` or `.swift-render/launch/`,
+    /// with only `root` symlink-resolved: a symlinked `.swift-render`, `props` or variant
+    /// folder resolves elsewhere and is refused.
+    static func checkPropsWrite(_ url: URL, roots: [URL]) throws {
+        let resolved = url.canonical
+        let ok = roots.contains { root in
+            [".swift-render/props", ".swift-render/launch"].contains { SafePath.isInside(resolved, root: root, sub: $0) }
+        }
+        guard ok, !resolved.lastPathComponent.hasSuffix(".scan.json") else {
+            throw ToolError("props can only be saved under .swift-render/props/ or .swift-render/launch/ in the project "
+                            + "(not \(resolved.path)\(resolved.path == url.path ? "" : ", where \(url.path) leads — a symlink?"))")
+        }
+    }
+
     /// The `props` / `props_file` arguments of the render tools → `--props <file>`.
-    func propsChoice(_ a: Args, scene: String, auto: Bool) throws -> PropsChoice {
+    func propsChoice(_ a: Args, scene: String, auto: Bool, scratchTag: String? = nil) throws -> PropsChoice {
         if let raw = a.raw["props"], !(raw is NSNull) {
             guard let edits = (raw as? JSONObject)
                     ?? (raw as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? JSONObject }) else {
@@ -460,11 +635,12 @@ extension ToolBox {
             if let base, let root = PropsAssets.scannedRoot(forPropsFile: base) {
                 json = PropsAssets.absolutizingPaths(in: json, root: root)
             }
-            let url = try scratch("props-\(scene).json")
+            let url = try scratch("props-\(scene)\(scratchTag.map { "-" + $0 } ?? "").json")
             try json.write(to: url, atomically: true, encoding: .utf8)
             return PropsChoice(args: ["--props", url.path],
                                note: "props: \(base.map { SafePath.display($0, from: try? home()) } ?? "defaults") with "
-                                + (changed.isEmpty ? "no changes" : changed.joined(separator: ", ")) + " (not saved — set_props saves)")
+                                + (changed.isEmpty ? "no changes" : changed.joined(separator: ", ")) + " (not saved — set_props saves)",
+                               scratch: url)
         }
         if let ref = a.optionalString("props_file") {
             if ["defaults", "default", "none"].contains(ref) { return PropsChoice(note: "props: the scene's defaults") }
@@ -547,6 +723,8 @@ extension ToolBox {
         }
         let target = try a.optionalString("file").map { try propsFile(scene, $0, forWriting: true) }
             ?? currentPropsURL(scene) ?? savedPropsURL(scene)
+        // Every target — the default one too — is checked, not just an agent-given path.
+        try Self.checkPropsWrite(target, roots: [try home(), workspace.root, project?.root].compactMap { $0 })
         // Know the scene (and that it takes props) before touching the file system.
         let cli = try sceneCLI()
         let defaults = try defaultProps(scene, cli)

@@ -278,14 +278,137 @@ final class MCPCreateTests: XCTestCase {
         XCTAssertFalse(calls(fake).contains { $0.hasPrefix("launch") }, "nothing was scanned")
 
         // A codebase outside the workspace: scanned without executing its manifest; writes stay in it.
+        // A folder with no Package.swift / .xcodeproj / .xcworkspace / .git needs any_folder.
         let other = fake.root.deletingLastPathComponent().appendingPathComponent("Other")
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
-        let r = c.tool("launch_film", ["path": other.path])
+        let plain = c.tool("launch_film", ["path": other.path])
+        XCTAssertTrue(plain.isError && plain.text.contains("doesn't look like a codebase"), plain.text)
+        let r = c.tool("launch_film", ["path": other.path, "any_folder": true])
         XCTAssertFalse(r.isError, r.text)
         XCTAssertTrue(r.text.contains("not executed"), r.text)
         XCTAssertTrue(calls(fake).contains("launch \(other.path) --no-manifest --aspect 16:9"), "\(calls(fake))")
         XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent(".swift-render/cache/mcp/launch-contact.png").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fake.root.appendingPathComponent(".swift-render/launch").path))
+    }
+
+    /// Settings folders are never codebases, whatever they contain: ~/.ssh, ~/.config/x,
+    /// ~/Library/…, any hidden folder (HOME points at the test's folder here).
+    func testLaunchFilmRefusesSettingsFolders() throws {
+        let fake = try makeFake()
+        let home = fake.root.deletingLastPathComponent()
+        let c = try start(fake, env: ["HOME": home.path])
+        for rel in [".ssh", ".config/tool", "Library/Keychains", "Code/.hidden"] {
+            let dir = home.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try "// x".write(to: dir.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+            for args: [String: Any] in [["path": dir.path, "preview": true], ["path": dir.path, "any_folder": true]] {
+                let r = c.tool("launch_film", args)
+                XCTAssertTrue(r.isError, "\(rel): \(r.text)")
+            }
+            XCTAssertTrue(c.tool("init_project", ["path": dir.path]).isError, rel)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("out").path), rel)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(".swift-render").path), rel)
+        }
+        XCTAssertFalse(calls(fake).contains { $0.hasPrefix("launch") || $0.hasPrefix("init") }, "\(calls(fake))")
+    }
+
+    /// A symlink planted in the codebase can't carry a write out of it: props, the kept
+    /// launch props, the cache and out/ are checked with only the root resolved.
+    func testSymlinkedFoldersCantCarryWritesOut() throws {
+        let fake = try makeFake()
+        let c = try start(fake)
+        let outside = fake.root.deletingLastPathComponent().appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let dot = fake.root.appendingPathComponent(".swift-render")
+        try FileManager.default.createDirectory(at: dot, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: dot.appendingPathComponent("props"), withDestinationURL: outside)
+
+        let saved = c.tool("set_props", ["scene": "AppleLaunch", "props": ["tagline": "x"]])
+        XCTAssertTrue(saved.isError && saved.text.contains("symlink"), saved.text)
+        let variant = c.tool("set_props", ["scene": "AppleLaunch", "props": ["tagline": "x"], "file": "v1"])
+        XCTAssertTrue(variant.isError, variant.text)
+        let path = c.tool("set_props", ["scene": "AppleLaunch", "props": ["tagline": "x"],
+                                        "file": ".swift-render/props/AppleLaunch.json"])
+        XCTAssertTrue(path.isError, path.text)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [], "nothing written outside")
+
+        // .swift-render/launch and out/ as symlinks: launch_film refuses before running launch.
+        try FileManager.default.removeItem(at: dot.appendingPathComponent("props"))
+        try FileManager.default.createSymbolicLink(at: dot.appendingPathComponent("launch"), withDestinationURL: outside)
+        XCTAssertTrue(c.tool("launch_film", ["preview": true]).text.contains("symlink"))
+        try FileManager.default.removeItem(at: dot.appendingPathComponent("launch"))
+        try FileManager.default.createSymbolicLink(at: fake.root.appendingPathComponent("out"), withDestinationURL: outside)
+        XCTAssertTrue(c.tool("launch_film", ["preview": true]).text.contains("symlink"))
+        XCTAssertTrue(c.tool("render_video", ["scene": "Plain"]).text.contains("symlink"))
+        try FileManager.default.removeItem(at: fake.root.appendingPathComponent("out"))
+        // The cache: frames would be written through a symlinked .swift-render/cache.
+        try FileManager.default.createSymbolicLink(at: dot.appendingPathComponent("cache"), withDestinationURL: outside)
+        XCTAssertTrue(c.tool("contact_sheet", ["scene": "Plain"]).text.contains("symlink"))
+        XCTAssertFalse(calls(fake).contains { $0.hasPrefix("launch") || $0.hasPrefix("render") || $0.hasPrefix("contact") },
+                       "\(calls(fake))")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [], "nothing written outside")
+    }
+
+    func testBadWorkspaceVariableIsReported() throws {
+        let fake = try makeFake()
+        let c = try start(fake, env: ["SWIFT_RENDER_WORKSPACE": "/nonexistent/dir"], cwd: URL(fileURLWithPath: "/"))
+        let instructions = c.initialize()?["instructions"] as? String ?? ""
+        XCTAssertTrue(instructions.contains("SWIFT_RENDER_WORKSPACE=/nonexistent/dir is not a directory"), instructions)
+        XCTAssertTrue(c.tool("list_scenes").text.contains("SWIFT_RENDER_WORKSPACE"))
+    }
+
+    func testStandaloneListsTemplatesAndTheGuideStaysOnTopic() throws {
+        let fake = try makeFake()
+        let c = try start(fake)
+        let list = c.tool("list_scenes")
+        XCTAssertTrue(list.text.contains("AppleLaunch · props") && !list.text.contains("Plain ·"), list.text)
+        XCTAssertTrue(list.text.contains("+ 1 built-in demo films"), list.text)
+        XCTAssertTrue(c.tool("list_scenes", ["all": true]).text.contains("Plain · render · 4.00s · demo"))
+
+        // Repo-internal rules (where this repo's demo scenes live, its CI scripts) aren't scene advice elsewhere.
+        let scenes = c.tool("docs", ["topic": "scenes"]).text
+        XCTAssertFalse(scenes.contains("typecheck-budget") || scenes.contains("Scenes live in `Sources/SwiftRenderScenes`"))
+        let contributing = c.tool("docs", ["topic": "contributing"]).text
+        XCTAssertTrue(contributing.contains("typecheck-budget") && contributing.contains("Sources/SwiftRenderScenes"), contributing)
+
+        // Annotations say what a tool really does to the disk.
+        let tools = try XCTUnwrap(c.request("tools/list")?["result"] as? [String: Any])["tools"] as? [[String: Any]] ?? []
+        func hints(_ name: String) -> [String: Any] {
+            tools.first { $0["name"] as? String == name }?["annotations"] as? [String: Any] ?? [:]
+        }
+        for name in ["docs", "list_comments", "render_status"] {
+            XCTAssertEqual(hints(name)["readOnlyHint"] as? Bool, true, name)
+        }
+        for name in ["build", "render_frames", "contact_sheet", "check_scene", "get_comment", "scene_info", "write_scene"] {
+            XCTAssertEqual(hints(name)["readOnlyHint"] as? Bool, false, "\(name) writes caches or builds")
+        }
+        XCTAssertEqual(hints("write_scene")["destructiveHint"] as? Bool, true)
+        XCTAssertEqual(hints("init_project")["openWorldHint"] as? Bool, true)
+        XCTAssertEqual(hints("render_video")["openWorldHint"] as? Bool, false)
+    }
+
+    /// Every public type of the SwiftRender module (and SwiftUI's usual suspects) is refused as
+    /// a new scene name: a scene called Score breaks the package's build.
+    func testNewSceneRefusesNamesThatShadowTypes() throws {
+        let fake = try makeFake()
+        let c = try start(fake)
+        var names = ["Score", "Timeline", "Clip", "Text", "View", "Color", "Ease", "SwiftRender", "SceneRunner"]
+        let sources = Self.repoRoot.appendingPathComponent("Sources/SwiftRender")
+        let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        let decl = try NSRegularExpression(pattern: #"(?m)^public (?:final class|struct|enum|protocol|typealias|class|actor) ([A-Z][A-Za-z0-9_]*)"#)
+        while let f = walker?.nextObject() as? URL {
+            guard f.pathExtension == "swift", let s = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for m in decl.matches(in: s, range: NSRange(s.startIndex..., in: s)) {
+                names.append((s as NSString).substring(with: m.range(at: 1)))
+            }
+        }
+        XCTAssertGreaterThan(names.count, 60)
+        for name in Set(names) {
+            let r = c.tool("new_scene", ["name": name])
+            XCTAssertTrue(r.isError && r.text.contains("already a type"),
+                          "\(name) is not refused — add it to ReservedNames.swift: \(r.text)")
+        }
+        XCTAssertTrue(c.tool("write_scene", ["name": "Score", "source": "x"]).text.contains("already a type"))
     }
 
     // MARK: props

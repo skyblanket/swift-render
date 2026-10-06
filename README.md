@@ -118,8 +118,8 @@ claude --agent swift-render-director "work through the open swift-render comment
 - **Comments are files.** `.swift-render/reviews/<Scene>.json` is written under `flock`, so you can
   commit it. `swift-render review list|show|add|reply|status|frame|delete|scenes` drives it
   from the terminal.
-- **`swift-render-mcp`** is a stdio MCP server with 13 tools (`list_comments`, `get_comment`,
-  `claim_comment`, `render_frames`, `resolve_comment`, `build`, `set_knobs`, …). Frames come back
+- **`swift-render-mcp`** is a stdio MCP server with 21 tools. The review loop uses `list_comments`,
+  `get_comment`, `claim_comment`, `render_frames`, `resolve_comment`, `build`, `set_knobs`, …. Frames come back
   inline, so the agent sees what it changed. In this repo, `.mcp.json` registers it.
 - **`swift-render-director`** (`.claude/agents/`) is a film-director subagent. It handles one
   comment at a time and keeps `body(at:)` pure. It never uses whoosh, riser or swish. When a note
@@ -426,7 +426,7 @@ swift-render review list|show|add|reply|status|frame|delete|scenes …        ti
 swift-render serve                                       Studio's render host (JSON lines + binary frames on stdio)
 
 swift-render-studio [project] [--scene X] [--at t] [--tab comments|knobs|props|info] [--snapshot out.png]
-swift-render-mcp                                         MCP server for the review loop (stdio, 13 tools)
+swift-render-mcp                                         MCP server: make and review videos from any agent (stdio, 21 tools)
 ```
 
 A valued option with no value or a malformed value exits 64, and `--out` refuses an empty path, a
@@ -517,11 +517,13 @@ Code outside the engine reaches the bundled shaders and resources through
 **Any agent, any Swift repo.** `swift-render-mcp` is a stdio MCP server for Claude Code, Claude
 Desktop, Codex and Cursor. Point it at any Swift codebase and an agent can make a launch film with
 `launch_film`. It sees the result as a contact sheet and edits the copy through props. It can also
-scaffold and write its own scenes (`init_project`, `new_scene`), look at frames, check the audio
-and render MP4s. The API guide is built in (`docs`, and the resources `swift-render://docs/<topic>`).
-Inside a swift-render project it also runs the review loop.
+scaffold and write its own scenes (`init_project`, `new_scene`, and `write_scene` for clients
+without file tools), look at frames, check the audio and render MP4s. Renders that run past ~45 s
+come back as a job that `render_status` follows, so clients that stop tool calls at 60 s (Claude
+Desktop) still get their film. The API guide is built in (`docs`, and the resources
+`swift-render://docs/<topic>`). Inside a swift-render project it also runs the review loop.
 [docs/agents.md](docs/agents.md) covers the build, a config snippet for each client, the modes,
-and the plain-CLI equivalents for agents without MCP.
+long renders, and the plain-CLI equivalents for agents without MCP.
 
 ```bash
 swift build -c release --product swift-render && swift build -c release --product swift-render-mcp

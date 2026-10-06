@@ -78,7 +78,7 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
     static let editTools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
     /// swift-render MCP tools that change nothing the user owns (plan/reply runs).
     static let readOnlyMCPTools = ["list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene",
-                                   "list_comments", "get_comment", "reply_comment"]
+                                   "list_comments", "get_comment", "reply_comment", "render_status"]
     /// …and the ones that do: comment statuses, knob files, exports.
     static let writingMCPTools = ["claim_comment", "resolve_comment", "set_knobs", "render_video"]
 

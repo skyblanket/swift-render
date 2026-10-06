@@ -50,9 +50,18 @@ enum Guide {
     ]
 
     /// Every topic id `docs` and `resources/read` accept: the index, the tool recipe, the
-    /// topics above, `all` (the whole quickstart) and `more` when a section has no topic yet.
+    /// topics above, `contributing` (this repo's own rules), `all` (the whole quickstart) and
+    /// `more` when a section has no topic yet.
     static var topicIDs: [String] {
-        ["index", "tools"] + topics.map(\.id) + ["all"] + (unassigned.isEmpty ? [] : ["more"])
+        ["index", "tools"] + topics.map(\.id) + ["contributing", "all"] + (unassigned.isEmpty ? [] : ["more"])
+    }
+
+    /// Bullets that only hold inside the swift-render repo (where its demo scenes live, its CI
+    /// scripts): served under `contributing`, kept out of the topics an agent elsewhere reads.
+    static let repoOnlyMarkers = ["`Sources/SwiftRenderScenes`", "scripts/typecheck-budget.sh"]
+
+    static func isRepoOnly(_ line: Substring) -> Bool {
+        line.hasPrefix("- ") && repoOnlyMarkers.contains { line.contains($0) }
     }
 
     /// `## Heading` → section text (heading line included), in file order.
@@ -95,9 +104,15 @@ enum Guide {
         case "more":
             let rest = unassigned
             return rest.isEmpty ? nil : rest.map(\.text).joined(separator: "\n\n")
+        case "contributing":
+            let lines = sections.flatMap { $0.text.split(separator: "\n").filter(isRepoOnly) }
+            return "# \(title(id))\n\nOnly for work inside the swift-render repo itself (its demo scenes, its CI):\n\n"
+                + lines.joined(separator: "\n")
         default:
             guard let topic = topics.first(where: { $0.id == id }) else { return nil }
             let body = sections.filter { belongs($0.heading, to: topic) }.map(\.text).joined(separator: "\n\n")
+                .split(separator: "\n", omittingEmptySubsequences: false).filter { !isRepoOnly($0) }
+                .joined(separator: "\n")
             return "# \(topic.title)\n\n\(body)"
         }
     }
@@ -107,6 +122,7 @@ enum Guide {
         case "index": return "swift-render docs index"
         case "tools": return "Making videos with the swift-render MCP tools"
         case "all": return "AI Quickstart (everything)"
+        case "contributing": return "Contributing to swift-render"
         case "more": return "More"
         default: return topics.first { $0.id == id }?.title ?? id
         }
@@ -117,6 +133,7 @@ enum Guide {
         case "index": return "Start here: how to make a video, and what each topic covers"
         case "tools": return "Which MCP tool to call when, with examples"
         case "all": return "The whole docs/ai-quickstart.md in one piece (~25 KB)"
+        case "contributing": return "Rules that only apply inside the swift-render repo (its demo scenes, its CI)"
         case "more": return "Quickstart sections not yet filed under a topic"
         default: return topics.first { $0.id == id }?.summary ?? ""
         }
@@ -127,9 +144,9 @@ enum Guide {
     How to make a video with swift-render (SwiftUI scenes rendered to MP4):
     1. docs {topic:"scenes"} once: the scene API in two pages (docs {} lists every topic).
     2. A Swift codebase to show off? launch_film {preview:true} scans it and renders an Apple-style launch film; look at the contact sheet it returns, fix copy with launch_film {props:{"tagline":"…"}}, then render without preview (aspect "9:16" for vertical).
-    3. Your own film: new_scene {name} (outside a swift-render package call init_project first), then write body(at:duration:) as a pure function of t.
+    3. Your own film: new_scene {name} (outside a swift-render package call init_project first), then write body(at:duration:) as a pure function of t — edit the file, or without file tools send the whole source to write_scene.
     4. Look after every edit: contact_sheet {scene} or render_frames {scene, times}; data-driven scenes take get_props / set_props.
-    5. check_scene before finishing (blank frames, loudness, no whoosh/riser), then render_video {scene} returns the MP4 path.
+    5. check_scene before finishing (blank frames, loudness, no whoosh/riser), then render_video {scene} returns the MP4 path. Work that runs past ~45 s answers "job jN": poll render_status {job:"jN"} until done.
     6. Review notes from people: list_comments → get_comment → claim_comment → edit → render_frames {comment} → resolve_comment.
     """
 
@@ -153,10 +170,18 @@ enum Guide {
       workspace) and render the AppleLaunch film. Returns the MP4 path, what was detected (name, tagline,
       features, version, platforms, with the file each came from), the props file and a contact sheet. The props
       file is the film: `props` merges keys into it before rendering, `rescan:true` starts over.
-    - `new_scene {name, kind?}` — scaffold `<Name>.swift` in the project's scenes folder (auto-registered).
-      `kind:"audio"` makes an AudioReactiveScene. Needs a swift-render project: `init_project` makes one.
+    - `new_scene {name, kind?}` — scaffold `<Name>.swift` in the project's scenes folder (auto-registered) and
+      return its source. `kind:"audio"` makes an AudioReactiveScene. Needs a swift-render project: `init_project`
+      makes one. Names SwiftUI or swift-render already use (Text, Score, Timeline…) are refused.
+    - `write_scene {name, source}` — for clients without file tools (Claude Desktop): create or replace the scene
+      file with the whole source, build, and get the compiler diagnostics. `scene_info {scene, source:true}` reads one.
     - `init_project {path?}` — give a codebase its own `Launch/` package (your editable launch film as Swift + a
-      `launch` CLI). The server switches to it: new_scene, render_* and the review tools work there.
+      `launch` CLI). The server switches to it and starts the first build as a job: new_scene, render_* and the
+      review tools work there.
+    - `render_status {job?, wait?, cancel?}` — render_video, launch_film, build and write_scene keep working in the
+      background when they take more than ~45 s (some clients stop a tool call at ~60 s) and answer with a job id
+      and the planned output. Poll this until it says done; it then returns the tool's result. `wait:true` on those
+      tools blocks instead (clients without a time limit).
     - `get_props {scene}` / `set_props {scene, props, file?}` — read / save the JSON a data-driven scene renders
       (AppleLaunch, any PropsScene). Saved props are used by render_frames, contact_sheet, check_scene and
       render_video unless you pass `props` / `props_file`.
@@ -217,8 +242,9 @@ enum Guide {
         - `soundtrack(duration:)` returns a `Score`: harmony (chordPad, arpeggio, melody) and hits on cuts (thump, rim, tick, swell) — never whoosh or riser.
         - Fill the frame: `.frame(maxWidth: .infinity, maxHeight: .infinity)` over a background color.\
         \(kind == "audio" ? "\n- `audio.band(.bass, at: t)` is 0…1 energy; render with an audio file or the scene's own score." : "")
-        Next: contact_sheet {scene:"\(name)"} builds it and shows the whole film → edit → render_frames for details → \
-        check_scene → render_video. More: docs {topic:"scenes"}, {topic:"timeline"}, {topic:"sound"}.
+        Next: contact_sheet {scene:"\(name)"} builds it and shows the whole film → edit (no file tools? write_scene \
+        {name:"\(name)", source}) → render_frames for details → check_scene → render_video. More: docs {topic:"scenes"}, \
+        {topic:"timeline"}, {topic:"sound"}.
         """
     }
 }

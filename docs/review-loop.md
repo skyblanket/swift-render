@@ -74,8 +74,8 @@ Ids accept a unique prefix of 4+ characters. `--` ends options (for a body that 
 
 Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio. This section covers the review loop.
 The same server also makes videos from any agent in any Swift codebase (`docs`, `launch_film`,
-`new_scene`, `init_project`, `get_props`, `set_props`, the `swift-render://docs/<topic>` resources,
-and project / standalone / docs-only modes). [agents.md](agents.md) documents that side and has
+`new_scene`, `write_scene`, `init_project`, `get_props`, `set_props`, `render_status`, the
+`swift-render://docs/<topic>` resources, and project / standalone / docs-only modes). [agents.md](agents.md) documents that side and has
 the setup for every client.
 
 - `initialize` echoes the client's `protocolVersion` when it is one of `2024-11-05`, `2025-03-26`,
@@ -87,10 +87,17 @@ the setup for every client.
   unknown resource → `-32002`, unparsable line → `-32700`; unknown fields are ignored. A failing
   tool returns a normal result with `isError: true` and the reason as text.
 - **Concurrency and cancellation**: `initialize`, `ping`, `tools/list` and the resource methods are answered immediately;
-  every other call runs on one serial worker. `notifications/cancelled` stops that call (its CLI
-  child's whole process group is killed) and a cancelled request gets no response. SIGTERM, SIGINT,
-  SIGHUP and stdin EOF stop running children too (after EOF, calls already asked get
-  `SWIFT_RENDER_MCP_EOF_GRACE` seconds, default 30, to finish).
+  `render_status` runs on its own; every other call runs on one serial worker. `notifications/cancelled`
+  stops that call (its CLI child's whole process group is killed) and a cancelled request gets no
+  response. SIGTERM, SIGINT, SIGHUP and stdin EOF stop running children and jobs too (after EOF, calls
+  already asked and running jobs get `SWIFT_RENDER_MCP_EOF_GRACE` seconds, default 30, to finish).
+- **Jobs**: `render_video`, `launch_film`, `build`, `write_scene` and the rebuild a scene tool needs first
+  run as jobs on their own serial queue. A call waits `SWIFT_RENDER_MCP_DETACH_AFTER` seconds (45; `0` =
+  always) and then answers with the job id, progress and planned output while the job goes on — clients
+  such as Claude Desktop stop a tool call at ~60 s and cancel it. `render_status {job}` waits up to 30 s
+  and, once done, returns the tool's result; `wait: true|false` on the tools overrides the 45 s. A
+  cancel that arrives before the call answered stops its job; after that, only `render_status {cancel}`
+  or shutdown does. With `_meta.progressToken` the call sends `notifications/progress` while it waits.
 - **Time limits** on each CLI child (seconds; env overrides): frames, `info`, `props` and `new` 180; contact sheets,
   `check` and `init` 600 (`SWIFT_RENDER_MCP_TIMEOUT` sets both); `render_video` and `launch_film` 3600
   (`SWIFT_RENDER_MCP_RENDER_TIMEOUT`), builds 1800 (`SWIFT_RENDER_MCP_BUILD_TIMEOUT`).
@@ -165,7 +172,7 @@ subagent with a fixed loop — list → get_comment (look at the frame, box and 
 edit the scene Swift → build → render_frames and *look* → resolve with a `file:line` summary — and
 fixed rules: one comment at a time, `body(at:)` stays pure, no whoosh/riser/swish (tick, rim, thump,
 blip, swell and harmony instead), never touch other comments, ask (reply, leave open) when a note is
-ambiguous, `check_scene` before finishing. Its `tools` are the 13 `mcp__swift-render__*` tools plus
+ambiguous, `check_scene` before finishing. Its `tools` are 14 `mcp__swift-render__*` tools (the review loop and `render_status`) plus
 `Read, Edit, Write, Glob, Grep, Bash(swift build:*)`.
 
 `.claude/skills/swift-render-review/SKILL.md` teaches any session the comment model, the MCP tools,
