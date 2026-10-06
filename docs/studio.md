@@ -167,6 +167,22 @@ swift run swift-render-studio . --scene RepoPromo --in-out 2:8 --render preview 
 - Preset names: `master1080p60`, `uhd4k`, `vertical9x16`, `square`, `preview`, `appStorePortrait`,
   `appStoreLandscape`, `gif`.
 
+The other panels have snapshot options too:
+
+| Area | Options |
+|---|---|
+| Timeline | `--wait-audio` (wait for the waveform), `--timeline-zoom <px/s>`, `--timeline-start <s>`, `--inout a,b`, `--select-clip <n\|id>`, `--hover x,y`; `-layout.timelineHeight N` sets the timeline height |
+| Review | `--comment <id\|first\|N>` selects a thread, `--compare split\|toggle\|sideBySide\|difference` opens A/B compare, `--draft x,y,w,h\|point:x,y` and `--draft-text "…"` show the composer |
+| Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
+| Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
+| Launch | `--new-launch-film` runs **New Launch Film…**: the project CLI's `launch --no-render` scan, then AppleLaunch opens with those props |
+
+```
+swift run swift-render-studio . --scene KnobLab --tab knobs --knob title.scale=1.3 --knob debug.safe=true --snapshot out/knobs.png
+swift run swift-render-studio . --scene TimelineDemo --at 2 --comment first --snapshot out/thread.png
+swift run swift-render-studio . --scene AppleLaunch --props .swift-render/launch/MyApp.json --tab props --wait-audio --snapshot out/launch.png
+```
+
 ## Packaging `swift-render Studio.app`
 
 ```
