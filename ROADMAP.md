@@ -27,9 +27,9 @@ The rule for where the line falls: anything one person can do offline on their o
 
 ---
 
-## 0.10: Studio preview *(in progress)*
+## 0.10: Studio preview *(built; not yet tagged)*
 
-The foundation for the editor and the agent loop.
+The foundation for the editor and the agent loop. Everything below is implemented and tested (336 tests, `smoke`, host/MCP smoke scripts).
 
 - **Packages for any codebase.** The CLI is now a library (`SwiftRenderTool`). Any package can ship its own `swift-render`-style executable for its own scenes. `SceneRegistryPlugin` is exported, and `swift-render.json` marks the project.
 - **`SwiftRenderKit`.** A Foundation-only shared model:
@@ -55,7 +55,8 @@ The foundation for the editor and the agent loop.
   - viewer with safe areas and A/B compare;
   - knobs, props and check report in the inspector;
   - region and range comments;
-  - agent panel and render queue;
+  - agent panel (headless Claude Code with checkpoints and revert) and render queue, including App Store preview presets;
+  - `scripts/package-studio.sh` builds an ad-hoc-signed `.app`;
   - `--snapshot` for CI.
 - **Review loop:**
   - `swift-render review list|show|add|reply|status|frame`;
@@ -66,6 +67,14 @@ The foundation for the editor and the agent loop.
   - `AppleLaunch` is a template scene that sizes itself to your data.
   - `swift-render launch <repo>` scans `Package.swift`, `.xcodeproj`, `AppIcon`, README, CHANGELOG and git, then renders a film.
   - `swift-render init` scaffolds a `Launch/` package you own.
+
+**Still open before tagging 0.10:**
+- A real model turn of the review loop: everything up to the model call is verified; run `python3 scripts/mcp-smoke.py --claude` on a machine with a signed-in `claude` CLI.
+- Studio gestures (retime drag, region drag, compare wipe, sheets) have only been exercised through snapshots and unit tests, not by hand in a visible window.
+- `init` without `--local` needs the 0.10.0 tag to exist on the remote.
+- Knob values saved from Studio's inspector fail silently when the knob file is unreadable (MCP and the CLI already report it).
+- Review `source.file` is stored as an absolute path; make it project-relative so comments survive a checkout move.
+- LaunchKit polish: the package CTA chip at 9:16, long product names on the 9:16 end card.
 
 ## 0.11: Launch everywhere
 
@@ -86,8 +95,8 @@ The foundation for the editor and the agent loop.
 - **Stability.** Stable public API: Scene protocols, Timeline, Score, LaunchKit and the host protocol, with semver guarantees.
 - **Docs site and gallery.** Launch films for popular Swift packages, made only with their maintainers' consent. Every swift-render release ships its own film.
 - **Editing.**
-  - Studio checkpoints and revert for agent runs.
   - "Bake knobs into source" (write tuned values back as literals).
+  - New Scene from a template inside Studio.
   - Multi-scene projects.
 
 ## 1.1: Review links and teams
