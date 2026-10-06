@@ -40,7 +40,12 @@ enum FrameDecoder {
         }
     }
 
-    static func decode(_ f: HostFrame, payload: Data?, fps: Int) throws -> DecodedFrame {
+    static func decode(_ f: HostFrame, payload: Data?, surface: FrameSurface? = nil, fps: Int) throws -> DecodedFrame {
+        if let surface, f.format == FrameFormat.bgra8.rawValue {
+            guard let img = surface.makeImage() else { throw FrameDecoderError.undecodable("surface \(f.width)x\(f.height)") }
+            return DecodedFrame(t: f.t, index: f.index ?? frameIndex(f.t, fps: fps), width: img.width, height: img.height,
+                                image: img, ms: f.ms, format: .bgra8, surface: surface)
+        }
         let img = try image(from: f, payload: payload)
         return DecodedFrame(t: f.t, index: f.index ?? frameIndex(f.t, fps: fps), width: img.width, height: img.height,
                             image: img, ms: f.ms, format: FrameFormat(rawValue: f.format) ?? .jpeg)

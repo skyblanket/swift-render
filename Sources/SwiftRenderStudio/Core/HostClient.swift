@@ -72,11 +72,16 @@ final class HostRouter: @unchecked Sendable {
     }
 
     func route(_ msg: HostMessage, payload: Data?) {
+        route(msg, payload: payload.map(FramePayload.bytes))
+    }
+
+    func route(_ msg: HostMessage, payload framePayload: FramePayload?) {
+        let payload = framePayload?.data, surface = framePayload?.surface
         if let id = msg.id {
             lock.lock(); let c = pending.removeValue(forKey: id); lock.unlock()
             guard let c else { return }       // late answer to an abandoned call
             if let e = msg.error { c.resume(throwing: HostClientError.host(e)) }
-            else { c.resume(returning: HostReply(result: msg.result ?? HostResult(), payload: payload)) }
+            else { c.resume(returning: HostReply(result: msg.result ?? HostResult(), payload: payload, surface: surface)) }
             return
         }
         switch msg.event {
@@ -87,7 +92,7 @@ final class HostRouter: @unchecked Sendable {
             guard let sid = msg.streamID, let f = msg.frame else { return }
             lock.lock(); let c = streams[sid]; lock.unlock()
             guard let c else { return }
-            do { c.yield(try FrameDecoder.decode(f, payload: payload, fps: fps())) }
+            do { c.yield(try FrameDecoder.decode(f, payload: payload, surface: surface, fps: fps())) }
             catch { eventsCont.yield(.init(event: "warning", message: "undecodable stream frame: \(error)")) }
         case "streamEnd":
             // Natural end, replaced by a newer stream/open, or a render error (`message`).
@@ -155,6 +160,22 @@ final class HostClient: RenderHost, @unchecked Sendable {
     private func startReader() {
         let fd = child.stdoutHandle.fileDescriptor
         let router = router
+        guard !HostFrameReader.surfacesEnabled else {
+            let thread = Thread {
+                let reader = HostFrameReader(fd: fd, pool: FrameSurfacePool.shared)
+                do {
+                    while let (msg, payload) = try reader.next() { router.route(msg, payload: payload) }
+                } catch {
+                    router.close("protocol error: \(error)")
+                }
+                router.close("stdout closed")
+            }
+            thread.name = "studio.host.stdout"
+            thread.qualityOfService = .userInteractive
+            thread.start()
+            return
+        }
+        // SR_PREVIEW_TRANSPORT=data: the previous Data path, kept for A/B comparisons.
         let thread = Thread {
             var decoder = HostStreamDecoder()
             let cap = 1 << 20
@@ -207,7 +228,7 @@ final class HostClient: RenderHost, @unchecked Sendable {
     func frame(t: Double, maxWidth: Int, format: FrameFormat) async throws -> DecodedFrame {
         let reply = try await call(.frame, HostParams(t: t, maxWidth: maxWidth, format: format.rawValue))
         guard let f = reply.result.frame else { throw HostClientError.protocolError("frame result without frame") }
-        return try FrameDecoder.decode(f, payload: reply.payload, fps: fpsBox.value)
+        return try FrameDecoder.decode(f, payload: reply.payload, surface: reply.surface, fps: fpsBox.value)
     }
 
     func openStream(from: Double, to: Double?, fps: Int, maxWidth: Int, format: FrameFormat,
