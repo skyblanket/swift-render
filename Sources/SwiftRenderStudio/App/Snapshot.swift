@@ -26,7 +26,7 @@ enum SnapshotRunner {
         let model = ProjectModel(root: root, options: options)
         let size = options.windowSize ?? NSSize(width: 1600, height: 1000)
 
-        let hosting = NSHostingController(rootView: ProjectWindowContent(model: model))
+        let hosting = NSHostingController(rootView: ProjectWindowContent(model: model).environment(\.controlActiveState, .key))
         hosting.sceneBridgingOptions = [.toolbars, .title]
         hosting.sizingOptions = []          // the window size is ours, not the content's ideal size
         let window = SnapshotWindow(contentRect: NSRect(origin: .zero, size: size),
@@ -374,9 +374,13 @@ enum SnapshotRunner {
 
 /// Same size on every machine: AppKit would otherwise clamp a titled window to the
 /// current screen, so snapshots taken on a laptop and a desktop would differ.
-/// The snapshot process's NSApplication: drops every keyboard and pointer event, so a
-/// window that draws as key can't act on input meant for another app.
+/// The snapshot process's NSApplication: reports itself active and drops every keyboard
+/// and pointer event, so a window that draws as key can't act on input meant elsewhere.
 final class SnapshotApplication: NSApplication {
+    /// Draw as the active app (prominent buttons and selections in the accent) without
+    /// ever activating, so the snapshot never takes focus from the person's work.
+    override var isActive: Bool { true }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,

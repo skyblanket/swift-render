@@ -274,6 +274,11 @@ struct ThreadView: View {
             }
             HStack(spacing: StudioStyle.Space.s) {
                 switch state {
+                case .readyForReview where model.ui.compare != nil:
+                    // Compare's own bar carries Looks Good and Not Quite while it's open.
+                    Text("Decide in Compare, or reply here.")
+                        .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 case .readyForReview:
                     Button("Not Quite") { reopen(c) }
                     Spacer(minLength: 0)
