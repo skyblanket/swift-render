@@ -223,11 +223,15 @@ struct AskAgentSheet: View {
         agentModel = defaultModel
         budget = defaultBudget > 0 ? defaultBudget : 2
         let open = candidates.filter { $0.status == .open }
+        // Threads posted with "Post & Ask Claude" or that mention @claude ride along with the selection.
+        let queued = model.review.agentQueue.filter { id in candidates.contains { $0.id == id } }
         if !buildErrors.isEmpty {
             fixBuild = true
-            picked = model.review.selection.map { [$0] } ?? []
+            picked = Set(model.review.selection.map { [$0] } ?? []).union(queued)
         } else if let sel = model.review.selection, candidates.contains(where: { $0.id == sel }) {
-            picked = [sel]
+            picked = Set([sel]).union(queued)
+        } else if !queued.isEmpty {
+            picked = queued
         } else {
             picked = Set(open.map(\.id))
         }
@@ -238,6 +242,7 @@ struct AskAgentSheet: View {
         r.prompt = ""
         r.systemPrompt = ""
         model.agent.ask(r, info: model.info)
+        model.review.clearAgentQueue()
         model.ui.showAgentPanel = true
         dismiss()
     }

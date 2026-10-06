@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(ToolPaths.overrideKey("swift")) private var swiftPath = ""
     @AppStorage(ToolPaths.overrideKey("claude")) private var claudePath = ""
     @AppStorage(ToolPaths.overrideKey("git")) private var gitPath = ""
+    @AppStorage(ToolPaths.overrideKey("ffmpeg")) private var ffmpegPath = ""
     @AppStorage("cacheBudgetMB") private var cacheBudgetMB = 1024
     @AppStorage("playbackQuality") private var quality = PlaybackQuality.auto.rawValue
     @AppStorage("agentModel") private var agentModel = ""
@@ -22,6 +23,7 @@ struct SettingsView: View {
                     TextField("swift", text: $swiftPath, prompt: Text("/usr/bin/swift"))
                     TextField("claude", text: $claudePath, prompt: Text("~/.local/bin/claude"))
                     TextField("git", text: $gitPath, prompt: Text("/usr/bin/git"))
+                    TextField("ffmpeg", text: $ffmpegPath, prompt: Text("/opt/homebrew/bin/ffmpeg"))
                 }
             }
             .tabItem { Label("General", systemImage: "gearshape") }

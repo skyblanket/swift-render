@@ -372,19 +372,23 @@ await SwiftRenderCommand.main(scenes: generatedSceneRunners)
 
 """
 
-private let mcpJSON = """
+/// Same launcher as swift-render's own `.mcp.json`: build output goes to stderr so it can't
+/// corrupt the stdio protocol, then the server runs from the project root (found from the cwd).
+private let mcpJSON = #"""
 {
   "mcpServers": {
     "swift-render": {
       "type": "stdio",
-      "command": "swift",
-      "args": ["run", "--quiet", "swift-render-mcp"],
-      "env": { "SWIFT_RENDER_ROOT": "." }
+      "command": "sh",
+      "args": [
+        "-c",
+        "swift build -q --product swift-render-mcp 1>&2 && exec \"$(swift build --show-bin-path)/swift-render-mcp\""
+      ]
     }
   }
 }
 
-"""
+"""#
 
 private func launchReadme(typeName: String, name: String) -> String {
     """
