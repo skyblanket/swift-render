@@ -58,18 +58,27 @@ public struct Project: Sendable, Equatable {
         return Project(root: root, config: cfg ?? ProjectConfig())
     }
 
-    /// Resolve the project for a process: `$SWIFT_RENDER_ROOT`, else the nearest
-    /// ancestor of `start` (default: cwd) with a `swift-render.json`, else the
-    /// nearest with a `Package.swift`. The marker file wins over Package.swift so
-    /// a `MyApp/Launch/` package isn't shadowed by `MyApp/Package.swift`.
+    /// Resolve the project for a process: `$SWIFT_RENDER_ROOT` (only when no explicit
+    /// `start` is given — a folder the user picked wins over the environment), else the
+    /// nearest ancestor of `start` (default: cwd) with a `swift-render.json`, else the
+    /// nearest with a `Package.swift`. The marker file wins over Package.swift so a
+    /// `MyApp/Launch/` package isn't shadowed by `MyApp/Package.swift`; and from an
+    /// app root whose `Launch/` holds the swift-render package (what `init` creates),
+    /// that `Launch/` is the project.
     public static func discover(from start: URL? = nil) -> Project? {
-        if let env = ProcessInfo.processInfo.environment["SWIFT_RENDER_ROOT"], !env.isEmpty {
+        if start == nil, let env = ProcessInfo.processInfo.environment["SWIFT_RENDER_ROOT"], !env.isEmpty {
             return open(URL(fileURLWithPath: env, isDirectory: true))
         }
         let begin = (start ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
             .standardizedFileURL
         if let marked = nearest(from: begin, containing: "swift-render.json") { return open(marked) }
-        if let pkg = nearest(from: begin, containing: "Package.swift") { return open(pkg) }
+        if let pkg = nearest(from: begin, containing: "Package.swift") {
+            let launch = pkg.appendingPathComponent("Launch", isDirectory: true)
+            if FileManager.default.fileExists(atPath: launch.appendingPathComponent("swift-render.json").path) {
+                return open(launch)
+            }
+            return open(pkg)
+        }
         return nil
     }
 
@@ -92,12 +101,44 @@ public struct Project: Sendable, Equatable {
     public var cacheDir: URL { dotDir.appendingPathComponent("cache", isDirectory: true) }
     public var rendersDir: URL { root.appendingPathComponent("out", isDirectory: true) }
 
-    public func reviewURL(scene: String) -> URL { reviewsDir.appendingPathComponent("\(scene).json") }
-    public func knobsURL(scene: String) -> URL { knobsDir.appendingPathComponent("\(scene).json") }
+    // Per-scene files are always direct children of their directory: a scene name is
+    // a Swift type name, and anything else (a "../" from an agent's tool call, a
+    // crafted review file) maps to a harmless file name instead of a path.
+    public func reviewURL(scene: String) -> URL {
+        reviewsDir.appendingPathComponent("\(Self.fileComponent(scene: scene)).json")
+    }
+    public func knobsURL(scene: String) -> URL {
+        knobsDir.appendingPathComponent("\(Self.fileComponent(scene: scene)).json")
+    }
 
     /// Saved props variants for a PropsScene, one JSON file each (Studio's Props tab).
     public var propsDir: URL { dotDir.appendingPathComponent("props", isDirectory: true) }
-    public func propsVariantsDir(scene: String) -> URL { propsDir.appendingPathComponent(scene, isDirectory: true) }
+    public func propsVariantsDir(scene: String) -> URL {
+        propsDir.appendingPathComponent(Self.fileComponent(scene: scene), isDirectory: true)
+    }
+
+    /// Scene names are Swift type names (SceneRegistryPlugin registers `public struct X`
+    /// as "X"): ASCII letters, digits and `_`, not starting with a digit.
+    public static func isValidSceneName(_ name: String) -> Bool {
+        let scalars = name.unicodeScalars
+        guard let first = scalars.first, scalars.count <= 200, !("0"..."9").contains(first) else { return false }
+        return scalars.allSatisfy(isWordScalar)
+    }
+
+    /// `scene` itself when it is a valid scene name; otherwise one path component with
+    /// every character outside `[A-Za-z0-9_-]` replaced by `_` (never "..", never a
+    /// "/"), prefixed with `_invalid_`.
+    public static func fileComponent(scene: String) -> String {
+        if isValidSceneName(scene) { return scene }
+        let safe = String(String.UnicodeScalarView(scene.unicodeScalars.prefix(120).map {
+            isWordScalar($0) || $0 == "-" ? $0 : "_"
+        }))
+        return "_invalid_" + safe
+    }
+
+    private static func isWordScalar(_ u: Unicode.Scalar) -> Bool {
+        ("a"..."z").contains(u) || ("A"..."Z").contains(u) || ("0"..."9").contains(u) || u == "_"
+    }
 
     /// Default comment author: config, then `git config user.name`, then the login name.
     public func defaultAuthorName() -> String {

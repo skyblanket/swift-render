@@ -135,6 +135,10 @@ struct ReviewCLI {
         let filter = try ReviewStatus.parseFilter(args.values["--status"] ?? "active")
         var entries = store.all(status: filter).map { ReviewEntry(scene: $0.scene, comment: $0.comment) }
         if let scene = args.values["--scene"] { entries = entries.filter { $0.scene == scene } }
+        // A review file that doesn't decode is skipped by `all` — never report that as "no comments" silently.
+        for (scene, error) in store.unreadableScenes() {
+            fputs("[swift-render] warning: can't read the review file for \(scene); its comments are not listed: \(error)\n", stderr)
+        }
         if json { return try encode(entries) }
         if entries.isEmpty { return "no comments" + (filter == nil ? "" : " (\(statusWords(filter)))") + "\n" }
         var out = ""
@@ -267,7 +271,7 @@ struct ReviewCLI {
     func frame() throws -> String {
         let e = try store.resolve(id: try args.positional(0, "comment id"))
         let out = args.values["--out"].map { URL(fileURLWithPath: $0) }
-            ?? project.cacheDir.appendingPathComponent("frames/\(e.comment.id).png")
+            ?? project.cacheDir.appendingPathComponent("frames/\(ReviewIDs.fileSafe(e.comment.id)).png")
         try project.ensureDotDir()
         let tmp = project.cacheDir.appendingPathComponent("frames/.raw-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: tmp) }

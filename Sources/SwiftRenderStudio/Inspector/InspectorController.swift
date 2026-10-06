@@ -41,7 +41,8 @@ final class InspectorController {
         }
         if let file = o.propsFile {
             let url = URL(fileURLWithPath: file, relativeTo: model.project.root)
-            if let text = try? String(contentsOf: url, encoding: .utf8) {
+            // Props scanned from another app root carry paths relative to that root.
+            if let text = try? PropsAssets.read(url, projectRoot: model.project.root) {
                 loadPropsEditor(text)
                 await applyProps()
             } else {

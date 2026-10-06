@@ -141,15 +141,38 @@ public enum KnobValue: Codable, Sendable, Equatable, Hashable {
     public var stringValue: String? { if case .string(let s) = self { return s }; return nil }
 }
 
+public struct KnobFileError: Error, CustomStringConvertible {
+    public var url: URL
+    public var reason: String
+    public var description: String {
+        "\(url.path) is not a valid knob file (\(reason)) — fix it by hand or delete it; it was left untouched"
+    }
+}
+
 /// Load/save knob overrides for one scene. Missing file = no overrides.
 public enum KnobFile {
+    /// Lenient: a missing *or unreadable* file reads as no overrides (renders keep going).
+    /// Read-modify-write callers use `loadStrict`, and `save` never replaces a broken file.
     public static func load(_ url: URL) -> [String: KnobValue] {
-        guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONDecoder().decode([String: KnobValue].self, from: data) else { return [:] }
-        return dict
+        (try? loadStrict(url)) ?? [:]
     }
 
+    /// [:] only when the file doesn't exist; throws when it exists but isn't a flat
+    /// `{key: number | bool | string}` object (merge conflict markers, a typo, a
+    /// different kind of JSON).
+    public static func loadStrict(_ url: URL) throws -> [String: KnobValue] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch { throw KnobFileError(url: url, reason: "\(error.localizedDescription)") }
+        do { return try JSONDecoder().decode([String: KnobValue].self, from: data) }
+        catch { throw KnobFileError(url: url, reason: "\(error)") }
+    }
+
+    /// Writes `values` (an empty set removes the file). Refuses — throwing
+    /// `KnobFileError` — to overwrite or remove an existing file that isn't valid knob
+    /// JSON, so a conflicted or hand-broken file is never silently replaced.
     public static func save(_ values: [String: KnobValue], to url: URL) throws {
+        _ = try loadStrict(url)        // throws for an existing file that isn't knob JSON (or a directory)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if values.isEmpty {
             try? FileManager.default.removeItem(at: url)
