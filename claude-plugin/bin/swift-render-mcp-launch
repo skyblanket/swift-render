@@ -2,25 +2,62 @@
 # Starts swift-render-mcp for the project in the current directory (the Claude Code
 # session's project). stdout belongs to the MCP protocol; everything else goes to stderr.
 #
+# Plugin MCP servers start in every session, in every directory, without the per-project
+# approval a project .mcp.json gets — so this launcher never builds or runs code from the
+# current directory unless you said that directory is trusted. Lookup order:
+#
 #   1. $SWIFT_RENDER_MCP — an explicit binary
-#   2. the project's own build of the server: works in the swift-render repo and in any
-#      package that depends on swift-render — here, or in ./Launch (what `swift-render init`
-#      creates inside an app's repo)
-#   3. swift-render-mcp on PATH
-if [ -n "$SWIFT_RENDER_MCP" ]; then
+#   2. swift-render-mcp on PATH
+#   3. the server shipped in "swift-render Studio.app" (/Applications or ~/Applications)
+#   4. a build from the project here (or ./Launch, what `swift-render init` creates) —
+#      only when SWIFT_RENDER_MCP_BUILD=1, or the project's directory is listed (one
+#      absolute path per line) in ${XDG_CONFIG_HOME:-~/.config}/swift-render/trusted-projects.
+#      It must depend on swift-render (Package.resolved pins it, or it is the swift-render
+#      package itself), and dependencies are never fetched or re-resolved at session start.
+#
+# The server finds its project from the cwd; when this directory's swift-render package
+# is ./Launch, SWIFT_RENDER_ROOT points it there.
+
+if [ -z "${SWIFT_RENDER_ROOT:-}" ] && [ ! -f swift-render.json ] && [ -f Launch/swift-render.json ]; then
+  SWIFT_RENDER_ROOT="$(cd Launch && pwd)"
+  export SWIFT_RENDER_ROOT
+fi
+
+if [ -n "${SWIFT_RENDER_MCP:-}" ]; then
   exec "$SWIFT_RENDER_MCP" "$@"
 fi
-for dir in . Launch; do
-  [ -f "$dir/Package.swift" ] || continue
-  if (cd "$dir" && swift build -q --product swift-render-mcp) 1>&2; then
-    # The server finds its project by walking up from the cwd; point it down into Launch/.
-    [ "$dir" = . ] || export SWIFT_RENDER_ROOT="${SWIFT_RENDER_ROOT:-$(cd "$dir" && pwd)}"
-    exec "$(cd "$dir" && swift build --show-bin-path)/swift-render-mcp" "$@"
-  fi
-done
 if command -v swift-render-mcp >/dev/null 2>&1; then
   exec swift-render-mcp "$@"
 fi
-echo "swift-render plugin: no swift-render-mcp for $(pwd). Run Claude Code in a swift-render" \
-     "project (a package that depends on swift-render), or set SWIFT_RENDER_MCP to the binary." >&2
+for app in "/Applications/swift-render Studio.app" "$HOME/Applications/swift-render Studio.app"; do
+  if [ -x "$app/Contents/MacOS/swift-render-mcp" ]; then
+    exec "$app/Contents/MacOS/swift-render-mcp" "$@"
+  fi
+done
+
+trusted() {   # $1: absolute directory
+  [ "${SWIFT_RENDER_MCP_BUILD:-}" = 1 ] && return 0
+  list="${XDG_CONFIG_HOME:-$HOME/.config}/swift-render/trusted-projects"
+  [ -f "$list" ] && grep -Fxq -- "$1" "$list"
+}
+depends_on_swift_render() {   # $1: package directory
+  grep -Eq '"identity" *: *"swift-render"' "$1/Package.resolved" 2>/dev/null && return 0
+  grep -Eq '^ *name: *"SwiftRender"' "$1/Package.swift" 2>/dev/null   # the swift-render package itself
+}
+
+for dir in . Launch; do
+  [ -f "$dir/Package.swift" ] || continue
+  abs="$(cd "$dir" && pwd)"
+  trusted "$abs" || trusted "$(pwd)" || continue
+  depends_on_swift_render "$abs" || continue
+  if (cd "$abs" && swift build -q --disable-automatic-resolution --product swift-render-mcp) 1>&2; then
+    [ "$dir" = . ] || export SWIFT_RENDER_ROOT="${SWIFT_RENDER_ROOT:-$abs}"
+    exec "$(cd "$abs" && swift build --disable-automatic-resolution --show-bin-path)/swift-render-mcp" "$@"
+  fi
+done
+
+echo "swift-render plugin: no swift-render-mcp to run for $(pwd)." \
+     "Put swift-render-mcp on PATH (or install swift-render Studio), set SWIFT_RENDER_MCP to the binary," \
+     "or trust this project so the plugin may build it here:" \
+     "echo \"$(pwd)\" >> \"${XDG_CONFIG_HOME:-$HOME/.config}/swift-render/trusted-projects\"" >&2
 exit 1
