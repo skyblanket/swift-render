@@ -171,6 +171,33 @@ Timeline(t) {
 Transitions: `.cut` `.fade(d)` `.slide(d, from: .trailing)` `.flash(d)` `.overlap(d)`.
 `stagger(t, i, step: 0.06, ramp: 0.4)` gives cascading per-element progress.
 
+## Knobs and clip labels
+
+Name clips and expose tunable constants so Studio, review comments and agents can point at them.
+Neither changes a pixel: a label is metadata, and a knob with no override returns its literal.
+
+```swift
+Timeline(t) {
+    Clip(2.0) { l in Title(t: l) }.named("Title")
+    Clip(3.0) { l in Demo(t: l) }.transition(.fade(0.4)).named("Demo")
+}
+Timeline(l, label: "Outro") { … }                       // name a nested lane
+
+let delay = Knob.double("title.delay", 0.4, in: 0...2)   // range = Studio slider, not a clamp
+let accent = Knob.color("accent", "#C7FF1A")             // "#RRGGBB" or "#RRGGBBAA"
+let line = Knob.text("title.text", "Ship it.")
+let grid = Knob.bool("debug.grid", false)
+```
+
+- Read knobs inside `body` / `soundtrack`, never in a `static let` (it would freeze the first value).
+- Keys are dotted and stable (`"<clip>.<property>"`); changing a key orphans its saved override.
+- Overrides live in `.swift-render/knobs/<Scene>.json` (`{"title.delay": 0.6}`) and apply to every render.
+- `swift-render info <Scene> --json` lists clips (`id`, `label`, `start`, `end`, `depth`, `parentID`,
+  `source` file:line), knobs (`key`, `value`, `defaultValue`, `source`) and score events by lane.
+- Clip ids look like `"1:21.260:284"` (depth:start:line). When a comment anchors to an unnamed clip,
+  add `.named(...)` so it reads as a word, not a line number.
+- Use `.named` on new clips by default; keep labels short and unique within a Timeline.
+
 ## Springs and extra easings
 
 ```swift

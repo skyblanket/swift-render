@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.swiftrender.studio</string>
+	<key>CFBundleName</key>
+	<string>swift-render Studio</string>
+	<key>CFBundleDisplayName</key>
+	<string>swift-render Studio</string>
+	<key>CFBundleExecutable</key>
+	<string>swift-render-studio</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.10.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.video</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>swift-render Studio asks Xcode to open scene sources at the line you clicked.</string>
+</dict>
+</plist>
