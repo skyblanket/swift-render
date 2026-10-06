@@ -122,7 +122,8 @@ struct Checkpoint: Equatable, Sendable {
 
     /// Puts `files` back as they were at the checkpoint. Returns what couldn't be restored.
     @discardableResult
-    func revert(files: [String]) throws -> [String] {
+    func revert(files: [String],
+                trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) throws -> [String] {
         let rels = Array(Set(files.compactMap(relative))).sorted()
         var tracked: [String] = []
         var skipped: [String] = []
@@ -136,7 +137,7 @@ struct Checkpoint: Equatable, Sendable {
             } else if untracked.contains(rel) {
                 skipped.append(rel)         // untracked and too large to have been kept
             } else if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                try trash(url)
             }
         }
         if !tracked.isEmpty {

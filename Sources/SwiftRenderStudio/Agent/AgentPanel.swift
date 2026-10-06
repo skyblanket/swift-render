@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SwiftRenderKit
 
@@ -72,6 +73,27 @@ struct AgentPanel: View {
                         .buttonStyle(.borderless)
                         .help("Clear transcript")
                 }
+            }
+            if let run = agent.currentRun {
+                Menu {
+                    if let p = run.prompt {
+                        Button("Copy Prompt") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(p, forType: .string)
+                        }
+                    }
+                    if let log = run.logURL, FileManager.default.fileExists(atPath: log.path) {
+                        Button("Show Raw Stream in Finder") { SourceOpener.reveal(log) }
+                    }
+                    if let sid = run.sessionID {
+                        Button("Copy Session ID") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(sid, forType: .string)
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Prompt, raw stream, session")
             }
             Button { model.ui.showAgentPanel = false } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.borderless)

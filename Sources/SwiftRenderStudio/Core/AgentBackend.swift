@@ -52,6 +52,8 @@ struct AgentRequest: Sendable, Equatable {
     /// Filled by `AgentController` from `AgentPrompt` before the backend sees the request.
     var prompt: String = ""
     var systemPrompt: String = ""
+    /// Where the backend keeps the raw stream (`.swift-render/cache/agent/<run>.jsonl`).
+    var logURL: URL?
 }
 
 /// A tool call as the panel shows it.
@@ -77,6 +79,8 @@ enum AgentEvent: Sendable, Equatable {
     case toolResult(id: String, ok: Bool, summary: String)
     /// Non-fatal: a pending MCP server, a permission denial, an API retry.
     case notice(String)
+    /// The backend's own setup steps ("Building swift-render-mcp…").
+    case progress(String)
     case finished(ok: Bool, costUSD: Double?, seconds: Double, result: String?)
 }
 

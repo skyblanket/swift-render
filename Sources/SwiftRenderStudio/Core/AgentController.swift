@@ -50,6 +50,9 @@ struct AgentRun: Identifiable, Equatable, Sendable {
     var checkpoint: Checkpoint?
     var checkpointError: String?
     var reverted = false
+    /// What Studio sent, and the raw stream-json the backend saw (debugging, bug reports).
+    var prompt: String?
+    var logURL: URL?
 
     var canRevert: Bool { finished && !reverted && checkpoint != nil && !touched.isEmpty }
     func stat(for path: String) -> Checkpoint.FileStat? {
@@ -128,6 +131,7 @@ final class AgentController {
 
         let entries = req.commentIDs.compactMap { try? store.resolve(id: $0) }
         req.commentIDs = entries.map(\.comment.id)
+        update(runID) { $0.commentIDs = req.commentIDs }
         if req.mode.edits {
             var claimed: [String] = []
             for e in entries where e.comment.status == .open
@@ -143,6 +147,8 @@ final class AgentController {
         let made = AgentPrompt.make(req, info: info, comments: entries.map(\.comment))
         req.prompt = made.prompt
         req.systemPrompt = made.system
+        req.logURL = project.cacheDir.appendingPathComponent("agent/\(runID).jsonl")
+        update(runID) { $0.logURL = req.logURL; $0.prompt = made.prompt }
 
         do {
             for try await e in backend.run(req) { handle(e, runID: runID) }
@@ -183,6 +189,15 @@ final class AgentController {
             update(id) { $0.sessionID = sid; if let model { $0.model = model } }
             let parts = ["Session \(sid.prefix(8))", model, mcp.map { "swift-render \($0)" }].compactMap { $0 }
             status(parts.joined(separator: " · "))
+            // init arrives before the first API call: without the review tools a comment run
+            // can only burn budget, so stop it here.
+            if mcp == "failed", runs.first(where: { $0.id == id })?.commentIDs.isEmpty == false {
+                transcript.append(AgentTranscriptRow(kind: .error, title:
+                    "The swift-render MCP server failed to start (another swift build holding .build? a compile error in the server?). Stopped before the first turn."))
+                stop()
+            }
+        case .progress(let s):
+            status(s)
         case .text(let s):
             transcript.append(AgentTranscriptRow(kind: .text, title: s))
         case .tool(let call):
@@ -228,7 +243,9 @@ final class AgentController {
             if (try? store.setStatus(scene: e.scene, id: id, .open)) != nil { released.append(id) }
         }
         if !released.isEmpty {
-            notice("Back to open: " + released.joined(separator: ", "))
+            // Above the final line, which stays last.
+            let row = AgentTranscriptRow(kind: .notice, title: "Back to open: " + released.joined(separator: ", "))
+            if transcript.last?.kind == .finished { transcript.insert(row, at: transcript.count - 1) } else { transcript.append(row) }
             onReviewsChanged?()
         }
 

@@ -37,13 +37,16 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
     ]
 
     private let resolveExecutable: @Sendable () async -> URL?
+    private let prebuildMCP: Bool
     private let lock = NSLock()
     private var child: ChildProcess?
     private var cancelled = false
 
     /// `executable`: tests substitute a script that replays recorded stream-json.
-    init(executable: (@Sendable () async -> URL?)? = nil) {
+    /// `prebuildMCP`: build swift-render-mcp before spawning claude (see `buildMCPServer`).
+    init(executable: (@Sendable () async -> URL?)? = nil, prebuildMCP: Bool = true) {
         resolveExecutable = executable ?? { await ToolPaths.resolve("claude") }
+        self.prebuildMCP = prebuildMCP
     }
 
     // MARK: Command line
@@ -112,6 +115,10 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
                     cont.finish(throwing: BackendError.claudeNotFound); return
                 }
                 let root = request.project.root
+                if self.prebuildMCP {
+                    cont.yield(.progress("Building swift-render-mcp…"))
+                    if let why = await self.buildMCPServer(root) { cont.yield(.notice(why)) }
+                }
                 let child = ChildProcess(exe, Self.arguments(for: request), cwd: root,
                                          env: Self.environment(), qos: .userInitiated)
                 if !self.adopt(child) {
@@ -123,8 +130,11 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
                 }
                 child.closeStdin()      // -p reads piped stdin as extra input; give it EOF
                 let start = Date()
+                let log = Self.openLog(request.logURL)
+                defer { try? log?.close() }
                 var decoder = ClaudeStreamDecoder(root: root.path)
                 for await line in child.stdoutLines {
+                    log?.write(line + Data("\n".utf8))
                     for e in decoder.decode(line) { cont.yield(e) }
                 }
                 let term = await child.waitForExit()
@@ -143,6 +153,32 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
                 _ = task
             }
         }
+    }
+
+    /// The MCP launcher (`.mcp.json` or the inline config) runs `swift build --product
+    /// swift-render-mcp` inside claude's MCP connect timeout, and fails the server when
+    /// another SwiftPM holds `.build`'s lock. Building it here first waits out the lock
+    /// (Stop still works) and leaves the launcher a no-op. nil on success.
+    private func buildMCPServer(_ root: URL) async -> String? {
+        guard let swift = await ToolPaths.resolve("swift") else { return nil }
+        let build = ChildProcess(swift, ["build", "-q", "--product", "swift-render-mcp"], cwd: root,
+                                 env: ToolPaths.environment, qos: .userInitiated)
+        guard adopt(build) else { return nil }
+        defer { release(build) }
+        do { try build.run() } catch { return "Couldn't prebuild swift-render-mcp: \(error)" }
+        build.closeStdin()
+        for await _ in build.stdoutLines {}
+        let t = await build.waitForExit()
+        if t.status == 0 || isCancelled { return nil }
+        let tail = build.stderrTail.split(whereSeparator: \.isNewline).suffix(2).joined(separator: " ")
+        return "swift-render-mcp didn't build (\(tail.isEmpty ? "exit \(t.status)" : tail)) — review tools may be missing"
+    }
+
+    private static func openLog(_ url: URL?) -> FileHandle? {
+        guard let url else { return nil }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else { return nil }
+        return try? FileHandle(forWritingTo: url)
     }
 
     /// Records the running child; false when a cancel already arrived.
