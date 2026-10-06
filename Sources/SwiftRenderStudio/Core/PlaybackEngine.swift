@@ -115,6 +115,10 @@ final class PlaybackEngine {
     @ObservationIgnored private var scrubPending: FrameAsk?
     @ObservationIgnored private var sharpenTask: Task<Void, Never>?
     @ObservationIgnored private(set) var framesRequested = 0
+    /// Responses that arrived for an older generation and were dropped.
+    @ObservationIgnored private(set) var staleDropped = 0
+    /// No single-frame request in flight or pending (tests, snapshot).
+    var isRequestIdle: Bool { !scrubInFlight && scrubPending == nil }
 
     // Play state.
     @ObservationIgnored private var anchorT = 0.0
@@ -458,7 +462,7 @@ final class PlaybackEngine {
     }
 
     private func receivedStreamFrame(_ f: DecodedFrame, stream s: ActiveStream) {
-        guard s.generation == generation else { return }
+        guard s.generation == generation else { staleDropped += 1; return }
         cache.put(f, generation: s.generation)
         noteRender(ms: f.ms)
         s.head = f.t
@@ -504,7 +508,7 @@ final class PlaybackEngine {
     }
 
     private func receivedFrame(_ f: DecodedFrame, generation gen: Int) {
-        guard gen == generation else { return }
+        guard gen == generation else { staleDropped += 1; return }
         cache.put(f, generation: gen)
         noteRender(ms: f.ms)
         lastError = nil

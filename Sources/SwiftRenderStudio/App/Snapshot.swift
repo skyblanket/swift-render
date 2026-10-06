@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import SwiftRenderKit
 
@@ -78,41 +79,120 @@ enum SnapshotRunner {
         return renderLayers(window)
     }
 
-    /// CALayer tree render: sees layer contents, but not WindowServer-composited materials.
+    /// CALayer tree render: sees layer contents, but not WindowServer-composited materials,
+    /// and ignores layer `filters`. Vibrant text and symbols (sidebar, inspector, toolbar
+    /// glass) are drawn in a placeholder gray and turned into white-at-alpha by a
+    /// `vibrantColorMatrix` filter, so those layers are rendered in a second pass and the
+    /// matrix is applied with Core Image before compositing them back.
     static func renderLayers(_ window: NSWindow) -> Data? {
-        guard let frameView = window.contentView?.superview, let layer = frameView.layer else { return nil }
+        guard let frameView = window.contentView?.superview, let root = frameView.layer else { return nil }
         let scale = window.backingScaleFactor
         let size = frameView.bounds.size
         let w = Int(size.width * scale), h = Int(size.height * scale)
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
-        ctx.setFillColor(CGColor(gray: 0.13, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
-        ctx.scaleBy(x: scale, y: scale)
-        if layer.isGeometryFlipped == false && frameView.isFlipped {
-            ctx.translateBy(x: 0, y: size.height); ctx.scaleBy(x: 1, y: -1)
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        func context() -> CGContext? {
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
+            ctx.scaleBy(x: scale, y: scale)
+            if !root.isGeometryFlipped && frameView.isFlipped {
+                ctx.translateBy(x: 0, y: size.height); ctx.scaleBy(x: 1, y: -1)
+            }
+            return ctx
         }
-        if ProcessInfo.processInfo.environment["SR_SNAPSHOT_DEBUG"] == "1" {
-            var counts: [String: Int] = [:]
-            func walk(_ l: CALayer) { counts[String(describing: type(of: l)), default: 0] += 1; l.sublayers?.forEach(walk) }
-            walk(layer)
-            print(counts.sorted { $0.key < $1.key })
-        }
+
         // Backdrop/glass layers are composited by the WindowServer and render as garbage
-        // here; hide them for the capture so the dark base shows through.
-        let hide = (ProcessInfo.processInfo.environment["SR_SNAPSHOT_HIDE"] ?? "CABackdropLayer,CASDFLayer,SDFLayer,CAChameleonLayer,CAPortalLayer,SDFPortalLayer,CASDFElementLayer")
-            .split(separator: ",").map(String.init)
+        // here; hide them so the dark base shows through.
+        let hide = Set((ProcessInfo.processInfo.environment["SR_SNAPSHOT_HIDE"]
+            ?? "CABackdropLayer,CASDFLayer,SDFLayer,CAChameleonLayer,CAPortalLayer,SDFPortalLayer,CASDFElementLayer")
+            .split(separator: ",").map(String.init))
         var hidden: [CALayer] = []
-        func walkHide(_ l: CALayer) {
-            if hide.contains(String(describing: type(of: l))), !l.isHidden { l.isHidden = true; hidden.append(l) }
-            l.sublayers?.forEach(walkHide)
+        var vibrant: [(layer: CALayer, matrix: [Float])] = []
+        func walk(_ l: CALayer) {
+            guard !l.isHidden, l.opacity > 0 else { return }
+            if hide.contains(String(describing: type(of: l))) { l.isHidden = true; hidden.append(l); return }
+            if let m = vibrantMatrix(l) {
+                l.isHidden = true; hidden.append(l)
+                if m[18] > 0.001 { vibrant.append((l, m)) }       // alpha row ~0: an invisible tint
+                return
+            }
+            l.sublayers?.forEach(walk)
         }
-        walkHide(layer)
-        layer.render(in: ctx)
-        hidden.forEach { $0.isHidden = false }
-        guard let img = ctx.makeImage() else { return nil }
-        return NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+        walk(root)
+        defer { hidden.forEach { $0.isHidden = false } }
+
+        guard let base = context() else { return nil }
+        base.saveGState()
+        base.setFillColor(CGColor(gray: 0.13, alpha: 1))
+        base.fill(CGRect(origin: .zero, size: size))
+        root.render(in: base)
+        base.restoreGState()
+        guard var image = base.makeImage() else { return nil }
+
+        // Second pass: one transparent layer per distinct matrix, recolored, then composited.
+        let all = CGRect(x: 0, y: 0, width: w, height: h)
+        let ci = CIContext(options: [.workingColorSpace: space, .outputColorSpace: space])
+        for (matrix, members) in Dictionary(grouping: vibrant, by: { $0.matrix }) {
+            guard let ctx = context() else { continue }
+            for (layer, _) in members {
+                ctx.saveGState()
+                if let clip = clipRect(layer, in: root) { ctx.clip(to: clip) }
+                ctx.concatenate(transform(from: layer, to: root))
+                layer.isHidden = false
+                layer.render(in: ctx)
+                layer.isHidden = true
+                ctx.restoreGState()
+            }
+            guard let raw = ctx.makeImage(), let f = CIFilter(name: "CIColorMatrix") else { continue }
+            f.setValue(CIImage(cgImage: raw), forKey: kCIInputImageKey)
+            let row = { (i: Int) in CIVector(x: CGFloat(matrix[i]), y: CGFloat(matrix[i + 1]),
+                                             z: CGFloat(matrix[i + 2]), w: CGFloat(matrix[i + 3])) }
+            f.setValue(row(0), forKey: "inputRVector"); f.setValue(row(5), forKey: "inputGVector")
+            f.setValue(row(10), forKey: "inputBVector"); f.setValue(row(15), forKey: "inputAVector")
+            f.setValue(CIVector(x: CGFloat(matrix[4]), y: CGFloat(matrix[9]), z: CGFloat(matrix[14]),
+                                w: CGFloat(matrix[19])), forKey: "inputBiasVector")
+            guard let out = f.outputImage?.cropped(to: all),
+                  let tinted = ci.createCGImage(out, from: all),
+                  let comp = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                       bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { continue }
+            comp.draw(image, in: all)
+            comp.draw(tinted, in: all)
+            if let merged = comp.makeImage() { image = merged }
+        }
+        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+
+    /// The 4x5 matrix of a layer's `vibrantColorMatrix` filter (a private CAFilter, read via KVC).
+    private static func vibrantMatrix(_ l: CALayer) -> [Float]? {
+        guard let filters = l.filters else { return nil }
+        for case let f as NSObject in filters where (f.value(forKey: "name") as? String) == "vibrantColorMatrix" {
+            guard let v = f.value(forKey: "inputColorMatrix") as? NSValue else { return nil }
+            var m = [Float](repeating: 0, count: 20)
+            m.withUnsafeMutableBytes { v.getValue($0.baseAddress!, size: $0.count) }
+            return m
+        }
+        return nil
+    }
+
+    /// Affine map from `l`'s coordinate space to `root`'s (handles flips and offsets).
+    private static func transform(from l: CALayer, to root: CALayer) -> CGAffineTransform {
+        let o = root.convert(CGPoint.zero, from: l)
+        let x = root.convert(CGPoint(x: 1, y: 0), from: l)
+        let y = root.convert(CGPoint(x: 0, y: 1), from: l)
+        return CGAffineTransform(a: x.x - o.x, b: x.y - o.y, c: y.x - o.x, d: y.y - o.y, tx: o.x, ty: o.y)
+    }
+
+    /// Intersection of every clipping ancestor's bounds, in `root` space (scroll views).
+    private static func clipRect(_ l: CALayer, in root: CALayer) -> CGRect? {
+        var r: CGRect? = nil
+        var a = l.superlayer
+        while let p = a, p !== root {
+            if p.masksToBounds {
+                let b = root.convert(p.bounds, from: p)
+                r = r.map { $0.intersection(b) } ?? b
+            }
+            a = p.superlayer
+        }
+        return r
     }
 
     static func renderCached(_ window: NSWindow) -> Data? {
