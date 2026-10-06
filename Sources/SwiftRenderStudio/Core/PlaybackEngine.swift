@@ -216,6 +216,12 @@ final class PlaybackEngine {
         t = min(t, d)
     }
 
+    /// Same host, re-probed scene (props/knobs changed): its length and cuts may have moved.
+    func adopt(_ info: SceneInfo) {
+        if info.duration != duration || info.fps != fps { setDuration(info.duration, fps: info.fps) }
+        editPoints = Array(Set(info.clips.flatMap { [$0.start, $0.end] })).sorted()
+    }
+
     // MARK: Transport
 
     func toggle() { isPlaying ? pause() : play() }

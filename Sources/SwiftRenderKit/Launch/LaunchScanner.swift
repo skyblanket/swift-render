@@ -801,7 +801,11 @@ private struct State {
 
     mutating func resolve() {
         // Name: Info.plist display name > Xcode app product > package > README H1 > folder.
+        // A library/CLI package's stray Info.plist (e.g. a helper .app it packages) doesn't
+        // name the product: there the package name wins.
         let folder = root.lastPathComponent
+        let appLike = xcodeApp != nil || !packageProducts.app.isEmpty || packageName == nil
+        let plistName = appLike ? self.plistName : nil
         var name = plistName ?? xcodeApp?.displayName ?? xcodeApp?.name ?? packageName ?? readmeH1?.0 ?? folder
         if let h1 = readmeH1?.0, Self.norm(h1) == Self.norm(name), h1.count <= 24 { name = h1 }   // keep the README's styling
         if plistName == nil, xcodeApp == nil, packageName == nil, readmeH1 == nil { report.missing.append("name (used the folder name)") }

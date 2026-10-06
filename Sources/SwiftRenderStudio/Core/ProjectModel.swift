@@ -377,11 +377,15 @@ final class ProjectModel {
 
     private func adopt(_ i: SceneInfo) {
         let first = info?.name != i.name
+        // Showing the whole scene before a length change: keep showing the whole scene.
+        let wasFit = info.map { abs(ui.viewport.pxPerSecond - ui.viewport.fitPxPerSecond) < 1e-6 && $0.duration != i.duration } ?? false
         info = i
         if propsJSON == nil { propsJSON = i.propsJSON }
         ui.viewport.duration = i.duration
         ui.viewport.fps = i.fps
-        if first { ui.viewport.fit(i.duration) }
+        // A props-driven length change reaches the transport too, not just the timeline.
+        if !first { playback.adopt(i) }
+        if first || wasFit { ui.viewport.fit(i.duration) }
     }
 
     // MARK: Knobs / props

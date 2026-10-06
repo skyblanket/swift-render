@@ -1,0 +1,118 @@
+{
+  "accent" : "#C7FF1A",
+  "appearance" : "dark",
+  "changelog" : [
+    {
+      "kind" : "added",
+      "title" : "Transition marks"
+    },
+    {
+      "kind" : "added",
+      "title" : "Check warns when a score uses noise sweeps (whoosh/riser)"
+    },
+    {
+      "kind" : "changed",
+      "title" : "House rule: no swish transitions"
+    }
+  ],
+  "code" : {
+    "caption" : "Just a few lines of Swift.",
+    "language" : "swift",
+    "source" : "import SwiftUI\n\npublic struct Hello: RenderScene {\n    public static let defaultDuration: Double = 3.0\n\n    @MainActor public static func body(at t: Double, duration: Double)\n            -> some View {\n        let p = Ease.spring(t, from: 0, to: 1, response: 0.5,\n                dampingFraction: 0.6)\n        Text(\"hello.\")\n            .font(.system(size: 120, weight: .black))\n            .foregroundStyle(.white)\n            .scaleEffect(0.8 + 0.2 * p)\n            .opacity(Ease.clip(t, 0, 0.4))\n            .frame(maxWidth: .infinity, maxHeight: .infinity)\n            .background(.black)\n    }\n}",
+    "title" : "Hello.swift"
+  },
+  "cta" : {
+    "from" : "0.8.1",
+    "kind" : "swiftPackage",
+    "value" : "https://github.com/skyblanket/swift-render"
+  },
+  "facts" : [
+    "Zero dependencies",
+    "MIT licensed"
+  ],
+  "features" : [
+    {
+      "detail" : "No segment math, no frame counting.",
+      "symbol" : "timeline.selection",
+      "title" : "Sequencing"
+    },
+    {
+      "detail" : "Closed-form, scrub-safe",
+      "symbol" : "wand.and.stars",
+      "title" : "Springs"
+    },
+    {
+      "detail" : "The file is FFT-analyzed once before rendering",
+      "symbol" : "waveform",
+      "title" : "Audio-reactive"
+    },
+    {
+      "detail" : "Pipe in JSON per record and render a thousand personalized variants",
+      "symbol" : "doc.text.fill",
+      "title" : "Data-driven"
+    }
+  ],
+  "highlights" : [
+    {
+      "format" : "integer",
+      "label" : "tests",
+      "source" : "Tests (func test… + @Test)",
+      "value" : 247
+    },
+    {
+      "format" : "compact",
+      "label" : "lines of Swift",
+      "source" : "*.swift (non-blank, non-comment)",
+      "value" : 42915
+    }
+  ],
+  "install" : {
+    "language" : "swift",
+    "source" : ".package(url: \"https://github.com/skyblanket/swift-render\", from: \"0.8.1\")",
+    "title" : "Package.swift"
+  },
+  "kind" : "library",
+  "license" : "MIT",
+  "music" : {
+    "bpm" : 100,
+    "key" : 0,
+    "mood" : "bright"
+  },
+  "name" : "swift-render",
+  "platforms" : [
+    {
+      "minimum" : "14",
+      "name" : "macOS"
+    }
+  ],
+  "releaseDate" : "2026-10-02",
+  "repo" : "skyblanket/swift-render",
+  "schemaVersion" : 1,
+  "screenshots" : [
+
+  ],
+  "shots" : [
+
+  ],
+  "stats" : {
+    "commits" : 128,
+    "contributors" : 4,
+    "dependencies" : 0,
+    "firstCommit" : "2026-05-21",
+    "releases" : 3,
+    "swiftLines" : 42915,
+    "targets" : 6,
+    "testCount" : 247
+  },
+  "subtitle" : "SwiftUI scenes + real Metal shaders → MP4.",
+  "swiftVersion" : "5.10",
+  "tagline" : "Programmatic motion graphics in Swift.",
+  "terminal" : [
+    "$ swift run swift-render new Hello",
+    "$ swift run swift-render check Hello"
+  ],
+  "typeface" : "sfPro",
+  "url" : "https://github.com/skyblanket/swift-render",
+  "version" : "0.8.1",
+  "voiceover" : false
+}

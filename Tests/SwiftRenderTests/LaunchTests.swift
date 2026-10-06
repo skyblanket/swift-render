@@ -262,6 +262,19 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(report.missing.contains { $0.hasPrefix("git") })
     }
 
+    func testHelperAppInfoPlistDoesNotRenameALibrary() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A library repo that also packages a helper .app (swift-render's own Support/Studio/Info.plist).
+        let plist = root.appendingPathComponent("Support/Viewer/Info.plist")
+        try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleName": "TinyKit Viewer"], format: .xml, options: 0)
+            .write(to: plist)
+        let (p, report) = LaunchScanner(root: root, options: .init(executeManifest: false, git: false)).scan()
+        XCTAssertEqual(p.name, "TinyKit")
+        XCTAssertEqual(report.source(of: "name"), "Package.swift")
+    }
+
     func testScannerNeverFailsOnAnEmptyFolder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sr-empty-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

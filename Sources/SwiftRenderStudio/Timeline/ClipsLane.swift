@@ -60,8 +60,11 @@ struct ClipsLane: LaneRenderer {
         }
         var labels = 0
         var indexInRow: [Int: Int] = [:]
-        for c in clips.sorted(by: { ($0.start, $0.depth) < ($1.start, $1.depth) }) {
+        let sorted = clips.sorted(by: { ($0.start, $0.depth) < ($1.start, $1.depth) })
+        for (k, c) in sorted.enumerated() {
             let r = row(c)
+            // Where the next clip in this row starts: it covers the rest of this one.
+            let covered = sorted[(k + 1)...].first { row($0) == r && $0.start > c.start && $0.start < c.end }?.start
             let i = indexInRow[r, default: 0]
             indexInRow[r] = i + 1
             guard c.end >= v.start, c.start <= v.end else { continue }
@@ -84,7 +87,15 @@ struct ClipsLane: LaneRenderer {
                 edge.move(to: CGPoint(x: tr.minX, y: tr.maxY)); edge.addLine(to: CGPoint(x: tr.maxX, y: tr.minY))
                 ctx.stroke(edge, with: .color(.white.opacity(0.75)), lineWidth: 1)
             }
-            LaneDraw.label(&ctx, name(c), in: rect, labels: &labels,
+            if i > 0 {
+                // A dark seam at the cut, so same-colour neighbours read as two clips.
+                var seam = Path()
+                seam.move(to: CGPoint(x: rect.minX, y: rect.minY)); seam.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+                ctx.stroke(seam, with: .color(.black.opacity(0.7)), lineWidth: 1.5)
+            }
+            var visible = rect
+            if let covered { visible.size.width = max(0, min(rect.maxX, v.x(covered)) - rect.minX) }
+            LaneDraw.label(&ctx, name(c), in: visible, labels: &labels,
                            trailing: String(format: "%.1fs", c.duration),
                            color: .white.opacity(selected ? 1 : 0.9))
         }

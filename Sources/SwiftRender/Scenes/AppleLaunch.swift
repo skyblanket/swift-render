@@ -60,11 +60,14 @@ public struct AppleLaunchFilm: View {
                     // end card still starts exactly on its downbeat.
                     let intoEnd = i + 1 < plan.shots.count && plan.shots[i + 1].kind == .end
                     let len = plan.length(i) + (intoEnd ? 0.4 : 0)
+                    // Named by shot id, so Studio's timeline and review comments say "triad", not the type.
                     if shot.kind == .end {
                         Clip(len) { l in AppleLaunchShot(shot.kind, at: l, length: len, props: props, plan: plan) }
                             .transition(.focusPull(0.4))
+                            .named(shot.id)
                     } else {
                         Clip(len) { l in AppleLaunchShot(shot.kind, at: l, length: len, props: props, plan: plan) }
+                            .named(shot.id)
                     }
                 }
             }
