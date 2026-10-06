@@ -72,7 +72,7 @@ private func parseLaunchArgs(_ argv: [String], command: String) throws -> Launch
 }
 
 private let launchUsage = """
-usage: swift-render launch [path=.] [--out film.mp4] [--aspect 16:9|9:16] [--props-out props.json]
+usage: swift-render launch [path=.] [--out film.mp4] [--aspect 16:9|9:16|1:1] [--props-out props.json]
                            [--voiceover] [--preview] [--open] [--eject] [--rescan] [--no-render] [--no-manifest]
 
   Scans the Swift codebase at <path> (Package.swift, .xcodeproj, Assets.xcassets, Info.plist,
@@ -85,10 +85,15 @@ usage: swift-render launch [path=.] [--out film.mp4] [--aspect 16:9|9:16] [--pro
 """
 
 private let initUsage = """
-usage: swift-render init [path=.] [--local <swift-render checkout>] [--force]
+usage: swift-render init [path=.] [--local <swift-render checkout>] [--force] [--rescan] [--no-manifest]
 
   Scaffolds <path>/Launch/: a Swift package with your own launch scene
-  (Sources/LaunchScenes/<App>Launch.swift, LaunchKit + the scanned props) and a `launch` CLI.
+  (Sources/LaunchScenes/<App>Launch.swift, LaunchKit + the film's props) and a `launch` CLI.
+  The props are the ones `launch` keeps in <path>/.swift-render/launch/<Name>.json (your
+  edits), or a fresh scan when there are none.
+    --force        overwrite files already in <path>/Launch/ (init refuses otherwise)
+    --rescan       ignore the kept props and scan again
+    --no-manifest  don't run `swift package dump-package` (for untrusted code)
     cd Launch && swift run launch render <App>Launch --open
 """
 
@@ -97,7 +102,7 @@ usage: swift-render init [path=.] [--local <swift-render checkout>] [--force]
 @MainActor
 func runLaunch(_ argv: [String]) async throws {
     let a = try parseLaunchArgs(argv, command: "launch")
-    let root = URL(fileURLWithPath: a.path, isDirectory: true).standardizedFileURL
+    let root = URL(fileURLWithPath: a.path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
     guard FileManager.default.fileExists(atPath: root.path) else { throw LaunchError("no such directory: \(root.path)") }
 
     let started = Date()
@@ -120,7 +125,8 @@ func runLaunch(_ argv: [String]) async throws {
     try writeJSON(report, to: reportURL)
     if let po = a.propsOut { try writeJSON(props, to: URL(fileURLWithPath: po)) }
 
-    printSummary(valid, report: report, warnings: warnings, root: root, scanSeconds: Date().timeIntervalSince(started))
+    printSummary(valid, report: report, warnings: warnings, root: root, scanSeconds: Date().timeIntervalSince(started),
+                 edited: reused ? (scanned.validated().props, relative(propsURL, to: root)) : nil)
     print("  props       \(relative(propsURL, to: root))\(reused ? "  (existing — edit it, or --rescan)" : "")")
     print("  scan report \(relative(reportURL, to: root))")
     if let po = a.propsOut { print("  props copy  \(po)") }
@@ -141,7 +147,13 @@ func runLaunch(_ argv: [String]) async throws {
     let suffix = a.aspect == .vertical9x16 ? "-9x16" : a.aspect == .square1x1 ? "-1x1" : ""
     let outURL = a.out.map { URL(fileURLWithPath: $0) }
         ?? root.appendingPathComponent("out/\(fileSafe(valid.name).lowercased())-launch\(suffix).mp4")
-    try FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let outDir = outURL.deletingLastPathComponent()
+    if a.out == nil, !FileManager.default.fileExists(atPath: outDir.path) {
+        // The default out/ is ours: keep multi-megabyte films out of the app's `git add -A`.
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        try? "*\n".write(to: outDir.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+    }
+    try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     let audio: AudioSource = runner.soundtrack(duration, propsURL).map { .score($0) } ?? .none
     let total = Int((duration * Double(fps)).rounded())
     print(String(format: "[swift-render] rendering AppleLaunch · %.1fs · %d×%d @ %dfps%@ · %d frames",
@@ -200,31 +212,40 @@ func dominantColor(_ url: URL) -> String? {
     return LaunchColor.hex(s.0 / s.3, s.1 / s.3, s.2 / s.3)
 }
 
-private func printSummary(_ p: LaunchProps, report: LaunchScanReport, warnings: [String], root: URL, scanSeconds: Double) {
-    func row(_ label: String, _ value: String, _ field: String? = nil) {
-        let src = field.flatMap { report.source(of: $0) }.map { "   ← \($0)" } ?? ""
+/// `edited`: the props came from the kept file, not this scan — a value that differs from what
+/// the scan found is credited to that file, not to the scan's evidence.
+private func printSummary(_ p: LaunchProps, report: LaunchScanReport, warnings: [String], root: URL, scanSeconds: Double,
+                          edited: (scanned: LaunchProps, file: String)? = nil) {
+    func row(_ label: String, _ value: String, _ field: String? = nil, _ scannedValue: ((LaunchProps) -> String)? = nil) {
+        var src = field.flatMap { report.source(of: $0) }.map { "   ← \($0)" } ?? ""
+        if let edited, let scannedValue, scannedValue(edited.scanned) != value { src = "   ← \(edited.file) (edited)" }
         print("  " + label.padding(toLength: 12, withPad: " ", startingAt: 0) + value + src)
     }
+    func features(_ p: LaunchProps) -> String { p.features.isEmpty ? "—" : p.features.map(\.title).joined(separator: " · ") }
     print(String(format: "[swift-render] launch: scanned %@ (%.1fs)", root.path, scanSeconds))
-    row("name", p.name, "name")
-    row("kind", p.kind.rawValue, "kind")
-    row("tagline", p.tagline, "tagline")
-    if let s = p.subtitle { row("subtitle", s, "subtitle") }
-    row("features", p.features.isEmpty ? "—" : p.features.map(\.title).joined(separator: " · "), "features")
-    row("icon", p.icon?.path ?? "none — using a generated mark", "icon")
-    row("accent", p.accent, "accent")
-    if let v = p.version { row("version", v + (p.releaseDate.map { " (\($0))" } ?? ""), "version") }
+    row("name", p.name, "name", { $0.name })
+    row("kind", p.kind.rawValue, "kind", { $0.kind.rawValue })
+    row("tagline", p.tagline, "tagline", { $0.tagline })
+    if let s = p.subtitle { row("subtitle", s, "subtitle", { $0.subtitle ?? "" }) }
+    row("features", features(p), "features", features)
+    row("icon", p.icon?.path ?? "none — using a generated mark", "icon", { $0.icon?.path ?? "none — using a generated mark" })
+    row("accent", p.accent, "accent", { $0.accent })
+    if let v = p.version { row("version", v + (p.releaseDate.map { " (\($0))" } ?? ""), "version", { ($0.version ?? "") + ($0.releaseDate.map { " (\($0))" } ?? "") }) }
     if !p.platforms.isEmpty { row("platforms", p.platforms.map { PlatformBadges.label($0) }.joined(separator: " · ")) }
-    if let c = p.code { row("code", "\(c.title ?? "snippet") · \(c.source.components(separatedBy: "\n").count) lines", "code") }
-    if let term = p.terminal { row("terminal", term.filter { $0.hasPrefix("$ ") }.joined(separator: "  "), "terminal") }
+    func code(_ p: LaunchProps) -> String {
+        p.code.map { "\($0.title ?? "snippet") · \($0.source.components(separatedBy: "\n").count) lines" } ?? ""
+    }
+    func terminal(_ p: LaunchProps) -> String { (p.terminal ?? []).filter { $0.hasPrefix("$ ") }.joined(separator: "  ") }
+    if p.code != nil { row("code", code(p), "code", code) }
+    if p.terminal != nil { row("terminal", terminal(p), "terminal", terminal) }
     if !p.highlights.isEmpty {
         row("numbers", p.highlights.map { "\(StatCounter.format($0.value, $0)) \($0.label)" }.joined(separator: " · "))
     }
-    if !p.changelog.isEmpty { row("changelog", "\(p.changelog.count) items", "changelog") }
+    if !p.changelog.isEmpty { row("changelog", "\(p.changelog.count) items", "changelog", { "\($0.changelog.count) items" }) }
     if !p.screenshots.isEmpty { row("screens", p.screenshots.map(\.path).joined(separator: ", ")) }
     let plan = LaunchPlan(p)
     let bars = plan.shots.reduce(0) { $0 + $1.bars }
-    row("shots", plan.shots.map { "\($0.id) \(Int($0.bars))" }.joined(separator: " · ")
+    row("shots", plan.shots.map { "\($0.id) " + String(format: "%g", $0.bars) }.joined(separator: " · ")
         + String(format: "  = %g bars, %.1fs @ %d BPM", bars, plan.duration, Int(plan.bpm)))
     for c in report.conflicts { print("  conflict    \(c)") }
     for m in report.missing { print("  missing     \(m)") }
@@ -236,34 +257,54 @@ private func printSummary(_ p: LaunchProps, report: LaunchScanReport, warnings: 
 @MainActor
 func runInit(_ argv: [String]) throws {
     let a = try parseLaunchArgs(argv, command: "init")
-    let root = URL(fileURLWithPath: a.path, isDirectory: true).standardizedFileURL
+    let root = URL(fileURLWithPath: a.path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
     let fm = FileManager.default
     guard fm.fileExists(atPath: root.path) else { throw LaunchError("no such directory: \(root.path)") }
     let dir = root.appendingPathComponent("Launch", isDirectory: true)
-    if fm.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) && !a.force {
-        throw LaunchError("\(dir.path) already exists (use --force to overwrite the scaffold files)")
-    }
 
     var (props, report) = scanForLaunch(root, manifest: a.manifest)
+    // The props `launch` keeps — the file you, Studio and the review agent edit — win over
+    // a fresh scan, so tuning the film in that loop carries over into the Swift you own.
+    let keptURL = root.appendingPathComponent(".swift-render/launch/\(fileSafe(props.name)).json")
+    var kept = false
+    if !a.rescan, let data = try? Data(contentsOf: keptURL), let existing = try? JSONDecoder().decode(LaunchProps.self, from: data) {
+        props = existing
+        kept = true
+    }
     let typeName = swiftTypeName(props.name) + "Launch"
 
-    // Copy art into Launch/assets so the package renders from anywhere.
+    // Art is copied into Launch/assets so the package renders from anywhere. Only files inside
+    // the scanned folder are copied: a path out of it (a hostile icon set or props file in a
+    // cloned repo) must not pull e.g. ~/.ssh into a folder you are about to commit.
     let assets = dir.appendingPathComponent("assets", isDirectory: true)
-    try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+    var copies: [(from: URL, to: URL)] = []
+    var notes: [String] = []
     if let icon = props.icon {
-        let ext = (icon.path as NSString).pathExtension.isEmpty ? "png" : (icon.path as NSString).pathExtension
-        let dest = assets.appendingPathComponent("AppIcon.\(ext)")
-        try? fm.removeItem(at: dest)
-        try fm.copyItem(at: root.appendingPathComponent(icon.path), to: dest)
-        props.icon?.path = "assets/AppIcon.\(ext)"
-    }
-    for (i, shot) in props.screenshots.enumerated() {
-        let dest = assets.appendingPathComponent("screenshot-\(i + 1).\((shot.path as NSString).pathExtension)")
-        try? fm.removeItem(at: dest)
-        if (try? fm.copyItem(at: root.appendingPathComponent(shot.path), to: dest)) != nil {
-            props.screenshots[i].path = "assets/" + dest.lastPathComponent
+        if let src = LaunchScanner.contained(icon.path, in: root), fm.fileExists(atPath: src.path) {
+            let ext = (icon.path as NSString).pathExtension.isEmpty ? "png" : (icon.path as NSString).pathExtension
+            let dest = assets.appendingPathComponent("AppIcon.\(ext)")
+            copies.append((src, dest))
+            props.icon?.path = "assets/" + dest.lastPathComponent
+        } else {
+            notes.append("icon \(icon.path) is missing or outside \(root.path): not copied, using the generated mark")
+            props.icon = nil
         }
     }
+    var shots: [LaunchProps.Screenshot] = []
+    for shot in props.screenshots {
+        guard let src = LaunchScanner.contained(shot.path, in: root) else {
+            notes.append("screenshot \(shot.path) is outside \(root.path): not copied")
+            continue
+        }
+        var s = shot
+        if fm.fileExists(atPath: src.path) {
+            let dest = assets.appendingPathComponent("screenshot-\(shots.count + 1).\((shot.path as NSString).pathExtension)")
+            copies.append((src, dest))
+            s.path = "assets/" + dest.lastPathComponent
+        }
+        shots.append(s)
+    }
+    props.screenshots = shots
 
     let dependency: String
     let packageRef: String
@@ -289,21 +330,41 @@ func runInit(_ argv: [String]) throws {
         (".gitignore", ".build/\n.swiftpm/\nout/\n.swift-render/cache/\n"),
         ("README.md", launchReadme(typeName: typeName, name: props.name)),
     ]
+    let launchDir = dir.appendingPathComponent(".swift-render/launch", isDirectory: true)
+    let propsJSON = launchDir.appendingPathComponent("\(typeName).json")
+    let scanJSON = launchDir.appendingPathComponent("\(typeName).scan.json")
+
+    // Never clobber a Launch/ (or, on a case-insensitive disk, launch/) folder that is not ours.
+    let destinations = files.map { dir.appendingPathComponent($0.0) } + copies.map(\.to) + [propsJSON, scanJSON]
+    let existing = destinations.filter { fm.fileExists(atPath: $0.path) }
+    if !existing.isEmpty && !a.force {
+        throw LaunchError("init would overwrite \(existing.count) existing file\(existing.count == 1 ? "" : "s"):\n"
+            + existing.map { "  " + relative($0, to: root) }.joined(separator: "\n")
+            + "\nMove them aside, or pass --force to overwrite them.")
+    }
+
+    try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+    for (src, dest) in copies {
+        try? fm.removeItem(at: dest)
+        try fm.copyItem(at: src, to: dest)
+    }
     for (rel, body) in files {
         let url = dir.appendingPathComponent(rel)
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try body.write(to: url, atomically: true, encoding: .utf8)
     }
-    let launchDir = dir.appendingPathComponent(".swift-render/launch", isDirectory: true)
     try fm.createDirectory(at: launchDir, withIntermediateDirectories: true)
-    try writeJSON(props, to: launchDir.appendingPathComponent("\(typeName).json"))
-    try writeJSON(report, to: launchDir.appendingPathComponent("\(typeName).scan.json"))
+    try writeJSON(props, to: propsJSON)
+    try writeJSON(report, to: scanJSON)
 
     print("[swift-render] init: \(dir.path)")
+    print("  props from  \(kept ? relative(keptURL, to: root) + "  (kept — your edits; --rescan to start over)" : "a fresh scan")")
     for (rel, _) in files { print("  \(rel)") }
-    if props.icon != nil { print("  assets/AppIcon.png") }
-    print("  .swift-render/launch/\(typeName).json   (the scanned props, for `--props` experiments)")
-    for m in report.missing { print("  missing     \(m)") }
+    for (_, dest) in copies { print("  " + relative(dest, to: dir)) }
+    print("  .swift-render/launch/\(typeName).json   (the film's props as JSON, for `--props` experiments)")
+    for f in existing { print("  replaced    \(relative(f, to: root))") }
+    for n in notes { print("  note        \(n)") }
+    if !kept { for m in report.missing { print("  missing     \(m)") } }
     print("""
 
     next:
@@ -474,15 +535,15 @@ func sceneSource(typeName: String, props: LaunchProps, external: Bool) -> String
             let theme = LaunchTheme(props: p)
             return ZStack {
                 Stage(glow: 0.075 * Ease.easeInOut(Ease.clip(t, 0, 1.6)), at: t)
-                Timeline(t) {
+                Timeline(t + 1e-6) {   // 1 µs: float clip starts never slip a cut by a frame
                     for (i, s) in plan.shots.enumerated() {
                         // The end card focus-pulls in; the shot before it runs 0.4 s over.
                         let intoEnd = i + 1 < plan.shots.count && plan.shots[i + 1].kind == .end
                         let len = plan.length(i) + (intoEnd ? 0.4 : 0)
                         if s.kind == .end {
-                            Clip(len) { l in shot(s.kind, l, len, p, plan) }.transition(.focusPull(0.4))
+                            Clip(len) { l in shot(s.kind, l, len, p, plan) }.transition(.focusPull(0.4)).named(s.id)
                         } else {
-                            Clip(len) { l in shot(s.kind, l, len, p, plan) }
+                            Clip(len) { l in shot(s.kind, l, len, p, plan) }.named(s.id)
                         }
                     }
                 }
@@ -498,7 +559,7 @@ func sceneSource(typeName: String, props: LaunchProps, external: Bool) -> String
             switch kind {
             case .title:
                 // Your headline, your words: replace the tagline split with anything.
-                KeynoteTitle(AppleLaunchShot.balance(p.tagline), sub: p.subtitle, at: l, start: 0.05, size: 132,
+                KeynoteTitle(AppleLaunchShot.balance(p.tagline), sub: p.subtitle, at: l, start: 0, size: 132,
                              accentLine: 1, gradient: p.accentSecondary != nil)
                     .scaleEffect(Motion.push(l, over: len))
             default:
