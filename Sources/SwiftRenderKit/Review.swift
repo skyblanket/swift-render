@@ -77,8 +77,19 @@ public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
     public var resolution: String?
     /// Who is working on it while `status == .inProgress`.
     public var assignee: ReviewAuthor?
-    /// Knob/props/duration context at comment time so an agent can reproduce the frame.
+    /// Knob/props/duration context at comment time so an agent can reproduce the frame
+    /// (keys: "knobs" JSON, "propsSHA", "duration", "aspect", "build").
     public var context: [String: String]?
+    /// Frames attached to the comment itself (`.before` is captured at creation).
+    public var attachments: [ReviewAttachment]?
+    /// What `region` is normalized against.
+    public var canvas: ReviewCanvas?
+    /// Innermost clip at `t` when the comment was made (`SceneInfo.clips(at:).last?.source`).
+    public var source: SourceLocation?
+    /// Git revision the comment was made against, e.g. "a63f3d5" or "a63f3d5+dirty".
+    public var revision: String?
+    /// Human sign-off on an agent's resolution.
+    public var acceptedBy: ReviewAuthor?
 
     public init(id: String = ReviewIDs.make("c"), t: Double, end: Double? = nil, region: ReviewRegion? = nil,
                 body: String, author: ReviewAuthor, status: ReviewStatus = .open,
@@ -98,6 +109,22 @@ public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
 
     public static func format(_ t: Double) -> String {
         String(format: "%02d:%05.2f", Int(t) / 60, t.truncatingRemainder(dividingBy: 60))
+    }
+}
+
+public struct ReviewCanvas: Codable, Sendable, Equatable, Hashable {
+    public var width: Int
+    public var height: Int
+    public var fps: Int
+    public init(width: Int, height: Int, fps: Int) { self.width = width; self.height = height; self.fps = fps }
+}
+
+public enum ReviewAttachmentPaths {
+    /// `.swift-render/attachments/<commentID>-before.png` (project-relative).
+    public static func before(_ commentID: String) -> String { ".swift-render/attachments/\(commentID)-before.png" }
+    /// `.swift-render/attachments/<commentID>-after-<replyID>.png` (project-relative).
+    public static func after(_ commentID: String, reply replyID: String) -> String {
+        ".swift-render/attachments/\(commentID)-after-\(replyID).png"
     }
 }
 
