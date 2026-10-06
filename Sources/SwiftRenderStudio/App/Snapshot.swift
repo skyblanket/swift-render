@@ -137,6 +137,13 @@ enum SnapshotRunner {
     private static func play(_ model: ProjectModel, seconds: Double) async {
         let p = model.playback
         let startT = p.t, streams = p.streamsStarted
+        let main = MainThreadMeter(), cpu0 = MainThreadMeter.processCPUms()
+        main.start()
+        defer {
+            main.stop()
+            print(String(format: "[studio] main busy %.0f%%, max stall %.0f ms, studio CPU %.0f ms over %.1f s",
+                         main.busyPct, main.maxStallMs, MainThreadMeter.processCPUms() - cpu0, seconds))
+        }
         p.play()
         let end = Date().addingTimeInterval(seconds)
         while p.isPlaying, Date() < end {
@@ -437,4 +444,49 @@ extension NSAppearance {
 
 private extension HostSupervisor.State {
     var isReady: Bool { if case .ready = self { return true }; return false }
+}
+
+/// Main-runloop busy time during `--play-for` (after-waiting → before-waiting spans).
+@MainActor private final class MainThreadMeter {
+    private var observer: CFRunLoopObserver?
+    private var began: CFAbsoluteTime = 0
+    private var wokeAt: CFAbsoluteTime?
+    private var busy: Double = 0
+    private(set) var maxStallMs: Double = 0
+    private var ended: CFAbsoluteTime = 0
+
+    func start() {
+        began = CFAbsoluteTimeGetCurrent()
+        wokeAt = began
+        let o = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue
+                                                   | CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [weak self] _, act in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let now = CFAbsoluteTimeGetCurrent()
+                if act == .afterWaiting { self.wokeAt = now }
+                else if let w = self.wokeAt {
+                    self.busy += now - w
+                    self.maxStallMs = max(self.maxStallMs, (now - w) * 1000)
+                    self.wokeAt = nil
+                }
+            }
+        }
+        observer = o
+        CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
+    }
+
+    func stop() {
+        ended = CFAbsoluteTimeGetCurrent()
+        if let o = observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), o, .commonModes) }
+        observer = nil
+    }
+
+    var busyPct: Double { ended > began ? 100 * busy / (ended - began) : 0 }
+
+    static func processCPUms() -> Double {
+        var u = rusage()
+        getrusage(RUSAGE_SELF, &u)
+        let tv = { (t: timeval) in Double(t.tv_sec) * 1000 + Double(t.tv_usec) / 1000 }
+        return tv(u.ru_utime) + tv(u.ru_stime)
+    }
 }

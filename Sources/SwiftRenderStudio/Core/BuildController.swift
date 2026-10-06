@@ -193,7 +193,11 @@ final class BuildController {
         releaseTask = nil
         // Only the newest debug build's release follow-up may swap; a failed release
         // build is silent (the debug host keeps running).
-        guard gen == generation, !isBuilding, let r, r.success, let exe = r.executable else { return }
+        guard gen == generation, !isBuilding, let r, r.success, let exe = r.executable else {
+            let why = r.map { $0.log.split(separator: "\n").last.map(String.init) ?? "failed" } ?? "no result"
+            FileHandle.standardError.write(Data("[studio] release preview build skipped (gen \(gen)/\(generation)): \(why)\n".utf8))
+            return
+        }
         lastReleaseExecutable = exe
         onSuccess?(exe, gen)
     }
