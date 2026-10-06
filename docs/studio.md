@@ -7,6 +7,11 @@ with an optional region box, hand open comments to Claude Code, and export deliv
 this runs your own code: Studio builds the project's CLI and talks to it. It never interprets
 your scenes itself.
 
+![Studio with AppleLaunch open: a region comment boxes the name, its thread is open in the inspector, and the timeline shows clip, score, audio and notes lanes](assets/studio.png)
+
+*This screenshot was made with `swift run swift-render-studio . --scene AppleLaunch --at 6.6 --wait-audio --comment first --snapshot out/studio.png`,
+after one `swift-render review add AppleLaunch --at 6.2 --end 7.4 --region 0.36,0.57,0.28,0.17 "…"`.*
+
 ```
 swift run swift-render-studio .                        # this repo, Welcome → project window
 swift run swift-render-studio path/to/MyApp/Launch     # any package whose CLI links SwiftRenderTool
@@ -195,7 +200,7 @@ The script:
 
 1. Builds `swift-render-studio` and `swift-render-mcp` with `swift build -c release`.
 2. **Renders the icon with swift-render.** The scene `StudioAppIcon`
-   (`Sources/SwiftRender/Scenes/StudioAppIcon.swift`) is rendered at t=2.6 to a transparent
+   (`Sources/SwiftRenderScenes/StudioAppIcon.swift`) is rendered at t=2.6 to a transparent
    1024×1024 PNG. `sips` makes the ten iconset sizes, and `iconutil -c icns` builds
    `AppIcon.icns`.
 3. Assembles the bundle:

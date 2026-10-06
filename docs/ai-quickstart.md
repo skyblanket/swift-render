@@ -20,10 +20,18 @@ Three rules:
 2. **Use `Ease.clip(t, start, end)` for timing windows.** It returns a 0..1 progress.
 3. **Wrap easing.** `Ease.easeOut(Ease.clip(t, 0.5, 1.0))` is the standard pattern.
 
+Where scenes live: `Sources/SwiftRenderScenes/` in this repo. In any other project, they go in the
+directory named by `"scenesDir"` in `swift-render.json` (for example `Launch/Sources/LaunchScenes/`
+after `swift-render init`). Any `public struct X: RenderScene` (or `AudioReactiveScene`, `PropsScene`,
+`PropsAudioScene`) is registered as `"X"` at build time. Scenes are in a different module from the
+engine, so they `import SwiftRender`. A `body` that has statements before the view needs an
+explicit `return`.
+
 ## Minimal scene template
 
 ```swift
 import SwiftUI
+import SwiftRender
 
 public struct ExampleScene: RenderScene {
     public static let defaultDuration: Double = 3.0
@@ -135,13 +143,24 @@ swift run swift-render render <Scene>          # render with defaults
   --aspect 16:9|9:16|1:1  # default 16:9
   --out <path>            # default out/render.mp4
   --audio <path>          # mux audio into output
+  --props <file.json>     # PropsScene input
+  --knobs <file.json>     # knob overrides for this run (instead of .swift-render/knobs/<Scene>.json)
+  --preview               # half size, 30 fps
+  --jobs auto             # parallel processes, frame-exact stitch
 
-swift run swift-render list                    # show registered scenes
+swift run swift-render list [--json]           # show registered scenes
 swift run swift-render new <Scene>             # scaffold an auto-registered scene
 swift run swift-render check <Scene>           # contact sheet + audio/sample/voiceover report (review step)
+swift run swift-render info <Scene> [--json]   # clips (label, file:line), knobs, score events by lane, captions
 swift run swift-render preview <Scene>         # live window for humans: scrub, play, ←/→ frame-step, audio
 swift run swift-render captions <Scene> --out out/x.srt   # voiceover captions sidecar (.srt / .vtt)
+swift run swift-render launch <repo> [--preview] [--aspect 9:16]   # launch film from a Swift codebase
+swift run swift-render init <repo>             # scaffold <repo>/Launch/ (your own scenes + `launch` CLI)
+swift run swift-render review list|show|add|reply|status|frame|delete|scenes   # review comments
 ```
+
+In a `Launch/` package (or any package with its own CLI), replace `swift run swift-render` with
+`swift run <product>`, for example `swift run launch check MyAppLaunch`. Every command above works there.
 
 ## The loop an agent should follow when asked to "make a video"
 
@@ -157,6 +176,90 @@ swift run swift-render render MyFilm --out out/myfilm.mp4
 2. **You can't hear the mix — read the report.** `check` prints peak/RMS, a loudness lane, silences, clipping and an event histogram; a "mostly percussion loops" warning means add harmony (`chordPad`, `arpeggio`, `melody`).
 3. Deliver the one `.swift` file and the render command. Recorder, PostFX, fonts, encoding, registration are all handled.
 
+## Launch films (`launch`, `init`, LaunchKit)
+
+When someone asks for a launch film for a Swift project, start with `launch`. Don't write one from scratch:
+
+```bash
+# from a swift-render checkout:
+swift run swift-render launch ~/Code/MyApp --preview      # scan → MyApp/.swift-render/launch/MyApp.json → MyApp/out/myapp-launch.mp4
+# edit the JSON (tagline, features, highlights, cta, shots …), then run the same command again (no rebuild)
+swift run swift-render init ~/Code/MyApp                   # MyApp/Launch/: the film as Swift (MyAppLaunch.swift)
+
+# from MyApp/ (icon/screenshot paths in the props are relative to it):
+swift run --package-path ~/src/swift-render swift-render check AppleLaunch --props .swift-render/launch/MyApp.json
+```
+
+- `launch` prints every value it scanned with its source file, plus conflicts and gaps. Fill the gaps
+  in the JSON yourself. Never invent stats. `--rescan` overwrites the JSON, and `--aspect 9:16` makes
+  the vertical cut. `swift run swift-render props AppleLaunch` prints every key.
+- In the `init` scene, `shot(_:_:_:_:_:)` switches on `LaunchShot.Kind`. Override one case and keep
+  `AppleLaunchShot(kind, at:length:props:plan:)` for the rest.
+- House grammar: a 100 BPM bar grid, hard cuts on downbeats and one dissolve (`.focusPull`) into the
+  end card. No shake, no flash frames, no whoosh/riser/crash.
+
+LaunchKit components are pure in a local time `l`, themed by `.launchTheme(_:)` and sized from
+`\.renderContext`. They time their sounds through static helpers, so the score hits the exact
+frame the picture does:
+
+```swift
+import SwiftUI
+import SwiftRender
+import SwiftRenderKit      // LaunchProps.Feature / Stat / CTA …
+
+ZStack {
+    Stage(at: t)                                                   // dark stage + soft top light
+    Timeline(t) {
+        Clip(2.4) { l in KeynoteTitle(["Soft light.", "For SwiftUI."], eyebrow: "Introducing", at: l,
+                                      reveal: .letters()).scaleEffect(Motion.push(l, over: 2.4)) }.named("Title")
+        Clip(2.4) { l in FeatureTriad(features, at: l) }.named("Triad")                // 3–4 glass cards, one per beat
+        Clip(2.4) { l in CodeReveal(code, at: l, mode: .lines()) }.named("Code")       // .typed(cps:), .instant; focus:
+        Clip(2.8) { l in EndCard(name: "Halo", icon: nil, cta: .init(.swiftPackage),
+                                 url: "github.com/you/halo", at: l) }.transition(.focusPull(0.4)).named("End")
+    }
+}
+.frame(maxWidth: .infinity, maxHeight: .infinity)
+.launchTheme(.keynoteDark)          // or LaunchTheme(props:)
+.launchPostFX(at: t)                // light grain + vignette; set `ownsPostFX = true` on the scene
+
+// soundtrack: same timings as the picture
+for (i, land) in FeatureTriad.landTimes(count: 3, start: 0.2, stagger: 0.6).enumerated() {
+    blip(Note.d5.transposed(i * 4), at: 2.4 + land)
+}
+for line in CodeReveal.lineTimes(code, mode: .lines(), start: 0.2) { tick(at: 4.8 + line) }
+```
+
+The rest of the kit: `Eyebrow`, `AppIconHero(iconPath:at:name:tagline:)`, `LaunchIcon`,
+`GlassPanel { }`, `DeviceFrame(.iPhone | .iPad | .mac | .macWindow, at:) { ScreenshotView(path) }`,
+`FeatureList`, `TerminalCard(TerminalCard.session(["$ swift build", "Build complete!"]), at:)`,
+`StatCounter`/`StatRow` (+`landTimes`), `ChangelogList` (+`rowTimes`), `PlatformBadges`, `Motion.pop/rise/typed/beatPulse/push`,
+`.reveal(p)`, `.specularSweep(at:start:)`, and the clip transitions `.focusPull(d)` and `.zoomThrough(d)`. SwiftUI also
+has a `Transition`, so spell the type `SwiftRender.Transition` when you need to name it. `LaunchScore.make(plan, props)`
+builds the whole stock score. Data-driven films override `duration(for: props)` and
+`soundtrack(duration:props:)` on their `PropsScene`, so the length and the music follow the data.
+
+## Review comments (when a human leaves notes)
+
+People leave timecoded notes in Studio or with the CLI. Each note can have a range and a region box.
+The notes live in `.swift-render/reviews/<Scene>.json`. Never edit that file by hand, because the
+writers hold a lock on it.
+
+```bash
+swift run swift-render review list                         # active (open + inProgress) comments
+swift run swift-render review show c170 --json             # ids accept a unique 4+ char prefix
+swift run swift-render review frame c170                   # PNG at the comment's t, region boxed in pink → LOOK at it
+swift run swift-render review add Hero --at 12.4 --end 13 --region 0.1,0.2,0.3,0.25 "logo feels small"
+swift run swift-render review reply c170 "Scaled 1.0 → 1.2 (Hero.swift:88)" --agent --attach-frame
+swift run swift-render review status c170 resolved --resolution "Scaled logo 1.2×" --agent
+```
+
+With the `swift-render` MCP server connected, use its tools instead of the CLI: `list_comments`,
+`get_comment`, `claim_comment`, `render_frames`, `build`, `reply_comment` and `resolve_comment`.
+The `swift-render-director` agent runs the full loop: claim → edit the scene → build → render and
+look → resolve with a `file:line` summary. Work one comment at a time, keep `body(at:)` pure, and
+ask in a reply when a note is ambiguous. Regions are normalized 0–1 from the top left. The clip
+under a comment is in `source`, so give clips `.named(...)` labels.
+
 ## Timeline (sequencing without segment math)
 
 ```swift
@@ -168,7 +271,7 @@ Timeline(t) {
 }
 ```
 
-Transitions: `.cut` `.fade(d)` `.slide(d, from: .trailing)` `.flash(d)` `.overlap(d)`.
+Transitions: `.cut` `.fade(d)` `.slide(d, from: .trailing)` `.flash(d)` `.overlap(d)`, plus LaunchKit's `.focusPull(d)` and `.zoomThrough(d)`.
 `stagger(t, i, step: 0.06, ramp: 0.4)` gives cascading per-element progress.
 
 ## Knobs and clip labels
@@ -228,6 +331,9 @@ swift run swift-render props MyScene > p.json   # print template
 swift run swift-render render MyScene --props p.json
 ```
 Keep payloads complete — JSON decoding does not apply Swift default values.
+When the data decides the length or the music (N features → N beats), implement
+`static func duration(for props: Props) -> Double` and `static func soundtrack(duration:props:) -> Score?`.
+Both default to `defaultDuration` and `soundtrack(duration:)`.
 
 ## Adapting to render size
 

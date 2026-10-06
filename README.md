@@ -6,6 +6,8 @@
 
 *The native-Apple answer to Remotion — built for the era where AI writes the motion graphics.*
 
+Point it at a Swift repo and get an Apple-style launch film. Tune the film in a native editor, and hand your notes to an agent.
+
 [![CI](https://github.com/skyblanket/swift-render/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblanket/swift-render/actions/workflows/ci.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
 ![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
@@ -24,6 +26,117 @@ swift run swift-render render JustRenderIt --audio audio/jri.m4a --out out/ad.mp
 ```
 
 ---
+
+## A launch film for any Swift codebase
+
+```bash
+swift run swift-render launch ~/Code/MyApp --open           # scan → props → film: MyApp/out/myapp-launch.mp4
+swift run swift-render launch ~/Code/MyApp --aspect 9:16    # vertical cut, same props: myapp-launch-9x16.mp4
+swift run swift-render init ~/Code/MyApp                    # MyApp/Launch/: the same film as Swift you own
+```
+
+Run these from your swift-render checkout. From inside the app's repo, use
+`swift run --package-path ~/src/swift-render swift-render launch .`, which does the same thing.
+
+`launch` scans the repo offline: `Package.swift`, `*.xcodeproj`, the `AppIcon` and `AccentColor`,
+`Info.plist`, README, CHANGELOG, LICENSE and git. It prints each value it found next to the file it
+came from, and it lists conflicts and gaps. It never invents numbers. The facts are written to
+`.swift-render/launch/<Name>.json`, and then the built-in `AppleLaunch` scene renders them. You
+edit the JSON and run the command again. No rebuild is needed, and a `--preview` render of a
+34-second film takes seconds.
+
+The film follows the grammar of an Apple keynote. It opens with "Introducing", then shows the icon
+hero, the title, a feature triad, the code or terminal, stats, "What's new", platforms and an end
+card. The score is synthesized on whole bars at 100 BPM, and the cuts land on downbeats. There is
+one dissolve. There is no camera shake, no flash frame, and no whoosh. Every layout restacks for
+9:16.
+
+`init` scaffolds a `Launch/` package that depends on swift-render. The film becomes
+`Sources/LaunchScenes/<App>Launch.swift`, which is built from **LaunchKit** components
+(`KeynoteTitle`, `AppIconHero`, `DeviceFrame`, `FeatureTriad`, `CodeReveal`, `TerminalCard`,
+`StatCounter`, `ChangelogList`, `EndCard`, `LaunchScore`, …). The package also gets its own
+`launch` CLI:
+
+```bash
+cd Launch
+swift run launch check MyAppLaunch                 # contact sheet + audio report
+swift run launch render MyAppLaunch --preview --open
+```
+
+Full reference: [docs/launch.md](docs/launch.md).
+
+## swift-render Studio
+
+![swift-render Studio: AppleLaunch with a region comment on the name, the thread in the inspector, and clip, score and audio lanes on the timeline](docs/assets/studio.png)
+
+Studio is a native macOS editor for swift-render projects. It builds your project's own CLI and
+runs it as a render host, so what you see is your code. Studio never interprets a scene itself.
+
+```bash
+swift run swift-render-studio .                       # this repo
+swift run swift-render-studio ~/Code/MyApp/Launch     # any package whose CLI links SwiftRenderTool
+scripts/package-studio.sh                             # → out/Studio/swift-render Studio.app (icon rendered by swift-render)
+```
+
+- **Hot reload.** Save a scene and new pixels appear in about 2 s. Builds use their own scratch
+  path, so they don't fight your terminal's `swift build`. A failed build keeps the last good
+  frame on screen and shows clickable diagnostics.
+- **Timeline lanes** come from the engine's own introspection. Clips (with `.named()` labels) link
+  to their `file:line`. The timeline also shows score events by lane, the loudness envelope and the
+  comments.
+- **Viewer.** 16:9, 9:16 and 1:1 canvases, title- and action-safe guides, and A/B compare.
+- **Inspector.** Live **knobs** (`Knob.double/bool/text/color`), a props JSON editor, and the
+  `check` report.
+- **Comments.** Timecoded, with an optional time range and region box. They are stored as plain
+  JSON files in `.swift-render/reviews/` that you commit.
+- **Agent panel.** Runs headless Claude Code on the comments you select. It takes a git checkpoint
+  first, so **Revert** undoes the run.
+- **Render queue.** Presets for Master 1080p60, 4K, 9:16, 1:1, App Store previews (which enforce
+  15–30 s), preview and GIF. It shows progress, ETA and stop, and can attach the result to a
+  comment.
+- **`--snapshot out.png`** draws the window offscreen and exits, for CI and for agents that need to
+  see the UI. The screenshot above was made with `--snapshot`.
+
+Studio needs macOS 14+ and a Swift 6 toolchain (Xcode 26) because it compiles your project. Keys,
+presets, packaging and notarization are covered in [docs/studio.md](docs/studio.md).
+
+## The review loop
+
+You scrub to the beat that's off, draw a box and type a note. Claude Code then picks the note up.
+It finds the clip that draws that moment, edits the Swift and rebuilds. It renders the frame
+and *looks at it*. Then it replies with a `file:line` summary and an after-frame, and resolves the
+note. You compare before and after in Studio, then accept the change or reopen the note.
+
+```bash
+swift run swift-render review add AppleLaunch --at 6.2 --end 7.4 --region 0.36,0.57,0.28,0.17 "name lands a beat late"
+swift run swift-render review list
+claude --agent swift-render-director "work through the open swift-render comments"
+```
+
+- **Comments are files.** `.swift-render/reviews/<Scene>.json` is written under `flock`, so you can
+  commit it. `swift-render review list|show|add|reply|status|frame|delete|scenes` drives it
+  from the terminal.
+- **`swift-render-mcp`** is a stdio MCP server with 13 tools (`list_comments`, `get_comment`,
+  `claim_comment`, `render_frames`, `resolve_comment`, `build`, `set_knobs`, …). Frames come back
+  inline, so the agent sees what it changed. In this repo, `.mcp.json` registers it.
+- **`swift-render-director`** (`.claude/agents/`) is a film-director subagent. It handles one
+  comment at a time and keeps `body(at:)` pure. It never uses whoosh, riser or swish. When a note
+  is ambiguous, it asks instead of guessing.
+- **Other repos** get the agent, the skill and the MCP server from the Claude Code plugin:
+
+  ```
+  /plugin marketplace add skyblanket/swift-render
+  /plugin install swift-render@swift-render
+  ```
+
+  From a shell, the same commands are `claude plugin marketplace add skyblanket/swift-render` and
+  `claude plugin install swift-render@swift-render`. In an app repo where you've run `swift-render init`,
+  the plugin builds the MCP server from `./Launch` by itself.
+
+The CLI, the MCP server, the agent definition and the plugin manifests are covered by tests and
+smoke scripts (`scripts/mcp-smoke.py`). A real model turn from end to end has not been observed
+on a logged-in machine yet. [docs/review-loop.md](docs/review-loop.md) says exactly what was
+verified.
 
 ## Why not just use Remotion?
 
@@ -44,11 +157,14 @@ Remotion is great — and it's React rendered by **headless Chromium**, frame by
 | Install weight | Swift package, **zero dependencies** | node_modules + a Chromium download |
 | Toolchain | `swift run`, done | npm, bundler, browser binaries |
 | Runs on | macOS 14+ | anywhere Node runs ✓ |
-| Web preview/player | ❌ render PNG/MP4 fast instead | ✓ Studio + `<Player>` — genuinely good |
+| Editor | **swift-render Studio**: native macOS app. Hot reload of your Swift, timeline lanes probed from your `Timeline`/`Score`, live knobs. *Preview in 0.10* | Remotion Studio in the browser ✓ (mature) |
+| Review → fix loop | Timecoded, region-boxed comments in git → the `swift-render-director` agent (Claude Code + MCP) edits, re-renders, looks and resolves. *Preview: plumbing tested, live model turn not yet verified* | not built in |
+| Launch film from a repo | `swift-render launch .` scans the codebase → Apple-style film | start from a template |
+| Web player / embeds | ❌ MP4/GIF out only | ✓ `<Player>` — genuinely good |
 | Render farm | your Mac (it's fast) | Lambda ✓ |
 
-**Use Remotion** if you need browser embeds, a web player, or Lambda-scale farms.
-**Use swift-render** if you want native quality, 5–10× faster local renders, real shaders, and an API a language model writes correctly on the first try.
+**Use Remotion** if you need browser embeds, a web player, a mature editor, or Lambda-scale farms.
+**Use swift-render** if you want native quality, 5–10× faster local renders, real shaders, a launch film straight from your Swift repo, and an API a language model writes correctly on the first try.
 
 ## The whole API fits in your head
 
@@ -56,13 +172,14 @@ A scene is a pure function: time in, view out. No state, no timers, no animation
 
 ```swift
 import SwiftUI
+import SwiftRender
 
 public struct Hello: RenderScene {
     public static let defaultDuration: Double = 3.0
 
     @MainActor public static func body(at t: Double, duration: Double) -> some View {
         let p = Ease.spring(t, from: 0, to: 1, response: 0.5, dampingFraction: 0.6)
-        Text("hello.")
+        return Text("hello.")
             .font(.system(size: 120, weight: .black))
             .foregroundStyle(.white)
             .scaleEffect(0.8 + 0.2 * p)
@@ -216,6 +333,8 @@ swift run swift-render render StyleReel --audio out/reel.wav
 
 | | |
 |---|---|
+| `AppleLaunch` — the launch-film template `launch` fills in; its default props are a sample app | `swift run swift-render render AppleLaunch --preview --open` |
+| `KnobLab` — knobs reference: drag its sliders in Studio's Knobs tab | `swift run swift-render-studio . --scene KnobLab --tab knobs` |
 | `NeverHeard` — a 93 s narrated short: local TTS voiceover, karaoke captions, dither dissolves | `swift run swift-render render NeverHeard` |
 | `StyleLab` — one scene re-rendered 16 ways: pixel, dither, ASCII, halftone, CMYK, mosaic, LED… | `swift run swift-render render StyleLab` |
 | `SpiderNoir` — a 1-bit charcoal-and-cream noir short | `swift run swift-render render SpiderNoir` |
@@ -282,18 +401,32 @@ captions as a sidecar. See `MediaDemo`.
 ```text
 swift-render new    <Scene> [--kind audio]               scaffold an auto-registered scene
 swift-render check  <Scene>                              contact sheet + frame scan + audio/sample/voiceover report
-swift-render preview <Scene>                             live window: scrub, play/pause, frame-step, synced audio
-swift-render render <Scene> [--duration s] [--fps n] [--aspect 16:9|9:16|1:1]
-                            [--audio file] [--props file.json] [--range a:b]
-                            [--jobs n|auto] [--preview] [--open] [--no-postfx] [--out path]
+swift-render preview <Scene> [--snapshot png]            live window: scrub, play/pause, frame-step, synced audio
+swift-render render <Scene> [--duration s] [--fps n] [--aspect 16:9|9:16|1:1] [--width px --height px] [--scale n]
+                            [--audio file] [--props file.json] [--knobs file.json] [--range a:b]
+                            [--jobs n|auto] [--preview] [--open] [--no-postfx] [--progress json] [--out path]
 swift-render frame  <Scene> --at <t>[,t2,…] [--out path.png]   one or several frames
 swift-render contact <Scene> [--cols n] [--rows n]       grid contact sheet
 swift-render audio  <Scene> --out score.wav              export the scene's Score
 swift-render captions <Scene> --out film.srt|.vtt        export voiceover captions
 swift-render props  <Scene>                              print default props JSON
+swift-render info   <Scene> [--json]                     clips (labels, file:line), knobs, score lanes, captions
+swift-render list   [--json]                             all registered scenes
 swift-render smoke                                       one frame of every scene + no-swish check (CI)
-swift-render list                                        all registered scenes
+
+swift-render launch [path=.] [--out f.mp4] [--aspect 16:9|9:16|1:1] [--preview] [--open]
+                    [--voiceover] [--rescan] [--no-render] [--eject] [--no-manifest] [--props-out f.json]
+swift-render init   [path=.] [--local <swift-render checkout>] [--force]     scaffold a Launch/ package
+swift-render review list|show|add|reply|status|frame|delete|scenes …        timecoded review comments
+swift-render serve                                       Studio's render host (JSON lines + binary frames on stdio)
+
+swift-render-studio [project] [--scene X] [--at t] [--tab comments|knobs|props|info] [--snapshot out.png]
+swift-render-mcp                                         MCP server for the review loop (stdio, 13 tools)
 ```
+
+**Knobs** override per-scene constants without touching code. `.swift-render/knobs/<Scene>.json`
+applies to every render, and `--knobs file.json` swaps in another set for one run. `--scale 2`
+encodes 3840×2160 from a 1080p scene, and `--preview` really encodes at half size.
 
 **`--jobs n|auto`** renders in parallel processes and stitches the chunks without re-encoding
 (frame-exact against a single-process render). StyleLab, 41 s of 1080p60: 65 s → 19 s at 5 jobs.
@@ -307,15 +440,59 @@ it's buried.
 1. Your scene is `(t, duration) → some View` — pure, deterministic, `@MainActor`.
 2. `Recorder` walks frames `0..<duration*fps`, renders each via `ImageRenderer`, pipes BGRA pixel buffers into `AVAssetWriter` (H.264, no B-frames), then `MP4Assembler` muxes the audio — the video stream is copied, never re-encoded. `--jobs` splits the frames across processes and the same assembler stitches them.
 3. A global `PostFX` pass (film grain + vignette, seeded and deterministic) makes raw SwiftUI feel cinema-grade. Opt out with `--no-postfx` or own it per-scene with `ownsPostFX`.
-4. There is no step 4. No browser, no server, no project file.
+4. There is no step 4. No browser, no server, no project file required.
+
+Studio and the review loop add no new render path. Studio runs your CLI's `serve` as a child
+process over stdio, and its exports are ordinary `render` runs. The MCP server shells out to the
+same CLI. Every pixel comes from the code above.
 
 Determinism isn't a vibe — `swift test` includes a render-twice-byte-identical check, and CI runs it on every push.
 
 ## Use it as a library
 
 ```swift
-.package(url: "https://github.com/skyblanket/swift-render", from: "0.9.0")
+.package(url: "https://github.com/skyblanket/swift-render", from: "0.10.0")
 ```
+
+| Product | What it is |
+|---|---|
+| `SwiftRender` | The engine: scene protocols, `Timeline`, `Score`, `Knob`, `Recorder`, shaders, LaunchKit and `AppleLaunch` |
+| `SwiftRenderTool` | The whole `swift-render` CLI as a library: `SwiftRenderCommand.main(scenes:)` |
+| `SceneRegistryPlugin` | Build plugin. It registers every `public struct X: …Scene` in your CLI target and its same-package dependencies |
+| `SwiftRenderKit` | Foundation-only model: `.swift-render/` layout, review comments, host protocol, `LaunchProps`/`LaunchScanner` |
+| `SwiftRenderScenes` | The 40-odd demo films. Depend on it only if you want them |
+
+**Your own `swift-render`, for your own scenes.** This is what `swift-render init` generates, and
+Studio and the MCP server work with it the same way they work with this repo:
+
+```swift
+// Package.swift
+products: [.executable(name: "my-films", targets: ["MyFilmsCLI"])],
+// …
+.target(name: "MyScenes", dependencies: [.product(name: "SwiftRender", package: "swift-render")]),
+.executableTarget(
+    name: "MyFilmsCLI",
+    dependencies: ["MyScenes", .product(name: "SwiftRenderTool", package: "swift-render")],
+    plugins: [.plugin(name: "SceneRegistryPlugin", package: "swift-render")]
+),
+```
+
+```swift
+// Sources/MyFilmsCLI/main.swift
+import SwiftRenderTool
+await SwiftRenderCommand.main(scenes: generatedSceneRunners)   // written by SceneRegistryPlugin
+```
+
+```jsonc
+// swift-render.json at the package root: marks the project for Studio, `review` and the MCP server
+{"product": "my-films", "scenesDir": "Sources/MyScenes"}
+```
+
+Now `swift run my-films render|check|info|review|serve …` works on your scenes, and the
+built-in `AppleLaunch` scene comes along too. Name the executable *product* whatever you like.
+Don't name the *module* `launch`, because that name shadows a Darwin module.
+
+You can also skip the CLI and drive the engine directly:
 
 ```swift
 import SwiftRender
@@ -324,29 +501,36 @@ let recorder = Recorder(config: .init(fps: 60, size: .init(width: 1920, height: 
 try await recorder.render(to: url, duration: 5) { t in MyView(t: t) }
 ```
 
-The library is just the engine. The 40-odd demo scenes live in a separate `SwiftRenderScenes`
-product (`Sources/SwiftRenderScenes`) — depend on it only if you want them. Code outside the
-library reaches the bundled shaders and resources through `ShaderLibrary.swiftRender` and
-`Bundle.swiftRender`.
+Code outside the engine reaches the bundled shaders and resources through
+`ShaderLibrary.swiftRender` and `Bundle.swiftRender`.
 
 ## For AI agents
 
-`docs/ai-quickstart.md` is a compact, LLM-ready guide to the whole API. The design goal: an agent that has never seen this repo writes a working, good-looking scene on the first attempt. (This README's hero ad is the proof.)
+`docs/ai-quickstart.md` is a compact, LLM-ready guide to the whole API, including knobs, clip labels, LaunchKit, `launch`/`init` and the `review` CLI. The design goal: an agent that has never seen this repo writes a working, good-looking scene on the first attempt. (This README's hero ad is the proof.)
+
+To have an agent work through review notes, use the `swift-render-director` agent and the `swift-render` MCP server (see [The review loop](#the-review-loop)). Studio's `--snapshot` lets an agent see the editor itself.
+
+Deeper docs: [launch.md](docs/launch.md) · [studio.md](docs/studio.md) · [review-loop.md](docs/review-loop.md).
 
 ## Requirements
 
 - macOS 14+ (Apple silicon recommended; that's where the speed numbers come from)
-- Xcode 15+ toolchain. The Metal compiler is only needed when **editing** shaders (`xcodebuild -downloadComponent MetalToolchain`); a prebuilt metallib covers everything else
-- ffmpeg optional — handy for GIF/thumbnail post-processing
+- Engine and CLI: Xcode 16 or later (CI builds on macOS 15; the manifest is tools-version 5.10). The Metal compiler is only needed when **editing** shaders (`xcodebuild -downloadComponent MetalToolchain`); a prebuilt metallib covers everything else
+- Studio: Swift 6 / Xcode 26, because it compiles your project. It is not sandboxed. To ship it to other Macs, sign it with Developer ID and notarize it ([docs/studio.md](docs/studio.md#notarizing-for-distribution))
+- Review loop: [Claude Code](https://claude.com/claude-code) (`claude`), logged in
+- ffmpeg is optional. It's handy for GIF/thumbnail post-processing, and Studio needs it for GIF exports and to keep the sound on In→Out exports
 - Voiceover uses macOS `say` (install Premium voices in System Settings › Accessibility › Spoken Content for better quality) or Kokoro (`tools/kokoro_tts.py` + `.venv-kokoro`)
 
 ## Roadmap
 
-- Transparent ProRes 4444 · 10-bit masters
-- Vision-driven effects library (particles from hands, mask-aware Stylize looks)
-- GPU dither/halftone post pass (the CPU `Dither` is the toolchain-free fallback)
-- Audio-reactive FFT improvements (configurable bands, onset detection)
-- Linux? No — this is proudly the native-Apple lane.
+See [ROADMAP.md](ROADMAP.md). The goal is to make swift-render the default way Swift teams make
+launch films, App Store previews and release videos. It rests on four pillars: the engine, Studio,
+the review loop and (later) cloud review links. Next up is **0.11, "Launch everywhere"**. It brings
+an App Store Preview Kit that enforces Apple's spec, ProRes 4444 and HEVC-with-alpha masters,
+more LaunchKit styles, your app's real SwiftUI views inside `DeviceFrame`, and
+`swift-render doctor`.
+
+Linux? No — this is proudly the native-Apple lane.
 
 ## License
 
