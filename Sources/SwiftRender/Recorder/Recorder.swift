@@ -108,13 +108,10 @@ public final class Recorder {
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = false
 
-        // The adaptor's pool recycles IOSurface-backed buffers the encoder reads without a copy.
         let pbAttrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
         ]
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
@@ -128,11 +125,7 @@ public final class Recorder {
             ])
         }
         writer.startSession(atSourceTime: .zero)
-        guard let pool = adaptor.pixelBufferPool else {
-            throw NSError(domain: "Recorder", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "AVAssetWriter provided no pixel buffer pool"
-            ])
-        }
+        let pool = try Self.makePool(width: width, height: height)
 
         let totalFrames = max(1, Int(((endTime - startTime) * Double(config.fps)).rounded()))
         let timescale: CMTimeScale = CMTimeScale(config.fps)
@@ -225,10 +218,33 @@ public final class Recorder {
         return renderer.cgImage
     }
 
+    /// Recycled 32BGRA frame buffers. Deliberately *not* IOSurface-backed (unlike the
+    /// writer adaptor's own pool): the encoder converts plain buffers to YUV exactly
+    /// as it did the pre-0.9 CIContext buffers, so videos stay bit-identical; IOSurface
+    /// sources take another conversion path (≈52 dB PSNR, not identical) for no speedup.
+    nonisolated static func makePool(width: Int, height: Int) throws -> CVPixelBufferPool {
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        ]
+        var pool: CVPixelBufferPool?
+        guard CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool) == kCVReturnSuccess, let pool else {
+            throw NSError(domain: "Recorder", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Cannot create a \(width)×\(height) pixel buffer pool"
+            ])
+        }
+        return pool
+    }
+
     /// Copy `image` into a 32BGRA buffer, resampling only if the sizes differ.
     /// `.copy` replaces rather than blends, because pooled buffers hold old frames.
-    /// For an sRGB image of the buffer's size this is a byte swizzle (~0.5 ms at
-    /// 1080p, vs ~7.5 ms through CIContext) with identical output.
+    /// For an sRGB image of the buffer's size this is a byte swizzle — ~0.7 ms at
+    /// 1080p vs ~1.2–2 ms through CIContext, byte-identical (RecorderTests). Both
+    /// also pay ~1.5 ms the first time they touch an ImageRenderer image, whose
+    /// pixels are rasterized lazily.
     nonisolated static func draw(_ image: CGImage, into buffer: CVPixelBuffer) -> Bool {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
