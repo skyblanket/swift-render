@@ -52,6 +52,36 @@ final class ProjectModelTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testAgentKnobWriteRightAfterOurSaveIsApplied() async throws {
+        let root = try tempRoot()
+        var o = LaunchOptions()
+        o.fakeHost = true
+        o.scene = "LaunchFilm"
+        let model = ProjectModel(root: root, options: o)
+        await model.start()
+        await waitUntil(10, "scene open") { model.info != nil }
+        await model.setKnobs(["logo.scale": .number(1.2)], dragging: false, replacing: true)
+        model.saveKnobs()
+        let url = model.project.knobsURL(scene: "LaunchFilm")
+        // Our own save echoing back changes nothing.
+        model.handle([FileWatcher.Change(kind: .knobs, paths: [url.path])])
+        XCTAssertEqual(model.knobValues, ["logo.scale": .number(1.2)])
+        // An MCP set_knobs 0.3 s later (inside the old 1 s echo window) is picked up.
+        try KnobFile.save(["logo.scale": .number(1.2), "grain": .bool(false)], to: url)
+        model.handle([FileWatcher.Change(kind: .knobs, paths: [url.path])])
+        await waitUntil(5, "agent knob applied") { model.knobValues["grain"] == .bool(false) }
+        XCTAssertEqual(model.host.info?.knobs.first { $0.key == "grain" }?.value, .bool(false))
+        await model.shutdown()
+    }
+
+    func testRegionPinsOnlyOnACanvasOfTheSameShape() {
+        let landscape = FakeHostClient.info(scene: "LaunchFilm", width: 1920, height: 1080)
+        XCTAssertTrue(PinsOverlay.sameShape(ReviewCanvas(width: 1920, height: 1080, fps: 60), as: landscape))
+        XCTAssertTrue(PinsOverlay.sameShape(ReviewCanvas(width: 960, height: 540, fps: 30), as: landscape))
+        XCTAssertFalse(PinsOverlay.sameShape(ReviewCanvas(width: 1080, height: 1920, fps: 60), as: landscape))
+        XCTAssertTrue(PinsOverlay.sameShape(nil, as: landscape), "older comments without a canvas still show")
+    }
+
     // MARK: New Launch Film in an `init` scaffold
 
     func testScaffoldLaunchFilmUsesTheAppNotTheLaunchPackage() throws {

@@ -170,8 +170,6 @@ final class ProjectModel {
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var started = false
-    /// Our own knob-file writes, so the watcher doesn't echo them back.
-    @ObservationIgnored private var lastKnobWrite: Date?
 
     var isFake: Bool { options.fakeHost || options.fakeProcessHost }
     var title: String { project.root.lastPathComponent }
@@ -204,7 +202,11 @@ final class ProjectModel {
             factory = HostSupervisor.realFactory(project: project)
         }
         host = HostSupervisor(project: project, makeHost: factory)
-        playback = PlaybackEngine()
+        // Settings › Playback.
+        let defaults = UserDefaults.standard
+        let budgetMB = defaults.object(forKey: "cacheBudgetMB") == nil ? 1024 : max(256, defaults.integer(forKey: "cacheBudgetMB"))
+        playback = PlaybackEngine(cache: FrameCache(budgetBytes: budgetMB << 20))
+        playback.quality = defaults.string(forKey: "playbackQuality").flatMap(PlaybackQuality.init(rawValue:)) ?? .auto
         review = ReviewController(project: project)
         agent = AgentController(project: project)
         renders = RenderQueue(project: project)
@@ -332,9 +334,12 @@ final class ProjectModel {
                 review.reload()
             case .knobs:
                 guard let scene = selectedScene,
-                      c.paths.contains(where: { $0.hasSuffix("/\(scene).json") }),
-                      Date().timeIntervalSince(lastKnobWrite ?? .distantPast) > 1 else { continue }
+                      c.paths.contains(where: { $0.hasSuffix("/\(scene).json") }) else { continue }
+                // Not a time window after our own save (an agent's set_knobs landing in it was
+                // dropped, then overwritten by the next save): compare contents instead. Our
+                // own write reads back as the live set; anything else is applied.
                 let values = KnobFile.load(project.knobsURL(scene: scene))
+                guard values != knobValues else { continue }
                 Task { await setKnobs(values, dragging: false, replacing: true) }
             }
         }
@@ -420,7 +425,6 @@ final class ProjectModel {
 
     func saveKnobs() {
         guard let scene = selectedScene else { return }
-        lastKnobWrite = Date()
         try? KnobFile.save(knobValues, to: project.knobsURL(scene: scene))
     }
 

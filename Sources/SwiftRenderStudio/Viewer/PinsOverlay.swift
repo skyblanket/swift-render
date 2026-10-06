@@ -20,7 +20,7 @@ struct PinsOverlay: View {
         let visible = model.playback.visibleCommentIDs
         let numbers = ReviewController.numbering(model.review.comments)
         let shown = model.review.comments
-            .filter { visible.contains($0.id) && $0.region != nil }
+            .filter { visible.contains($0.id) && $0.region != nil && Self.sameShape($0.canvas, as: model.info) }
             .sorted { (numbers[$0.id] ?? 0) < (numbers[$1.id] ?? 0) }
         ZStack(alignment: .topLeading) {
             ForEach(shown) { c in
@@ -31,6 +31,14 @@ struct PinsOverlay: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// A region is a fraction of the canvas it was drawn on: a box drawn at 9:16 marks a
+    /// different area of a 16:9 frame, so it's only drawn (and draggable) on a canvas of the
+    /// same shape. The thread still lists it.
+    static func sameShape(_ canvas: ReviewCanvas?, as info: SceneInfo?) -> Bool {
+        guard let c = canvas, c.width > 0, c.height > 0, let i = info, i.width > 0, i.height > 0 else { return true }
+        return abs(Double(c.width) / Double(c.height) - Double(i.width) / Double(i.height)) < 0.01
     }
 
     @ViewBuilder
