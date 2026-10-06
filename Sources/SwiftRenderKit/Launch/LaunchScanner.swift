@@ -38,19 +38,37 @@ public struct LaunchScanner {
         public var executeManifest: Bool
         /// Read commit/contributor/tag stats and the remote URL from git.
         public var git: Bool
-        /// Stop walking the tree after this many files.
+        /// Stop walking the tree after this many files. The walk is breadth-first, so
+        /// top-level files (README, CHANGELOG, LICENSE) and shallow manifests are always seen.
         public var maxFiles: Int
         public init(executeManifest: Bool = true, git: Bool = true, maxFiles: Int = 20_000) {
             self.executeManifest = executeManifest; self.git = git; self.maxFiles = maxFiles
         }
     }
 
+    /// The scanned directory, symlinks resolved (FileManager won't enumerate a symlink).
     public let root: URL
     public let options: Options
+    /// The folder name as given (a symlink keeps its own name for the fallback product name).
+    let folderName: String
 
     public init(root: URL, options: Options = Options()) {
-        self.root = root.standardizedFileURL
+        let given = root.standardizedFileURL
+        self.root = given.resolvingSymlinksInPath()
+        self.folderName = given.lastPathComponent
         self.options = options
+    }
+
+    /// `path` (relative to `root`, or absolute) as a file URL — nil when it resolves,
+    /// symlinks included, to somewhere outside `root`. Scanned and user-edited asset
+    /// paths go through this before anything is copied from them.
+    public static func contained(_ path: String, in root: URL) -> URL? {
+        guard !path.isEmpty else { return nil }
+        let base = root.standardizedFileURL.resolvingSymlinksInPath()
+        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+        let prefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
+        return resolved.path.hasPrefix(prefix) ? resolved : nil
     }
 
     /// An SSH or HTTPS GitHub remote → ("https://github.com/o/r", "o/r"); nil for non-URL remotes.
@@ -60,7 +78,7 @@ public struct LaunchScanner {
 
     /// Scan the codebase. Never throws: missing pieces land in `report.missing`.
     public func scan() -> (props: LaunchProps, report: LaunchScanReport) {
-        var s = State(root: root, options: options)
+        var s = State(root: root, folderName: folderName, options: options)
         s.run()
         return (s.props, s.report)
     }
@@ -73,6 +91,7 @@ private let skipDirs: Set<String> = [".build", ".git", ".swiftpm", "DerivedData"
 
 private struct State {
     let root: URL
+    let folderName: String
     let options: LaunchScanner.Options
     var props = LaunchProps(name: "")
     var report: LaunchScanReport
@@ -80,6 +99,9 @@ private struct State {
     // Gathered facts, resolved by precedence at the end.
     var packageName: String?
     var packageProducts: (library: [String], executable: [String], app: [String]) = ([], [], [])
+    /// Executable product → its targets; executable target → its source directory.
+    var executableProductTargets: [String: [String]] = [:]
+    var executableTargetPaths: [String: String] = [:]
     var packagePlatforms: [LaunchProps.Platform] = []
     var packageDependencies: Int?
     var toolsVersion: String?
@@ -89,10 +111,14 @@ private struct State {
     var changelogVersion: (String, String?, Int, String)?   // version, date, line, file
     var tagVersion: String?
     var files: [String] = []                                   // relative paths
+    var walkCapped = false
     var accentFromBadge: (String, Int)?
+    /// Sources with an `@main` SwiftUI `App` (SwiftPM apps have no .xcodeproj).
+    var appMains: [String] = []
 
-    init(root: URL, options: LaunchScanner.Options) {
+    init(root: URL, folderName: String, options: LaunchScanner.Options) {
         self.root = root
+        self.folderName = folderName
         self.options = options
         report = LaunchScanReport(root: root.path)
         props.accent = ""   // filled by AccentColor / README badge / default in resolve()
@@ -119,33 +145,53 @@ private struct State {
 
     // MARK: file walk
 
+    /// Breadth-first, in name order: everything at depth n is recorded before depth n + 1,
+    /// so top-level files and shallow manifests (Info.plist, .xcodeproj, Sources/*.swift)
+    /// are seen before a deep data or asset folder can use up `maxFiles`, and a capped
+    /// scan is deterministic. Hidden entries are skipped except `.github/`.
     mutating func walk() {
         let fm = FileManager.default
-        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
-                                    options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return }
-        let base = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        while let url = e.nextObject() as? URL {
-            let name = url.lastPathComponent
-            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if isDir {
-                if skipDirs.contains(name) || name.hasSuffix(".xcframework") { e.skipDescendants() }
-                // .xcassets / .xcodeproj are packages to the enumerator: record them explicitly.
-                if name.hasSuffix(".xcassets") || name.hasSuffix(".xcodeproj") || name.hasSuffix(".icon") {
-                    files.append(String(url.standardizedFileURL.path.dropFirst(base.count)))
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        var queue: [(url: URL, rel: String, depth: Int)] = [(root, "", 0)]
+        var head = 0
+        outer: while head < queue.count {
+            let (dir, dirRel, depth) = queue[head]
+            head += 1
+            guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) else { continue }
+            for url in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let name = url.lastPathComponent
+                if name.hasPrefix("."), !(depth == 0 && name == ".github") { continue }
+                let rel = dirRel.isEmpty ? name : dirRel + "/" + name
+                let values = try? url.resourceValues(forKeys: Set(keys))
+                if values?.isDirectory == true {   // symlinked directories are not followed
+                    // .xcassets / .xcodeproj / .icon are read as units: record them, don't descend.
+                    if name.hasSuffix(".xcassets") || name.hasSuffix(".xcodeproj") || name.hasSuffix(".icon") {
+                        files.append(rel)
+                        continue
+                    }
+                    if skipDirs.contains(name) || name.hasSuffix(".xcframework") || values?.isPackage == true { continue }
+                    // A `swift-render init` scaffold (Launch/) is the film, not the product's code.
+                    if fm.fileExists(atPath: url.appendingPathComponent("swift-render.json").path),
+                       fm.fileExists(atPath: url.appendingPathComponent("Sources/LaunchScenes").path) { continue }
+                    queue.append((url, rel, depth + 1))
+                    continue
                 }
-                continue
-            }
-            files.append(String(url.standardizedFileURL.path.dropFirst(base.count)))
-            if files.count >= options.maxFiles {
-                report.warnings.append("stopped after \(options.maxFiles) files")
-                break
+                files.append(rel)
+                // Top-level files never count against the cap.
+                if depth > 0, files.count >= options.maxFiles {
+                    walkCapped = true
+                    report.warnings.append("stopped after \(options.maxFiles) files")
+                    break outer
+                }
             }
         }
         files.sort()
     }
 
+    /// A text file with CRLF / CR line endings normalized to LF.
     func read(_ rel: String) -> String? {
-        try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
+        (try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8))?
+            .replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 
     func firstFile(named names: [String], topLevelOnly: Bool = true) -> String? {
@@ -208,13 +254,20 @@ private struct State {
         for p in json["products"] as? [[String: Any]] ?? [] {
             guard let name = p["name"] as? String, let type = p["type"] as? [String: Any] else { continue }
             if type["library"] != nil { packageProducts.library.append(name) }
-            if type["executable"] != nil { packageProducts.executable.append(name) }
+            if type["executable"] != nil {
+                packageProducts.executable.append(name)
+                executableProductTargets[name] = p["targets"] as? [String] ?? []
+            }
             if type.keys.contains(where: { $0.lowercased().contains("application") }) { packageProducts.app.append(name) }
         }
         for p in json["platforms"] as? [[String: Any]] ?? [] {
             if let n = p["platformName"] as? String, let name = Self.platform(n) {
                 packagePlatforms.append(.init(name, minimum: (p["version"] as? String).map(Self.shortVersion)))
             }
+        }
+        for t in json["targets"] as? [[String: Any]] ?? [] where (t["type"] as? String) == "executable" {
+            guard let name = t["name"] as? String else { continue }
+            executableTargetPaths[name] = (t["path"] as? String).map { Self.trimSlashes($0) } ?? "Sources/\(name)"
         }
         packageDependencies = (json["dependencies"] as? [Any])?.count
         if let tv = (json["toolsVersion"] as? [String: Any])?["_version"] as? String {
@@ -226,6 +279,12 @@ private struct State {
         if let m = Self.firstMatch(#"Package\s*\(\s*name:\s*"([^"]+)""#, src) { packageName = m; note("packageName", m, "Package.swift") }
         for m in Self.allMatches(#"\.library\s*\(\s*name:\s*"([^"]+)""#, src) { packageProducts.library.append(m) }
         for m in Self.allMatches(#"\.executable\s*\(\s*name:\s*"([^"]+)""#, src) { packageProducts.executable.append(m) }
+        for (name, list) in Self.matchPairs(#"\.executable\s*\(\s*name:\s*"([^"]+)"\s*,\s*targets:\s*\[([^\]]*)\]"#, src) {
+            executableProductTargets[name] = Self.allMatches(#""([^"]+)""#, list)
+        }
+        for (name, rest) in Self.matchPairs(#"\.executableTarget\s*\(\s*name:\s*"([^"]+)"([^)]*)"#, src) {
+            executableTargetPaths[name] = Self.firstMatch(#"path:\s*"([^"]+)""#, rest).map { Self.trimSlashes($0) } ?? "Sources/\(name)"
+        }
         for m in Self.allMatches(#"\.iOSApplication\s*\(\s*name:\s*"([^"]+)""#, src) { packageProducts.app.append(m) }
         let platformRE = #"\.(iOS|macOS|watchOS|tvOS|visionOS|macCatalyst)\s*\(\s*(?:\.v([0-9_]+)|"([0-9.]+)")"#
         if let re = try? NSRegularExpression(pattern: platformRE) {
@@ -336,7 +395,16 @@ private struct State {
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 for img in json["images"] as? [[String: Any]] ?? [] {
                     guard let file = img["filename"] as? String, img["appearances"] == nil else { continue }
+                    // Xcode writes plain file names into an .appiconset; anything else (a path,
+                    // "..", a symlink out of the repo) could pull an unrelated file into the film
+                    // or into `init`'s Launch/assets/.
                     let rel = "\(set)/\(file)"
+                    guard !file.isEmpty, file == (file as NSString).lastPathComponent, file != "..", file != ".",
+                          LaunchScanner.contained(rel, in: root) != nil else {
+                        report.warnings.append("\(set)/Contents.json: ignored icon filename \"\(file)\" (outside the icon set)")
+                        continue
+                    }
+                    guard FileManager.default.fileExists(atPath: root.appendingPathComponent(rel).path) else { continue }
                     let declared = Self.pixels(size: img["size"] as? String, scale: img["scale"] as? String)
                     let actual = Self.pngSize(root.appendingPathComponent(rel)).map { $0.0 * $0.1 } ?? 0
                     let px = max(declared, actual)
@@ -364,10 +432,13 @@ private struct State {
         }
     }
 
+    /// Declared pixel count of an icon image ("1024x1024" at "1x"); 0 for nonsense (inf, NaN, huge).
     static func pixels(size: String?, scale: String?) -> Int {
         guard let size, let w = Double(size.split(separator: "x").first ?? "") else { return 0 }
         let s = Double((scale ?? "1x").replacingOccurrences(of: "x", with: "")) ?? 1
-        return Int(w * s * w * s)
+        let side = w * s
+        guard side.isFinite, side > 0, side <= 65_535 else { return 0 }
+        return Int(side * side)
     }
 
     /// Width and height from a PNG's IHDR chunk (no image decoding).
@@ -377,7 +448,10 @@ private struct State {
         guard let d = try? h.read(upToCount: 24), d.count == 24,
               d.starts(with: [0x89, 0x50, 0x4E, 0x47]) else { return nil }
         func be(_ o: Int) -> Int { d[o..<o + 4].reduce(0) { $0 << 8 | Int($1) } }
-        return (be(16), be(20))
+        let (width, height) = (be(16), be(20))
+        // A corrupt header (0 or ~2^32) is not an image size, and w × h would overflow.
+        guard (1...65_535).contains(width), (1...65_535).contains(height) else { return nil }
+        return (width, height)
     }
 
     static func colorsetHex(_ json: [String: Any]) -> String? {
@@ -420,7 +494,8 @@ private struct State {
 
     mutating func scanReadme() {
         guard let rel = firstFile(named: ["README.md", "README.markdown", "Readme.md", "README"]), let text = read(rel) else {
-            report.missing.append("README (tagline, features, code)")
+            report.missing.append(walkCapped ? "README not reached (scan stopped after \(options.maxFiles) files)"
+                                             : "README (tagline, features, code)")
             return
         }
         let lines = text.components(separatedBy: "\n")
@@ -766,6 +841,7 @@ private struct State {
                 let comps = rel.split(separator: "/")
                 if comps.count > 2 { targets.insert(String(comps[1])) }
             }
+            if !Self.isTestPath(rel), Self.isAppMain(src) { appMains.append(rel) }
             if !Self.isTestPath(rel), src.contains(": View {"), src.contains("var body"), all.count <= 48 {
                 views.append((rel, src, all.count))
             }
@@ -776,6 +852,38 @@ private struct State {
         appViews = views
     }
     var appViews: [(rel: String, source: String, count: Int)] = []
+
+    /// An `@main` SwiftUI app entry point: `@main struct X: App`, or an `@main` type with scenes.
+    static func isAppMain(_ src: String) -> Bool {
+        guard src.contains("@main") else { return false }
+        if src.range(of: #"@main\s+(?:public\s+|final\s+)*(?:struct|class)\s+\w+\s*:\s*(?:[\w.]+\s*,\s*)*(?:SwiftUI\.)?App\b"#,
+                     options: .regularExpression) != nil { return true }
+        return ["WindowGroup", "DocumentGroup", "MenuBarExtra"].contains { src.contains($0) }
+    }
+
+    /// The executable product (or bare executable target) whose sources hold an `@main` App,
+    /// with that file — when it is the package's primary product: named like the package, or
+    /// the package ships no library. An auxiliary App (a viewer beside a library of another
+    /// name, like swift-render's Studio) doesn't make a library an app.
+    func primaryAppExecutable() -> (product: String, file: String)? {
+        guard !appMains.isEmpty else { return nil }
+        func target(of file: String) -> String? {
+            executableTargetPaths.filter { file.hasPrefix($0.value + "/") }.max { $0.value.count < $1.value.count }?.key
+                ?? (file.hasPrefix("Sources/") ? file.split(separator: "/").dropFirst().first.map(String.init) : nil)
+        }
+        var candidates: [(product: String, file: String)] = []
+        for file in appMains {
+            guard let t = target(of: file) else { continue }
+            let products = executableProductTargets.filter { $0.value.contains(t) }.map(\.key).sorted()
+            if !products.isEmpty {
+                candidates += products.map { ($0, file) }
+            } else if executableTargetPaths[t] != nil || packageProducts.executable.contains(t) {
+                candidates.append((t, file))   // SwiftPM makes a product for every executable target
+            }
+        }
+        let pkg = packageName.map(Self.norm)
+        return candidates.first { Self.norm($0.product) == pkg } ?? (packageProducts.library.isEmpty ? candidates.first : nil)
+    }
 
     // MARK: Screenshots
 
@@ -803,8 +911,9 @@ private struct State {
         // Name: Info.plist display name > Xcode app product > package > README H1 > folder.
         // A library/CLI package's stray Info.plist (e.g. a helper .app it packages) doesn't
         // name the product: there the package name wins.
-        let folder = root.lastPathComponent
-        let appLike = xcodeApp != nil || !packageProducts.app.isEmpty || packageName == nil
+        let folder = folderName
+        let swiftPMApp = xcodeApp == nil && packageProducts.app.isEmpty ? primaryAppExecutable() : nil
+        let appLike = xcodeApp != nil || !packageProducts.app.isEmpty || swiftPMApp != nil || packageName == nil
         let plistName = appLike ? self.plistName : nil
         var name = plistName ?? xcodeApp?.displayName ?? xcodeApp?.name ?? packageName ?? readmeH1?.0 ?? folder
         if let h1 = readmeH1?.0, Self.norm(h1) == Self.norm(name), h1.count <= 24 { name = h1 }   // keep the README's styling
@@ -813,11 +922,13 @@ private struct State {
         note("name", name, plistName != nil ? "Info.plist" : xcodeApp != nil ? "project.pbxproj" : packageName != nil ? "Package.swift" : readmeH1 != nil ? "README" : "folder name")
 
         // Kind
-        if xcodeApp != nil || !packageProducts.app.isEmpty { props.kind = .app }
+        if xcodeApp != nil || !packageProducts.app.isEmpty || swiftPMApp != nil { props.kind = .app }
         else if !packageProducts.library.isEmpty { props.kind = .library }
         else if !packageProducts.executable.isEmpty { props.kind = .cli }
         else { props.kind = files.contains { $0.hasSuffix(".swift") } ? .library : .app }
-        note("kind", props.kind.rawValue, xcodeApp != nil ? "project.pbxproj" : "Package.swift products")
+        note("kind", props.kind.rawValue, xcodeApp != nil ? "project.pbxproj"
+             : swiftPMApp.map { "\($0.file) (@main App, product \($0.product))" }
+             ?? (packageName == nil ? "no Package.swift or .xcodeproj" : "Package.swift products"))
 
         // Platforms + Swift
         props.platforms = xcodeApp?.platforms.isEmpty == false ? xcodeApp!.platforms : packagePlatforms
@@ -905,6 +1016,23 @@ private struct State {
               let m = re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length)),
               m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound else { return nil }
         return (s as NSString).substring(with: m.range(at: 1))
+    }
+
+    /// Groups 1 and 2 of every match.
+    static func matchPairs(_ pattern: String, _ s: String) -> [(String, String)] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = s as NSString
+        return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap {
+            guard $0.numberOfRanges > 2, $0.range(at: 1).location != NSNotFound else { return nil }
+            let second = $0.range(at: 2).location != NSNotFound ? ns.substring(with: $0.range(at: 2)) : ""
+            return (ns.substring(with: $0.range(at: 1)), second)
+        }
+    }
+
+    static func trimSlashes(_ p: String) -> String {
+        var s = p
+        if s.hasPrefix("./") { s.removeFirst(2) }
+        return s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     static func allMatches(_ pattern: String, _ s: String) -> [String] {
