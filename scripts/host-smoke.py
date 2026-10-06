@@ -17,6 +17,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import statistics
 import struct
 import subprocess
@@ -195,6 +196,7 @@ def main():
     ap.add_argument("--scenes", default="TimelineDemo,LaunchFilm,NeverHeard",
                     help="scenes to time frames for (maxWidth 960)")
     ap.add_argument("--frames", type=int, default=12, help="frames per timing sample")
+    ap.add_argument("--stream-frames", type=int, default=60, help="frames per stream throughput run")
     ap.add_argument("--keep", action="store_true", help="keep the temp project root")
     args = ap.parse_args()
     if not os.access(args.bin, os.X_OK):
@@ -321,7 +323,8 @@ def main():
             if scene not in names:
                 print(f"  skip  {scene} (not in this binary)")
                 continue
-            msg, _, open_ms = h.call("open", scene=scene, fps=30)
+            open_start = time.perf_counter()
+            msg, _, open_ms = h.call("open", scene=scene, fps=30, binaryFrames=True)
             if not check("result" in msg, f"open {scene}"):
                 continue
             info = msg["result"]["info"]
@@ -338,13 +341,17 @@ def main():
             check(len(host_ms) == args.frames, f"{scene}: {args.frames} frames")
             numbers.append((f"open {scene}", f"{open_ms:.0f} ms ({info['kind']}, {dur:.1f}s, audio cached: {bool(info.get('audioPath'))})"))
             numbers.append((f"frame {scene} @960 jpeg", f"host {ms_stats(host_ms)} · round trip {statistics.median(rt_ms):.1f} ms · first {first_rt:.0f} ms"))
-            if ready_scene := next((s for s in ready["scenes"] if s["name"] == scene), None):
-                if ready_scene["hasSoundtrack"]:
-                    t_open = time.perf_counter()
-                    ts, ev, _ = h.take_event("audio", timeout=300)
-                    check(ev.get("audioPath") and os.path.exists(ev["audioPath"]) and len(ev.get("loudness", [])) > 0,
-                          f"{scene}: audio event with cached WAV + loudness")
-                    numbers.append((f"audio {scene}", f"ready {(ts - t_open) * 1000 + open_ms:.0f} ms after open (background)"))
+            for fmt in ("jpeg", "bgra8"):
+                n, wall, steady, nbytes, s_ms = stream_throughput(h, fmt, args.stream_frames, 960)
+                check(n == args.stream_frames, f"{scene}: stream {fmt} {n} frames")
+                if n > 1:
+                    numbers.append((f"stream {scene} @960 {fmt}",
+                                    f"{(n - 1) / steady:5.1f} fps  ({nbytes / n / 1024:.0f} KB/frame, host {statistics.median(s_ms):.1f} ms/frame)"))
+            if next(s for s in ready["scenes"] if s["name"] == scene)["hasSoundtrack"]:
+                ts, ev, _ = h.take_event("audio", timeout=300)
+                check(ev.get("audioPath") and os.path.exists(ev["audioPath"]) and len(ev.get("loudness", [])) > 0,
+                      f"{scene}: audio event with cached WAV + loudness")
+                numbers.append((f"audio {scene}", f"{(ts - open_start) * 1000:.0f} ms after open was sent (background)"))
 
         print("shutdown")
         msg, _, _ = h.call("shutdown")
@@ -359,13 +366,25 @@ def main():
         numbers.append(("process start → ready (2nd run)", f"{(ts - h2.t0) * 1000:.0f} ms"))
         for scene in [s for s in args.scenes.split(",") if s and s in names]:
             if next(s for s in ready2["scenes"] if s["name"] == scene)["hasSoundtrack"]:
+                open_start = time.perf_counter()
                 msg, _, open_ms = h2.call("open", scene=scene, fps=30)
                 check(bool(msg["result"]["info"].get("audioPath")), f"{scene}: cached audio path on reopen ({open_ms:.0f} ms)")
-                ts0 = time.perf_counter()
                 ts, ev, _ = h2.take_event("audio", timeout=300)
-                numbers.append((f"audio {scene} (cache hit)", f"{(ts - ts0) * 1000 + open_ms:.0f} ms after open"))
+                numbers.append((f"audio {scene} (cache hit)", f"{(ts - open_start) * 1000:.0f} ms after open was sent"))
         code = h2.close()
         check(code == 0, f"exit 0 on stdin EOF (got {code})")
+
+        print("crash breadcrumb")
+        h3 = Host(args.bin, root)
+        h3.next(timeout=60)
+        h3.call("open", scene="TimelineDemo", fps=30)
+        h3.call("frame", t=1.25, maxWidth=160)
+        h3.proc.send_signal(signal.SIGSEGV)
+        code = h3.proc.wait(timeout=30)
+        time.sleep(0.2)
+        crash = [l for l in h3.stderr_lines if "fatal SIGSEGV" in l]
+        check(code == -signal.SIGSEGV, f"SIGSEGV reaches the default handler (exit {code})")
+        check(bool(crash) and "frame TimelineDemo t=1.25" in crash[0], f"stderr names the frame: {crash[:1]}")
     except Exception as e:  # report, then fail
         import traceback
         traceback.print_exc()

@@ -350,6 +350,31 @@ final class HostTests: XCTestCase {
         guard case .malformed(nil, _) = HostInbox.decode(Data("not json".utf8)) else { return XCTFail("garbage") }
     }
 
+    func testCLIKnobsFileReplacesProjectKnobs() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-cli-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let saved = sceneRunners
+        sceneRunners = ["KnobBox": SceneRunner(KnobBox.self)]
+        defer { sceneRunners = saved; KnobStore.shared.set([:]) }
+        func frame(_ name: String, knobs: [String: KnobValue]?) async throws -> Data {
+            var argv = ["swift-render", "frame", "KnobBox", "--at", "0.5", "--width", "640", "--height", "360",
+                        "--out", dir.appendingPathComponent(name).path]
+            if let knobs {
+                let file = dir.appendingPathComponent("\(name).knobs.json")
+                try KnobFile.save(knobs, to: file)
+                argv += ["--knobs", file.path]
+            }
+            try await SwiftRenderTool.run(argv)
+            return try Data(contentsOf: dir.appendingPathComponent(name))
+        }
+        let plain = try await frame("plain.png", knobs: nil)
+        let wide = try await frame("wide.png", knobs: ["box.width": .number(600)])
+        let same = try await frame("same.png", knobs: ["box.width": .number(200)])
+        XCTAssertNotEqual(plain, wide, "--knobs changes the render")
+        XCTAssertEqual(plain, same, "an override equal to the default is the default")
+    }
+
     func testCachedMixdownMatchesAudioPlan() throws {
         let score = try XCTUnwrap(ToneLevel.soundtrack(duration: 1))
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-audio-\(UUID().uuidString)")
