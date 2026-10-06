@@ -57,7 +57,10 @@ final class MCPServerTests: XCTestCase {
         try Self.fakeCLI.write(to: exe, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
 
-        let info = SceneInfo(name: "Known", kind: .render, duration: 4, width: 1920, height: 1080, fps: 60)
+        let info = SceneInfo(name: "Known", kind: .render, duration: 4, width: 1920, height: 1080, fps: 60, knobs: [
+            KnobInfo(key: "speed", kind: .double, defaultValue: .number(1), value: .number(1), min: 0, max: 4),
+            KnobInfo(key: "accent", kind: .color, defaultValue: .string("#C7FF1A"), value: .string("#C7FF1A")),
+        ])
         let infoURL = root.appendingPathComponent("info.json")
         try JSONEncoder().encode(info).write(to: infoURL)
         let png = root.appendingPathComponent("fixture.png")
@@ -299,6 +302,17 @@ final class MCPServerTests: XCTestCase {
         c.call(6, "set_knobs", ["scene": "Known", "values": ["a": 2]])
         XCTAssertTrue(result(c.reply(6, within: 20)).isError)
         XCTAssertEqual(try String(contentsOf: fake.project.knobsURL(scene: "Known"), encoding: .utf8), conflicted)
+
+        // A value the engine would ignore (wrong type for the declared knob) is refused, not saved.
+        try FileManager.default.removeItem(at: fake.project.knobsURL(scene: "Known"))
+        c.call(8, "set_knobs", ["scene": "Known", "values": ["speed": "fast", "accent": "lime"]])
+        let mistyped = result(c.reply(8, within: 20))
+        XCTAssertTrue(mistyped.isError, mistyped.text)
+        XCTAssertTrue(mistyped.text.contains("speed: expected a number") && mistyped.text.contains("accent:"), mistyped.text)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.project.knobsURL(scene: "Known").path))
+        c.call(9, "set_knobs", ["scene": "Known", "values": ["speed": 2.5, "accent": "#FF8800"]])
+        XCTAssertEqual(result(c.reply(9, within: 20)).isError, false)
+        XCTAssertEqual(KnobFile.load(fake.project.knobsURL(scene: "Known")), ["speed": .number(2.5), "accent": .string("#FF8800")])
 
         c.call(7, "render_frames", ["scene": "a/../../../../victim/photo", "times": [1]])
         XCTAssertTrue(result(c.reply(7, within: 20)).text.contains("not a scene name"))

@@ -117,7 +117,7 @@ codebases. It adds a native editor and an agent review loop on top of the engine
   reported instead of silently hiding its comments.
 - **swift-render-mcp**: `render_frames`, `contact_sheet` and `check_scene` take `comment` (render
   on that note's canvas) and `aspect`. Scene arguments must be Swift type names; times must be
-  finite and within 0…86400 s. `set_knobs` fails for an unknown scene and never overwrites a knob
+  finite and within 0…86400 s. `set_knobs` fails for an unknown scene or a value of the wrong type for a declared knob, and never overwrites a knob
   file that isn't valid knob JSON. `initialize`/`ping`/`tools/list` answer immediately, other calls
   run on a serial worker with time limits (`SWIFT_RENDER_MCP_TIMEOUT`,
   `SWIFT_RENDER_MCP_RENDER_TIMEOUT`, `SWIFT_RENDER_MCP_BUILD_TIMEOUT`, `SWIFT_RENDER_MCP_EOF_GRACE`),

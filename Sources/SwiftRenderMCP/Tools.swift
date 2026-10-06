@@ -531,14 +531,27 @@ final class ToolBox {
         } catch {
             throw ToolError("\(error) (pass reset: true only once the file is fixed or removed)")
         }
+        let declared = Dictionary((info?.knobs ?? []).map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        var mistyped: [String] = []
         for (k, v) in values {
+            let value: KnobValue?
             switch v {
-            case is NSNull: current[k] = nil
-            case let n as NSNumber where CFGetTypeID(n) == CFBooleanGetTypeID(): current[k] = .bool(n.boolValue)
-            case let n as NSNumber: current[k] = .number(n.doubleValue)
-            case let s as String: current[k] = .string(s)
+            case is NSNull: value = nil
+            case let n as NSNumber where CFGetTypeID(n) == CFBooleanGetTypeID(): value = .bool(n.boolValue)
+            case let n as NSNumber: value = .number(n.doubleValue)
+            case let s as String: value = .string(s)
             default: throw ToolError("knob \(k): expected number, boolean, string or null")
             }
+            // The engine ignores an override whose type doesn't match the declaration, so
+            // saving one would report a fix that never reaches a frame.
+            if let value, let knob = declared[k], let problem = Self.typeProblem(value, for: knob) {
+                mistyped.append("\(k): \(problem)")
+            }
+            current[k] = value
+        }
+        guard mistyped.isEmpty else {
+            throw ToolError("nothing was written — wrong value type for declared knob(s):\n  "
+                            + mistyped.joined(separator: "\n  "))
         }
         try KnobFile.save(current, to: url)
         var lines = ["\(scene) knob overrides (\(url.path.replacingOccurrences(of: project.root.path + "/", with: ""))):"]
@@ -556,6 +569,22 @@ final class ToolBox {
         var out = ToolResult()
         out.text(lines.joined(separator: "\n"))
         return out
+    }
+
+    /// Why `value` can't override `knob`, or nil when it can (mirrors the engine's coercion).
+    static func typeProblem(_ value: KnobValue, for knob: KnobInfo) -> String? {
+        switch (knob.kind, value) {
+        case (.double, .number), (.bool, .bool), (.text, .string): return nil
+        case (.color, .string(let hex)):
+            var h = hex.trimmingCharacters(in: .whitespaces)
+            if h.hasPrefix("#") { h.removeFirst() }
+            let ok = (h.count == 6 || h.count == 8) && UInt64(h, radix: 16) != nil
+            return ok ? nil : "expected a \"#RRGGBB\" or \"#RRGGBBAA\" color, got \"\(hex)\""
+        case (.double, _): return "expected a number"
+        case (.bool, _): return "expected true or false"
+        case (.text, _): return "expected a string"
+        case (.color, _): return "expected a \"#RRGGBB\" color string"
+        }
     }
 
     private func renderVideo(_ a: Args) throws -> ToolResult {

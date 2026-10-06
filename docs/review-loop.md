@@ -118,7 +118,7 @@ Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio.
 | `claim_comment` | `id` | status `inProgress`, assignee `Claude` (agent); captures `<id>-before.png` if the comment has none. Refuses resolved/wontFix |
 | `reply_comment` | `id`, `body`, `attach_frame?`, `reopen?` | agent reply; `attach_frame` renders + attaches the current frame (and returns it); `reopen` gives a claim back (inProgress → open) |
 | `resolve_comment` | `id`, `summary` | renders the after-frame first (fails without changing anything if that fails), adds it on a reply with `summary`, status `resolved`, `resolution = summary`; returns the frame |
-| `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare. Fails for an unknown scene, and never overwrites a knob file that isn't valid knob JSON |
+| `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare. Fails, writing nothing, for an unknown scene or a value of the wrong type for a declared knob (e.g. a string for a number knob, a malformed color); never overwrites a knob file that isn't valid knob JSON |
 | `render_video` | `scene`, `preview?` | renders `out/<Scene>.mp4` (or `-preview.mp4`, half-res 30 fps) |
 
 `comment` (a comment id) renders on that note's canvas — its size, fps and pinned duration — the
