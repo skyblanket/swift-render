@@ -31,14 +31,15 @@ struct AudioPlan {
     func cleanup() { if let tempURL { try? FileManager.default.removeItem(at: tempURL) } }
 
     static func make(_ source: AudioSource, fps: Int,
-                     needsTrack: Bool, needsMux: Bool, announce: Bool = true) throws -> AudioPlan {
-        let plan = try resolve(source, fps: fps, needsTrack: needsTrack, needsMux: needsMux, announce: announce)
+                     needsTrack: Bool, needsMux: Bool, announce: Bool = true, tempDir: URL? = nil) throws -> AudioPlan {
+        let plan = try resolve(source, fps: fps, needsTrack: needsTrack, needsMux: needsMux, announce: announce,
+                               tempDir: tempDir ?? FileManager.default.temporaryDirectory)
         if announce { StageReporter.emit(.render) }
         return plan
     }
 
     private static func resolve(_ source: AudioSource, fps: Int,
-                                needsTrack: Bool, needsMux: Bool, announce: Bool) throws -> AudioPlan {
+                                needsTrack: Bool, needsMux: Bool, announce: Bool, tempDir: URL) throws -> AudioPlan {
         switch source {
         case .none:
             return AudioPlan(track: .silent, muxURL: nil, tempURL: nil)
@@ -59,8 +60,7 @@ struct AudioPlan {
                 track = try AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: fps)
             }
             guard needsMux else { return AudioPlan(track: track, muxURL: nil, tempURL: nil) }
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("sr-score-\(UUID().uuidString).wav")
+            let tmp = tempDir.appendingPathComponent("sr-score-\(UUID().uuidString).wav")
             try WAV.write(left: l, right: r, to: tmp)
             return AudioPlan(track: track, muxURL: tmp, tempURL: tmp)
         }

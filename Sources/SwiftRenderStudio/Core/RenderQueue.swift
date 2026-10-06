@@ -8,9 +8,10 @@ import SwiftRenderKit
 //
 //   build    optimized → `swift build -c release --product <p> --scratch-path .build/studio-release`
 //            (its own scratch path, so it never waits on the live debug builds' lock), skipped
-//            when the release CLI is newer than every source; current debug → the executable
-//            the live host runs (no build)
+//            while no input is newer than the moment the last successful build *started*;
+//            current debug → the executable the live host runs (no build)
 //   render   `<exe> render <Scene> <preset flags> [--range a:b | --jobs auto] [--knobs f] [--props f] --progress json`
+//            (`--jobs auto` for whole films of `parallelMinDuration` s or more)
 //            stderr `{"stage":…}` lines name the early steps (music, finishing up);
 //            `{"progress":{…}}` lines drive the bar and ETA
 //   finish   GIF: ffmpeg palette pass. In→Out range with a score: `<exe> audio` + ffmpeg mux,
@@ -70,8 +71,17 @@ struct RenderJob: Identifiable, Equatable, Sendable {
     var log: [String] = []
     /// Output size on disk once finished.
     var bytes: Int64?
-    /// Frame count from the CLI's first stdout line, before progress lines arrive.
-    var expectedFrames: Int?
+    /// Scene length at enqueue (nil when unknown).
+    var duration: Double?
+    /// Recent progress lines (last few seconds), for a speed that tracks heavier passages.
+    var recentProgress: [ProgressSample] = []
+
+    struct ProgressSample: Equatable, Sendable {
+        var at: Date
+        var frame: Int
+    }
+    /// Seconds of progress lines the speed is measured over.
+    static let rateWindow: TimeInterval = 3
 
     var isRendering: Bool { state.isRendering }
 
@@ -96,9 +106,33 @@ struct RenderJob: Identifiable, Equatable, Sendable {
         return nil
     }
 
+    /// Frames per second over the last few seconds, once there's a second of evidence;
+    /// otherwise the CLI's average since the first frame. A scene whose later frames are
+    /// heavier slows the estimate down with it instead of staying optimistic.
+    var speed: Double {
+        guard case .rendering(_, _, let fps) = state else { return 0 }
+        if let a = recentProgress.first, let b = recentProgress.last {
+            let span = b.at.timeIntervalSince(a.at)
+            if span >= 1, b.frame > a.frame { return Double(b.frame - a.frame) / span }
+        }
+        return fps
+    }
+
+    /// Records a progress line (keeps about the last `rateWindow` seconds).
+    mutating func noteProgress(frame: Int, at now: Date = Date()) {
+        if let last = recentProgress.last, frame < last.frame { recentProgress.removeAll() }
+        recentProgress.append(ProgressSample(at: now, frame: frame))
+        // Keep one sample at or beyond the window's edge so the span stays ~rateWindow.
+        while recentProgress.count > 2, now.timeIntervalSince(recentProgress[1].at) >= Self.rateWindow {
+            recentProgress.removeFirst()
+        }
+    }
+
     /// Seconds left at the current throughput.
     var eta: Double? {
-        guard case .rendering(let d, let t, let fps) = state, fps > 0, d > 0 else { return nil }
+        guard case .rendering(let d, let t, _) = state, d > 0 else { return nil }
+        let fps = speed
+        guard fps > 0 else { return nil }
         return Double(max(0, t - d)) / fps
     }
 
@@ -109,8 +143,9 @@ struct RenderJob: Identifiable, Equatable, Sendable {
         case .queued: return "Waiting its turn"
         case .building: return "Building for export…"
         case .preparing(let what): return what
-        case .rendering(let done, let total, let fps):
+        case .rendering(let done, let total, _):
             var s = "Rendering \(done.formatted()) of \(total.formatted())"
+            let fps = speed
             if fps > 0 { s += " · \(Int(fps.rounded())) fps" }
             if let eta { s += " · " + Self.timeLeft(eta) }
             return s
@@ -202,10 +237,14 @@ final class RenderQueue {
     /// same module cache as the live builds and never fights the terminal's lock.
     static let swiftPM: ExecutableResolver = { project, configuration, progress in
         let scratch = RenderQueue.scratchPath(project, configuration: configuration)
-        // Built once and reused: skip SwiftPM entirely while the release CLI is newer than
-        // every source (a no-op `swift build` still costs seconds of manifest work).
+        // Built once and reused: skip SwiftPM entirely while no input changed since the last
+        // successful build *started* (a no-op `swift build` still costs seconds of manifest
+        // work). Comparing against the start, not the executable's mtime, catches an edit
+        // saved mid-build — after the compiler read the file, before the link.
         let built = scratch.appendingPathComponent("\(configuration)/\(project.config.product)")
-        if configuration == "release", RenderQueue.isFresh(built, project: project) { return built }
+        let stamp = RenderQueue.stampURL(scratch)
+        if configuration == "release", RenderQueue.isFresh(built, stamp: stamp, project: project) { return built }
+        let started = Date()
         let (events, cancel) = ProjectBuilder.stream(project, configuration: configuration, scratchPath: scratch)
         return try await withTaskCancellationHandler {
             for await e in events {
@@ -214,7 +253,10 @@ final class RenderQueue {
                 case .waitingForLock: progress("Waiting for another swift build…")
                 case .diagnostic: break
                 case .finished(let r):
-                    if r.success, let exe = r.executable { return exe }
+                    if r.success, let exe = r.executable {
+                        if configuration == "release" { RenderQueue.markBuilt(stamp, startedAt: started) }
+                        return exe
+                    }
                     let first = r.errors.first.map { "\(URL(fileURLWithPath: $0.file).lastPathComponent):\($0.line): \($0.message)" }
                         ?? r.log.split(separator: "\n").last(where: { $0.contains("error") }).map(String.init)
                         ?? "build failed"
@@ -234,21 +276,30 @@ final class RenderQueue {
             .appendingPathComponent(configuration == "release" ? ".build/studio-release" : ".build/studio", isDirectory: true)
     }
 
-    /// The release CLI at `exe` exists and is newer than the manifest and every file under
-    /// `Sources/` (and a custom scenes directory).
-    nonisolated static func isFresh(_ exe: URL, project: Project) -> Bool {
+    /// Marks a successful release build, dated when it *started*.
+    nonisolated static func stampURL(_ scratch: URL) -> URL {
+        scratch.appendingPathComponent("studio-export.stamp")
+    }
+
+    nonisolated static func markBuilt(_ stamp: URL, startedAt: Date) {
         let fm = FileManager.default
-        guard let built = (try? fm.attributesOfItem(atPath: exe.path))?[.modificationDate] as? Date else { return false }
-        var roots = [project.root.appendingPathComponent("Package.swift"),
-                     project.root.appendingPathComponent("Package.resolved"),
-                     project.root.appendingPathComponent("Sources", isDirectory: true)]
+        guard fm.createFile(atPath: stamp.path, contents: Data()) else { return }
+        try? fm.setAttributes([.modificationDate: startedAt], ofItemAtPath: stamp.path)
+    }
+
+    /// The release CLI at `exe` exists, and no build input is newer than the stamp (the start
+    /// of the last successful build): the manifest, `Sources/`, `Plugins/`, a custom scenes
+    /// directory — and the same for every local `.package(path:)` dependency, which is what
+    /// `swift-render launch --local` writes.
+    nonisolated static func isFresh(_ exe: URL, stamp: URL, project: Project) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: exe.path),
+              let built = (try? fm.attributesOfItem(atPath: stamp.path))?[.modificationDate] as? Date else { return false }
+        var roots = inputRoots(of: project.root)
         if let dir = project.config.scenesDir { roots.append(project.root.appendingPathComponent(dir, isDirectory: true)) }
         for root in roots {
-            guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
-                if let d = (try? fm.attributesOfItem(atPath: root.path))?[.modificationDate] as? Date, d > built { return false }
-                continue
-            }
             if let d = (try? fm.attributesOfItem(atPath: root.path))?[.modificationDate] as? Date, d > built { return false }
+            guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
             for case let url as URL in walker {
                 if let d = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d > built {
                     return false
@@ -256,6 +307,35 @@ final class RenderQueue {
             }
         }
         return true
+    }
+
+    /// What a package's build reads: manifest, lockfile, `Sources/`, `Plugins/`, and the same
+    /// for its local path dependencies (recursively; `.build` and checkouts are never walked).
+    nonisolated static func inputRoots(of packageRoot: URL) -> [URL] {
+        var roots: [URL] = []
+        var seen = Set<String>()
+        var pending = [packageRoot.standardizedFileURL]
+        while let pkg = pending.popLast() {
+            guard seen.insert(pkg.path).inserted else { continue }
+            let manifest = pkg.appendingPathComponent("Package.swift")
+            roots += [manifest, pkg.appendingPathComponent("Package.resolved"),
+                      pkg.appendingPathComponent("Sources", isDirectory: true),
+                      pkg.appendingPathComponent("Plugins", isDirectory: true)]
+            let text = (try? String(contentsOf: manifest, encoding: .utf8)) ?? ""
+            for path in localDependencyPaths(inManifest: text) {
+                let dep = path.hasPrefix("/") ? URL(fileURLWithPath: path, isDirectory: true)
+                    : pkg.appendingPathComponent(path, isDirectory: true)
+                pending.append(dep.standardizedFileURL)
+            }
+        }
+        return roots
+    }
+
+    /// `.package(path: "…")` / `.package(name: "…", path: "…")` paths in a manifest.
+    nonisolated static func localDependencyPaths(inManifest text: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: #"\.package\(\s*(?:name:\s*"[^"]*"\s*,\s*)?path:\s*"([^"]+)""#) else { return [] }
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) }
     }
 
     /// `BuildController.canonical` off the main actor: the scratch path must be spelled
@@ -343,6 +423,7 @@ final class RenderQueue {
         job.propsJSON = input.propsJSON
         job.hasSoundtrack = input.hasSoundtrack
         job.debugExecutable = input.debugExecutable
+        job.duration = input.duration
         if let why = Self.problem(preset: preset, duration: input.duration, range: range,
                                   ffmpegAvailable: !ffmpegResolved || ffmpeg != nil) {
             job.state = .failed(why)
@@ -496,7 +577,7 @@ final class RenderQueue {
         var args = job.preset.args(scene: job.scene, out: videoOut)
         if let range = job.range {
             args += ["--range", String(format: "%.4f:%.4f", range.lowerBound, range.upperBound)]
-        } else {
+        } else if Self.rendersInParallel(duration: job.duration) {
             // Whole films render in parallel processes, stitched without re-encoding.
             args += ["--jobs", "auto"]
         }
@@ -553,6 +634,7 @@ final class RenderQueue {
                             // A late chunk line can't pull a job that's finishing back to rendering.
                             if case .finishing = $0.state { return }
                             $0.state = .rendering(done: p.progress.frame, total: p.progress.total, fps: p.progress.fps)
+                            $0.noteProgress(frame: p.progress.frame)
                         }
                     } else if progress, let st = try? HostWire.decode(RenderStageLine.self, line: line) {
                         self.update(id) { $0.state = Self.state(after: st, current: $0.state) }
@@ -564,10 +646,7 @@ final class RenderQueue {
             group.addTask { @MainActor [weak self] in
                 for await line in child.stdoutLines {
                     guard let self else { continue }
-                    let text = String(decoding: line, as: UTF8.self)
-                    // "[swift-render] scene=… frames=540 → out" — the total before the first progress line.
-                    if progress, let total = Self.parseFrames(text) { self.update(id) { $0.expectedFrames = total } }
-                    self.appendLog(id, text)
+                    self.appendLog(id, String(decoding: line, as: UTF8.self))
                 }
             }
         }
@@ -586,9 +665,13 @@ final class RenderQueue {
         }
     }
 
-    static func parseFrames(_ line: String) -> Int? {
-        guard let r = line.range(of: " frames=") else { return nil }
-        return Int(line[r.upperBound...].prefix { $0.isNumber })
+    /// Whole films shorter than this render in one process: starting and stitching parts
+    /// costs more than it saves on a few seconds of frames.
+    static let parallelMinDuration: Double = 8
+
+    static func rendersInParallel(duration: Double?) -> Bool {
+        guard let duration else { return true }
+        return duration >= parallelMinDuration
     }
 
     private func failureLine(_ id: RenderJob.ID, fallback: String) -> String {
