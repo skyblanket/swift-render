@@ -51,6 +51,9 @@ final class HostSupervisor {
     @ObservationIgnored var makeHost: Factory
     @ObservationIgnored private var executable: URL?
     @ObservationIgnored private var crashAttempts = 0
+    /// Frames that crashed a host of the current build: never asked for again (warm
+    /// frames included) until a new build swaps in.
+    @ObservationIgnored private(set) var poisoned: Set<Int> = []
     /// Playback position, for warm frames and crash locations.
     @ObservationIgnored var currentTime: () -> Double = { 0 }
     @ObservationIgnored var warmWidth: () -> Int = { 960 }
@@ -103,6 +106,7 @@ final class HostSupervisor {
             crash = nil
             swapError = nil
             crashAttempts = 0
+            poisoned = []
             install(host, generation: gen, info: info, warm: warm)
             Task { await old.shutdown() }
         } catch {
@@ -161,8 +165,10 @@ final class HostSupervisor {
             if params.scene != nil {
                 info = try await host.open(params)
                 let t = min(currentTime(), info?.duration ?? 0)
-                warm = try? await withTimeout(5, "warm frame") { [w = warmWidth()] in
-                    try await host.frame(t: t, maxWidth: w, format: .jpeg)
+                if !poisoned.contains(frameIndex(t, fps: info?.fps ?? 60)) {
+                    warm = try? await withTimeout(5, "warm frame") { [w = warmWidth()] in
+                        try await host.frame(t: t, maxWidth: w, format: .jpeg)
+                    }
                 }
             }
             return (host, info, warm)
@@ -212,7 +218,7 @@ final class HostSupervisor {
         state = .crashed(c)
         let fps = info?.fps ?? openParams.fps ?? 60
         let f = frameIndex(t, fps: fps)
-        for p in (f - 1)...(f + 1) { onPoison?(p) }
+        for p in (f - 1)...(f + 1) { poisoned.insert(p); onPoison?(p) }
         active = nil
         onActiveHost?(nil, info, nil)
 

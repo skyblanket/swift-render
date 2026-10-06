@@ -49,13 +49,21 @@ struct ViewerView: View {
         case .failed(let why):
             ContentUnavailableView("Render host unavailable", systemImage: "bolt.horizontal.circle",
                                    description: Text(why))
+        case .ready where model.playback.poisoned.contains(frameIndex(model.playback.t, fps: model.playback.fps)):
+            ContentUnavailableView("Frame skipped", systemImage: "exclamationmark.triangle",
+                                   description: Text("This frame crashed the host. It renders again after the next build."))
         default:
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text(model.build.isBuilding ? "Building \(model.build.product)…" : "Starting render host…")
-                    .font(.callout).foregroundStyle(.secondary)
+                Text(placeholderText).font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var placeholderText: String {
+        if model.build.isBuilding { return "Building \(model.build.product)…" }
+        if case .ready = model.host.state { return model.selectedScene == nil ? "Choose a scene" : "Rendering…" }
+        return "Starting render host…"
     }
 
     private func toastView(_ text: String) -> some View {

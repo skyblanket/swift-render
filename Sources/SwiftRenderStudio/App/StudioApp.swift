@@ -4,7 +4,9 @@ import SwiftRenderKit
 
 // MARK: - Entry point
 //
-//   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host] [--snapshot out.png]
+//   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host | --fake-process-host]
+//                       [--fake-crash-at t] [--snapshot out.png]
+//   swift-render-studio --fake-serve        (a fake render host on stdio; see FakeServe)
 //
 // `--snapshot` lays out a project window offscreen (no activation, no Dock icon),
 // waits for the first frame, writes a PNG of the window and exits 0 — for agents and
@@ -14,6 +16,7 @@ import SwiftRenderKit
 enum StudioMain {
     static func main() {
         let options = LaunchOptions.parse(Array(CommandLine.arguments.dropFirst()))
+        if options.fakeServe { FakeServe.run(options) }
         MainActor.assumeIsolated {
             StudioLaunch.options = options
             if let out = options.snapshot {

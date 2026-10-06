@@ -513,7 +513,7 @@ final class PlaybackEngine {
         noteRender(ms: f.ms)
         lastError = nil
         if !isPlaying || rate < 0 { showBestCached() }
-        updateCachedRanges(force: !isPlaying)
+        if isPlaying { updateCachedRanges(force: false) } else { publishStats(force: true) }   // paused: no ticks publish
     }
 
     private func scheduleSharpen() {

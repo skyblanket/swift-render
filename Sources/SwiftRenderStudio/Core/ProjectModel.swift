@@ -35,6 +35,10 @@ struct LaunchOptions: Equatable, Sendable {
     var snapshot: String?
     /// FakeHost only: crash when rendering this time (exercises the crash card).
     var fakeCrashAt: Double?
+    /// Run as a protocol-speaking fake host on stdio (`FakeServe`), not as an app.
+    var fakeServe = false
+    /// Fake host in a child process through the real `HostClient` (implies simulated builds).
+    var fakeProcessHost = false
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -45,6 +49,8 @@ struct LaunchOptions: Equatable, Sendable {
             case "--scene": o.scene = v; i += 2
             case "--at", "--t": o.at = v.flatMap(Double.init); i += 2
             case "--fake-host": o.fakeHost = true; i += 1
+            case "--fake-serve": o.fakeServe = true; i += 1
+            case "--fake-process-host": o.fakeProcessHost = true; i += 1
             case "--snapshot": o.snapshot = v; i += 2
             case "--fake-crash-at": o.fakeCrashAt = v.flatMap(Double.init); i += 2
             case "--project": o.projectPath = v.map { URL(fileURLWithPath: $0, isDirectory: true) }; i += 2
@@ -107,24 +113,36 @@ final class ProjectModel {
     /// Our own knob-file writes, so the watcher doesn't echo them back.
     @ObservationIgnored private var lastKnobWrite: Date?
 
-    var isFake: Bool { options.fakeHost }
+    var isFake: Bool { options.fakeHost || options.fakeProcessHost }
     var title: String { project.root.lastPathComponent }
 
     init(root: URL, options: LaunchOptions = LaunchOptions()) {
         let project = Project.open(root)
         self.project = project
         self.options = options
-        let fake = options.fakeHost
+        let fake = options.fakeHost || options.fakeProcessHost
         build = BuildController(project: project, runner: fake ? SimulatedBuild.runner() : nil)
-        host = HostSupervisor(project: project, makeHost: fake
-            ? { _, gen in
+        let factory: HostSupervisor.Factory
+        if options.fakeProcessHost {
+            // This very binary, as `--fake-serve`, behind the real client.
+            let me = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+            let args = ["--fake-serve"] + (options.fakeCrashAt.map { ["--fake-crash-at", "\($0)"] } ?? [])
+            factory = { _, _ in
+                try HostClient(executable: me, project: project,
+                               environment: HostClient.hostEnvironment(project: project), arguments: args)
+            }
+        } else if options.fakeHost {
+            factory = { _, gen in
                 var o = FakeHostClient.Options()
                 o.generation = gen
                 o.crashAt = options.fakeCrashAt
                 o.projectRoot = project.root
                 return FakeHostClient(options: o)
             }
-            : HostSupervisor.realFactory(project: project))
+        } else {
+            factory = HostSupervisor.realFactory(project: project)
+        }
+        host = HostSupervisor(project: project, makeHost: factory)
         playback = PlaybackEngine()
         review = ReviewController(project: project)
         agent = AgentController(project: project)

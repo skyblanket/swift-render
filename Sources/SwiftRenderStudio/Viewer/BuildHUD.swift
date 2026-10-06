@@ -16,7 +16,7 @@ struct BuildPill: View {
     private var state: (tone: Tone, symbol: String, text: String) {
         let b = model.build, h = model.host
         if case .crashed = h.state { return (.bad, "xmark.octagon.fill", "Host crashed") }
-        if case .failed(let why) = h.state, !b.isBuilding { return (.bad, "xmark.octagon.fill", "Host failed: \(why)") }
+        if case .failed = h.state, !b.isBuilding { return (.bad, "xmark.octagon.fill", "Host stopped") }
         switch b.phase {
         case .waitingForLock: return (.busy, "hourglass", "Waiting for another swift build")
         case .building:
@@ -31,7 +31,7 @@ struct BuildPill: View {
         case .idle:
             switch h.state {
             case .starting: return (.neutral, "circle.dotted", "Host starting")
-            case .ready: return (.ok, "checkmark.circle.fill", model.isFake ? "FakeHost ready" : "Ready")
+            case .ready: return (.ok, "checkmark.circle.fill", model.isFake ? "Fake host ready" : "Ready")
             case .swapping: return (.busy, "arrow.triangle.2.circlepath", "Swapping host…")
             case .idle: return (.neutral, "circle.dotted", "Idle")
             default: return (.neutral, "circle.dotted", "Starting")

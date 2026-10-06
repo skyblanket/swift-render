@@ -20,6 +20,8 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         var generation: Int = 1
         /// Crash (like a scene `fatalError`) when asked to render within half a frame of this time.
         var crashAt: Double? = nil
+        /// Called with the crash report instead of a simulated exit (`--fake-serve` aborts).
+        var onCrash: (@Sendable (String) -> Void)? = nil
         /// `open` fails with this message (renamed scene, props decode error…).
         var failOpen: String? = nil
         var startupDelay: Double = 0.05
@@ -400,6 +402,7 @@ final class FakeHostClient: RenderHost, @unchecked Sendable {
         1 [ra] 0x0000000100a3f2c8 \(scene).panel(_:_:) + 432 in swift-render at \(file):212:14
         2 [ra] 0x0000000100a3e010 \(scene).body(at:) + 88 in swift-render at \(file):180:9
         """
+        options.onCrash?(tail + "\n")
         finish(HostTermination(status: 5, uncaughtSignal: true, stderrTail: tail, requested: false))
     }
 

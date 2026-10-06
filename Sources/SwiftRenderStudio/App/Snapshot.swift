@@ -48,7 +48,7 @@ enum SnapshotRunner {
 
     private static func capture(model: ProjectModel, window: NSWindow, options: LaunchOptions, out: String) async -> Int32 {
         // ProjectWindowContent's .task starts the model; wait for a scene and a frame.
-        let deadline = Date().addingTimeInterval(options.fakeHost ? 20 : 240)
+        let deadline = Date().addingTimeInterval(options.fakeHost || options.fakeProcessHost ? 20 : 240)
         while model.info == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
         if let at = options.at { model.playback.seek(at, precise: true) }
         while !model.playback.hasFrame, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
