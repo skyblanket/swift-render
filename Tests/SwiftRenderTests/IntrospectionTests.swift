@@ -282,7 +282,7 @@ final class IntrospectionTests: XCTestCase {
 }
 
 /// Raw pixel bytes plus layout, for byte-exact comparisons.
-func pixelBytes(_ image: CGImage) -> Data {
+private func pixelBytes(_ image: CGImage) -> Data {
     var d = Data("\(image.width)x\(image.height)/\(image.bytesPerRow)/\(image.bitmapInfo.rawValue)".utf8)
     d.append(image.dataProvider?.data as Data? ?? Data())
     return d
