@@ -350,6 +350,21 @@ final class HostTests: XCTestCase {
         guard case .malformed(nil, _) = HostInbox.decode(Data("not json".utf8)) else { return XCTFail("garbage") }
     }
 
+    func testCachedMixdownMatchesAudioPlan() throws {
+        let score = try XCTUnwrap(ToneLevel.soundtrack(duration: 1))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-audio-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let miss = try AudioCache.load(score, in: dir)
+        let hit = try AudioCache.load(score, in: dir)
+        XCTAssertFalse(miss.cacheHit)
+        XCTAssertTrue(hit.cacheHit)
+        XCTAssertEqual(hit.fingerprint, miss.fingerprint)
+        var scalar = [Float](repeating: 0, count: miss.left.count)
+        for i in 0..<scalar.count { scalar[i] = (miss.left[i] + miss.right[i]) * 0.5 }   // AudioPlan's mixdown
+        XCTAssertEqual(hit.mono, scalar)
+        XCTAssertEqual(miss.mono, scalar)
+    }
+
     func testFingerprintTracksTheScore() {
         let a = Score(duration: 2) { tick(at: 0.5); blip(.midi(70), at: 1) }
         let b = Score(duration: 2) { tick(at: 0.5); blip(.midi(70), at: 1) }

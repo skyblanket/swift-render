@@ -181,6 +181,7 @@ final class HostSession {
 
     private func open(_ id: Int, _ p: HostParams) throws -> [HostPacket] {
         let t0 = Date()
+        var laps = Laps()
         guard let name = p.scene, !name.isEmpty else { throw bad("open needs 'scene'") }
         guard let runner = runners[name] else {
             throw HostError(code: HostError.Code.unknownScene, message: "unknown scene '\(name)' — see 'list'")
@@ -205,6 +206,7 @@ final class HostSession {
             let audio = audioSource(runner: runner, duration: duration, propsURL: propsURL, file: audioFile)
             let key = audioKey(audio, fps: fps, duration: duration)
             let reuse = audioDone.flatMap { $0.key == key ? $0.ready : nil }
+            laps.lap("score")
             HostCrashLog.note("open \(name)")
             let scene = try preparedScene(name: name, runner: runner, duration: duration, size: size, fps: fps,
                                           postFX: p.postFX ?? true, propsURL: propsURL,
@@ -214,14 +216,15 @@ final class HostSession {
                                           loudnessRate: Self.loudnessRate, analyzeAudio: false, captions: false,
                                           make: scene.make)
             if let reuse { apply(reuse, to: &info) }
+            laps.lap("probe")
 
             var out: [HostPacket] = []
             if let s = stream { out.append(HostPacket(.streamEnd(s.id, message: "scene reopened"))); stream = nil }
             opened = Opened(scene: scene, info: info, audio: audio, audioKey: key, explicitDuration: p.duration,
                             audioFile: audioFile, binaryFrames: p.binaryFrames ?? false)
             if reuse == nil { startAudio() }
-            fputs(String(format: "[swift-render serve] open %@ %d×%d@%d %.2fs in %.0f ms\n", name, width, height, fps,
-                         duration, Date().timeIntervalSince(t0) * 1000), stderr)
+            fputs(String(format: "[swift-render serve] open %@ %d×%d@%d %.2fs in %.0f ms (%@)\n", name, width, height, fps,
+                         duration, Date().timeIntervalSince(t0) * 1000, laps.summary), stderr)
             return out + [HostPacket(.response(id, HostResult(info: info)))]
         } catch {
             KnobStore.shared.set(previousKnobs)     // a failed open leaves the previous scene intact
@@ -532,7 +535,8 @@ final class HostSession {
             if o.scene.runner.reactsToAudio { try? o.scene.setTrack(ready.track) }
             opened = o
             fputs(String(format: "[swift-render serve] audio %@ ready in %.2fs (%@) → %@\n", name, ready.seconds,
-                         ready.cacheHit ? "cache hit" : "synthesized", ready.path ?? "-"), stderr)
+                         ready.breakdown.isEmpty ? (ready.cacheHit ? "cache hit" : "synthesized") : ready.breakdown,
+                         ready.path ?? "-"), stderr)
             emit(HostPacket(.audio(path: ready.path, loudness: ready.loudness)))
             if captionsChanged { emit(HostPacket(.infoChanged(o.info))) }
         case .failure(let error):

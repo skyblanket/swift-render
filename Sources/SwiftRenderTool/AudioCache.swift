@@ -1,3 +1,4 @@
+import Accelerate
 import CryptoKit
 import Foundation
 import SwiftRender
@@ -20,10 +21,15 @@ struct ScoreAudio: Sendable {
     /// Decoded from disk rather than synthesized.
     let cacheHit: Bool
 
-    /// Same mixdown as `AudioPlan`, so the analyzed track is identical.
+    /// `(l + r) * 0.5` per sample — the same two IEEE ops as `AudioPlan`'s loop, so the
+    /// analyzed track is bit-identical (HostTests checks); vDSP keeps debug builds fast.
     var mono: [Float] {
-        var m = [Float](repeating: 0, count: left.count)
-        for i in 0..<left.count { m[i] = (left[i] + right[i]) * 0.5 }
+        let n = left.count
+        guard n > 0 else { return [] }
+        var m = [Float](repeating: 0, count: n)
+        var half: Float = 0.5
+        vDSP_vadd(left, 1, right, 1, &m, 1, vDSP_Length(n))
+        vDSP_vsmul(m, 1, &half, &m, 1, vDSP_Length(n))
         return m
     }
 }
@@ -102,7 +108,18 @@ enum AudioCache {
         tag("fact"); u32(4); u32(UInt32(n))
         tag("data"); u32(UInt32(8 * n))
         var interleaved = [Float](repeating: 0, count: 2 * n)
-        for i in 0..<n { interleaved[2 * i] = left[i]; interleaved[2 * i + 1] = right[i] }
+        var l = left, r = right
+        if n > 0 {
+        l.withUnsafeMutableBufferPointer { lp in
+            r.withUnsafeMutableBufferPointer { rp in
+                interleaved.withUnsafeMutableBytes { out in
+                    // (left, right) as a split complex vector → interleaved L R L R … (plain copies).
+                    var split = DSPSplitComplex(realp: lp.baseAddress!, imagp: rp.baseAddress!)
+                    vDSP_ztoc(&split, 1, out.baseAddress!.assumingMemoryBound(to: DSPComplex.self), 2, vDSP_Length(n))
+                }
+            }
+        }
+        }
         interleaved.withUnsafeBytes { data.append(contentsOf: $0) }     // arm64/x86 are little-endian
         try data.write(to: url)
     }
@@ -128,11 +145,18 @@ enum AudioCache {
                 guard fmtOK else { throw bad("not stereo float32 @ \(Int(scoreSampleRate)) Hz") }
                 guard body + size <= data.count else { throw bad("truncated") }
                 let n = size / 8
+                guard n > 0 else { return ([], []) }
+                var interleaved = [Float](repeating: 0, count: 2 * n)
+                interleaved.withUnsafeMutableBytes { dst in
+                    data.withUnsafeBytes { src in dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[body..<body + 8 * n])) }
+                }
                 var l = [Float](repeating: 0, count: n), r = [Float](repeating: 0, count: n)
-                data.withUnsafeBytes { raw in
-                    for i in 0..<n {
-                        l[i] = raw.loadUnaligned(fromByteOffset: body + 8 * i, as: Float.self)
-                        r[i] = raw.loadUnaligned(fromByteOffset: body + 8 * i + 4, as: Float.self)
+                l.withUnsafeMutableBufferPointer { lp in
+                    r.withUnsafeMutableBufferPointer { rp in
+                        interleaved.withUnsafeBytes { src in
+                            var split = DSPSplitComplex(realp: lp.baseAddress!, imagp: rp.baseAddress!)
+                            vDSP_ctoz(src.baseAddress!.assumingMemoryBound(to: DSPComplex.self), 2, &split, 1, vDSP_Length(n))
+                        }
                     }
                 }
                 return (l, r)
@@ -155,6 +179,8 @@ struct AudioReady: Sendable {
     var captions: [CaptionInfo]
     var cacheHit: Bool
     var seconds: Double
+    /// Where the time went, for the host log ("load 0.31s · analyze 1.02s · …").
+    var breakdown: String = ""
 }
 
 extension AudioCache {
@@ -171,13 +197,18 @@ extension AudioCache {
                               loudness: loudnessEnvelope(track, duration: duration, rate: loudnessRate),
                               captions: [], cacheHit: true, seconds: Date().timeIntervalSince(start))
         case .score(let score):
+            var laps = Laps()
             let audio = try load(score, in: cacheDir)
+            laps.lap(audio.cacheHit ? "load" : "synth")
             let track = try AudioAnalyzer.analyze(samples: audio.mono, sampleRate: scoreSampleRate, fps: fps)
+            laps.lap("analyze")
             // Speech lines are in the TTS cache by now, so this is cheap.
             let captions = CaptionTrack(score).cues.map { CaptionInfo(start: $0.start, end: $0.end, text: $0.text) }
+            laps.lap("captions")
             return AudioReady(path: audio.wav.path, track: track,
                               loudness: loudnessEnvelope(track, duration: duration, rate: loudnessRate),
-                              captions: captions, cacheHit: audio.cacheHit, seconds: Date().timeIntervalSince(start))
+                              captions: captions, cacheHit: audio.cacheHit, seconds: Date().timeIntervalSince(start),
+                              breakdown: laps.summary)
         }
     }
 }

@@ -148,6 +148,20 @@ final class HostInbox: @unchecked Sendable {
     }
 }
 
+/// Named wall-clock laps for log lines: "probe 0.31s · info 0.02s".
+struct Laps {
+    private var last = DispatchTime.now()
+    private var parts: [String] = []
+
+    mutating func lap(_ name: String) {
+        let now = DispatchTime.now()
+        parts.append(String(format: "%@ %.0fms", name, Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1e6))
+        last = now
+    }
+
+    var summary: String { parts.joined(separator: " · ") }
+}
+
 // MARK: - Frame encoding
 
 enum FrameEncoding {
