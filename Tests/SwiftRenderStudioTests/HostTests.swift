@@ -56,12 +56,22 @@ final class HostClientProcessTests: XCTestCase {
         XCTAssertEqual(got.suffix(2), [68, 70])
         s.cancel()
 
-        // Older queued frame requests are answered `superseded`; the newest wins.
-        async let a = try? host.frame(t: 1, maxWidth: 1920, format: .png)
-        async let b = try? host.frame(t: 2, maxWidth: 1920, format: .png)
-        async let c = host.frame(t: 4, maxWidth: 1920, format: .png)
-        let last = try await c
-        _ = await (a, b)
+        // While one frame renders, an older queued request is answered `superseded`
+        // and the newest wins. (Spaced so the writes reach the host in order.)
+        let a = Task { try await host.frame(t: 1, maxWidth: 1920, format: .png) }
+        try await Task.sleep(for: .milliseconds(15))
+        let b = Task { try await host.frame(t: 2, maxWidth: 1920, format: .png) }
+        try await Task.sleep(for: .milliseconds(15))
+        let c = Task { try await host.frame(t: 4, maxWidth: 1920, format: .png) }
+        let first = try await a.value
+        XCTAssertEqual(first.index, 60, "the in-flight render completes")
+        do {
+            _ = try await b.value
+            XCTFail("the older queued request should be superseded")
+        } catch {
+            XCTAssertTrue((error as? HostClientError)?.isSuperseded == true, "\(error)")
+        }
+        let last = try await c.value
         XCTAssertEqual(last.index, 240)
 
         await host.shutdown()
