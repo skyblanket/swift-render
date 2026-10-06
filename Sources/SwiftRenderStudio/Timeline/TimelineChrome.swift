@@ -17,16 +17,20 @@ struct TimelineHeaderColumn: View {
             TimelineZoomControls(model: model)
                 .frame(height: TimelineLayout.rulerHeight)
                 .overlay(alignment: .bottom) { Color.black.opacity(0.5).frame(height: 1) }
-            VStack(spacing: 0) {
-                ForEach(layout.slots, id: \.key) { slot in
-                    LaneHeader(slot: slot, model: model)
-                        .frame(height: slot.height)
-                        .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+            // An overlay never sizes its parent: overflowing headers can't push the column taller.
+            Color.clear
+                .frame(maxHeight: .infinity)
+                .overlay(alignment: .top) {
+                    VStack(spacing: 0) {
+                        ForEach(layout.slots, id: \.key) { slot in
+                            LaneHeader(slot: slot, model: model)
+                                .frame(height: slot.height)
+                                .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+                        }
+                    }
+                    .offset(y: -state.scrollY)
                 }
-            }
-            .offset(y: -state.scrollY)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .clipped()
+                .clipped()
             TimelineFooterControls(model: model)
                 .frame(height: TimelineLayout.scrollerHeight)
         }
@@ -66,7 +70,7 @@ struct LaneHeader: View {
             title(slot.title, detail: warn > 0 ? "⚠︎ \(warn)" : "\(lane.events.count)",
                   dot: lane.lanes.count == 1 ? StudioStyle.lane(lane.lanes.first!) : StudioStyle.lane("drums"),
                   warn: warn > 0)
-                .help(warn > 0 ? ScoreLane.houseRuleNote : "")
+                .help(warn > 0 ? ScoreLane.houseRuleNote : "\(lane.events.count) \(name.lowercased()) events")
         case .audio:
             let silences = model.info?.audioPath.flatMap { AudioOverviewCache.shared.overviews[$0]?.silences.count } ?? 0
             title(slot.title, detail: silences > 0 ? "\(silences) silent" : nil, dot: WaveformLane.wave)
@@ -85,13 +89,13 @@ struct LaneHeader: View {
                 .font(StudioStyle.laneLabel)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .layoutPriority(1)
+                .minimumScaleFactor(0.75)
             Spacer(minLength: 2)
             if let detail {
                 Text(detail)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
                     .foregroundStyle(warn ? AnyShapeStyle(StudioStyle.warn) : AnyShapeStyle(.tertiary))
+                    .fixedSize()
             }
         }
         .padding(.horizontal, 10)

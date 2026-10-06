@@ -60,17 +60,28 @@ struct TimelineLanesColumn: View {
                     .frame(height: TimelineLayout.rulerHeight)
                     .background(Color.black.opacity(0.28))
                     .overlay(alignment: .bottom) { Color.black.opacity(0.5).frame(height: 1) }
-                VStack(spacing: 0) {
-                    ForEach(Array(layout.slots.enumerated()), id: \.element.key) { i, slot in
-                        LaneView(key: slot.key, model: model, state: state)
-                            .frame(height: slot.height)
-                            .background(i % 2 == 0 ? StudioStyle.laneBackground : StudioStyle.laneAltBackground)
-                            .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+                Color.clear
+                    .frame(height: lanesHeight)
+                    .overlay(alignment: .top) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(layout.slots.enumerated()), id: \.element.key) { i, slot in
+                                LaneView(key: slot.key, model: model, state: state)
+                                    .frame(height: slot.height)
+                                    .background(i % 2 == 0 ? StudioStyle.laneBackground : StudioStyle.laneAltBackground)
+                                    .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+                            }
+                        }
+                        .offset(y: -state.scrollY)
                     }
-                }
-                .offset(y: -state.scrollY)
-                .frame(height: lanesHeight, alignment: .top)
-                .clipped()
+                    .overlay(alignment: .bottom) {
+                        // More lanes below: scroll vertically to reach them.
+                        if state.scrollY < layout.maxScroll(lanesHeight: lanesHeight) - 0.5 {
+                            LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+                                .frame(height: 12)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .clipped()
                 TimelineScroller(model: model)
                     .frame(height: TimelineLayout.scrollerHeight)
             }
