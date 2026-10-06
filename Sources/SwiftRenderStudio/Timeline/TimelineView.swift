@@ -56,7 +56,7 @@ struct TimelineView: View {
                             LaneCanvas(renderer: lane, viewport: v).laneBackground(i).gesture(laneTap(lane))
                         }
                         LaneCanvas(renderer: audio, viewport: v).laneBackground(0).gesture(laneTap(audio))
-                        LaneCanvas(renderer: notes, viewport: v).laneBackground(1).gesture(laneTap(notes))
+                        CommentsLaneView(model: model).laneBackground(1)
                         Color.clear.frame(maxHeight: .infinity).contentShape(Rectangle()).gesture(laneTap(nil))
                     }
                     PlayheadOverlay(model: model)
