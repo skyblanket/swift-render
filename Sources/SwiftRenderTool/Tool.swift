@@ -497,6 +497,7 @@ func run(_ argv: [String]) async throws {
     case .score(let sc): print(String(format: "[swift-render] audio: synthesized score (%d events)", sc.events.count))
     case .none: break
     }
+    fflush(stdout)   // a pipe is block-buffered: a UI reading stdout gets the header now, not at exit
 
     let start = Date()
     var span = RenderSpan(duration: duration, start: startTime, end: endTime, mux: args.rangeStart == nil)

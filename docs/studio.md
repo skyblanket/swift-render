@@ -184,10 +184,14 @@ across launches).
 
 Exports use a **release** build of the CLI by default ("Final" in the sheet): `swift build -c
 release --product <p> --scratch-path .build/studio-release`, built once and reused until a file
-under `Sources/` (or the manifest) is newer than it, in its own scratch path so it never waits on
-the live debug builds. Debug builds are 6–20× slower at score synthesis and heavy scenes. A whole
-film renders with `--jobs auto` (parallel processes, stitched without re-encoding); an In→Out
-range renders in one process. "Quick" uses the debug executable the preview host runs.
+under `Sources/` or `Plugins/`, the manifest, or a local `.package(path:)` dependency is newer than
+the moment the last successful build *started* (`.build/studio-release/studio-export.stamp`), so an
+edit saved mid-build still triggers a rebuild. It has its own scratch path so it never waits on the
+live debug builds. Debug builds are 6–20× slower at score synthesis and heavy scenes. A whole film
+of 8 s or more renders with `--jobs auto` (parallel processes, stitched without re-encoding; the
+driver sums its parts' progress into one stream and, on Stop, stops them and deletes their scratch
+files); shorter films and In→Out ranges render in one process. The time left follows the speed of
+the last few seconds. "Quick" uses the debug executable the preview host runs.
 
 The Exports popover shows one line of status per job: "Building for export…", "Preparing
 music…" (the CLI's `{"stage":"audio"}` line), "Rendering 120 of 900 · 42 fps · about 18 s
