@@ -141,6 +141,15 @@ func printUsage() {
       swift-render audio <Scene> --out x.wav Export a scene's Score as WAV
       swift-render captions <Scene> --out x.srt  Export voiceover captions (.srt or .vtt)
       swift-render list                     List available scenes
+      swift-render info <Scene> [--json]    Clips, knobs, score events, captions (agent/editor metadata)
+
+    LAUNCH FILMS:
+      swift-render launch [path] [--out f]  Scan a Swift codebase and render an Apple-style launch film
+      swift-render init [path]              Scaffold a Launch/ package (your own scenes + CLI) in a codebase
+
+    EDITOR & REVIEW:
+      swift-render serve                    Render host for swift-render Studio (JSON lines on stdio)
+      swift-render review list|show|add|reply|status …   Timecoded review comments (see docs/review-loop.md)
       swift-render --help                   Show this help
       swift-render --version                Print version
 
