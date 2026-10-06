@@ -232,7 +232,7 @@ extension Transition {
     /// Blur-dissolve: the outgoing shot defocuses as the incoming one comes into focus.
     /// The one dissolve a launch film gets (into the end card).
     public static func focusPull(_ d: Double = 0.4, blur: CGFloat = 12) -> Transition {
-        Transition(duration: d) { v, p, phase in
+        Transition("focusPull", duration: d) { v, p, phase in
             let e = Ease.easeInOut(p)
             let k = phase == .in ? 1 - e : e
             return AnyView(v.blur(radius: blur * CGFloat(k)).opacity(phase == .in ? e : 1 - e))
@@ -241,7 +241,7 @@ extension Transition {
 
     /// The outgoing shot pushes past camera (scale up + fade) while the next settles in.
     public static func zoomThrough(_ d: Double = 0.5, scale: CGFloat = 1.3, anchor: UnitPoint = .center) -> Transition {
-        Transition(duration: d) { v, p, phase in
+        Transition("zoomThrough", duration: d) { v, p, phase in
             let e = Ease.easeIn(p)
             if phase == .out {
                 return AnyView(v.scaleEffect(1 + (scale - 1) * CGFloat(e), anchor: anchor).opacity(1 - e))
