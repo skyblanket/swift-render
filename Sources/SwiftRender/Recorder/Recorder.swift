@@ -136,7 +136,7 @@ public final class Recorder {
 
             // Drain each frame's autoreleased image memory inside an explicit pool —
             // without it, a long render accumulates every frame's buffers and gets
-            // OOM-killed. The pooled CVPixelBuffer is retained and outlives the pool.
+            // OOM-killed. The CVPixelBuffer is retained and outlives the autorelease pool.
             let pixelBuffer: CVPixelBuffer? = autoreleasepool {
                 guard let image = makeImage(at: t, duration: duration, postFX: applyFX, content: content) else { return nil }
                 var buffer: CVPixelBuffer?
