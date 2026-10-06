@@ -108,7 +108,7 @@ The sheet also lets you set:
 - **Build.** *Optimized* runs `swift build -c release` in `.build/studio` first. That is the
   default for Master and App Store presets, because debug renders run 1.2–5× slower. The first
   release build compiles the whole package; later builds are incremental. *Current debug
-  build* starts right away with the binary the viewer is running, and is the default for
+  build* starts right away with the binary the viewer is running, and is the default for social,
   drafts and ranges.
 - **Knobs.** When the live values differ from `.swift-render/knobs/<Scene>.json`, you choose
   between rendering the live values (snapshotted to a file and passed as `--knobs`) and saving
