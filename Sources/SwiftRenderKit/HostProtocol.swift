@@ -18,6 +18,17 @@ import Foundation
 //
 // Frame requests are coalesced: if a newer `frame` is already queued when an
 // older one is about to render, the older one gets `error.code == "superseded"`.
+//
+// Playback uses `stream`: the host pushes `frame` events tagged with the stream's
+// request id while it has credit; the client grants more with `credit` and stops
+// with `cancel`. With `binaryFrames: true` on `open`, frames may be sent as a JSON
+// line whose `frame.bytes` is set, followed immediately by exactly that many raw
+// bytes (format "bgra8": width*4 row bytes, premultiplied alpha first, sRGB).
+// `HostStreamDecoder` handles both framings.
+//
+// Unsolicited events: "ready", "log", "warning", "frame" (stream), "info" (a
+// SceneInfo with newly discovered clips/knobs), "audio" (score audio ready after
+// background synthesis: `audioPath` + `loudness`).
 
 public enum HostProtocol {
     public static let version = 1
@@ -36,6 +47,18 @@ public enum HostMethod: String, Codable, Sendable {
     case setProps
     /// → `{}` then the host exits 0.
     case shutdown
+    /// `from`, `to?`, `fps?`, `maxWidth`, `format`, `credits` → `{}`; then `frame` events
+    /// tagged `streamID` = this request's id until `to`/end, cancel, or credit runs out.
+    case stream
+    /// `streamID`, `credits` → `{}`. Grants the stream more frames.
+    case credit
+    /// `streamID` → `{}`. Stops a stream.
+    case cancel
+    /// `t`, `path`, `maxWidth?`, `format?` ("png" default) → `result.path`. Lossless still
+    /// written by the host (comment attachments, compare).
+    case still
+    /// `path` (contact sheet PNG) → `result.path` + `result.report` (the `check` report lines).
+    case check
 }
 
 public struct HostRequest: Codable, Sendable {
@@ -73,15 +96,29 @@ public struct HostParams: Codable, Sendable, Equatable {
     public var knobs: [String: KnobValue]?
     /// When true the host also writes the knob file (otherwise values are live-only).
     public var persist: Bool?
+    /// On setKnobs/setProps: false while a slider is dragging (skip the structure re-probe).
+    public var reprobe: Bool?
+    /// On `open`: the client accepts header-line + raw "bgra8" payload frames.
+    public var binaryFrames: Bool?
+    // stream / credit / cancel
+    public var from: Double?
+    public var to: Double?
+    public var credits: Int?
+    public var streamID: Int?
+    // still / check
+    public var path: String?
 
     public init(scene: String? = nil, duration: Double? = nil, width: Int? = nil, height: Int? = nil,
                 fps: Int? = nil, postFX: Bool? = nil, propsJSON: String? = nil, audioPath: String? = nil,
                 t: Double? = nil, maxWidth: Int? = nil, format: String? = nil, quality: Double? = nil,
-                knobs: [String: KnobValue]? = nil, persist: Bool? = nil) {
+                knobs: [String: KnobValue]? = nil, persist: Bool? = nil, reprobe: Bool? = nil,
+                binaryFrames: Bool? = nil, from: Double? = nil, to: Double? = nil, credits: Int? = nil,
+                streamID: Int? = nil, path: String? = nil) {
         self.scene = scene; self.duration = duration; self.width = width; self.height = height
         self.fps = fps; self.postFX = postFX; self.propsJSON = propsJSON; self.audioPath = audioPath
         self.t = t; self.maxWidth = maxWidth; self.format = format; self.quality = quality
-        self.knobs = knobs; self.persist = persist
+        self.knobs = knobs; self.persist = persist; self.reprobe = reprobe; self.binaryFrames = binaryFrames
+        self.from = from; self.to = to; self.credits = credits; self.streamID = streamID; self.path = path
     }
 }
 
@@ -96,13 +133,20 @@ public struct HostFrame: Codable, Sendable, Equatable {
     public var t: Double
     public var width: Int
     public var height: Int
+    /// "jpeg" | "png" | "bgra8"
     public var format: String
-    /// Base64 image bytes.
+    /// Base64 image bytes ("" when `bytes` is set and a raw payload follows).
     public var data: String
     /// Wall time spent rendering + encoding, milliseconds.
     public var ms: Double
-    public init(t: Double, width: Int, height: Int, format: String, data: String, ms: Double) {
+    /// Frame number at the opened fps.
+    public var index: Int?
+    /// Non-nil ⇒ exactly this many raw bytes follow the JSON line.
+    public var bytes: Int?
+    public init(t: Double, width: Int, height: Int, format: String, data: String, ms: Double,
+                index: Int? = nil, bytes: Int? = nil) {
         self.t = t; self.width = width; self.height = height; self.format = format; self.data = data; self.ms = ms
+        self.index = index; self.bytes = bytes
     }
 }
 
@@ -111,8 +155,13 @@ public struct HostResult: Codable, Sendable, Equatable {
     public var scenes: [SceneSummary]?
     public var info: SceneInfo?
     public var frame: HostFrame?
-    public init(scenes: [SceneSummary]? = nil, info: SceneInfo? = nil, frame: HostFrame? = nil) {
-        self.scenes = scenes; self.info = info; self.frame = frame
+    /// `still` / `check` output file.
+    public var path: String?
+    /// `check` report lines.
+    public var report: [String]?
+    public init(scenes: [SceneSummary]? = nil, info: SceneInfo? = nil, frame: HostFrame? = nil,
+                path: String? = nil, report: [String]? = nil) {
+        self.scenes = scenes; self.info = info; self.frame = frame; self.path = path; self.report = report
     }
 }
 
@@ -129,12 +178,23 @@ public struct HostMessage: Codable, Sendable {
     public var scenes: [SceneSummary]?
     public var version: String?
     public var protocolVersion: Int?
+    /// `frame` events: the stream's request id and the frame.
+    public var streamID: Int?
+    public var frame: HostFrame?
+    /// `info` events: refreshed scene metadata.
+    public var info: SceneInfo?
+    /// `audio` events: synthesized score file + loudness envelope.
+    public var audioPath: String?
+    public var loudness: [Float]?
 
     public init(id: Int? = nil, result: HostResult? = nil, error: HostError? = nil, event: String? = nil,
                 message: String? = nil, scenes: [SceneSummary]? = nil, version: String? = nil,
-                protocolVersion: Int? = nil) {
+                protocolVersion: Int? = nil, streamID: Int? = nil, frame: HostFrame? = nil,
+                info: SceneInfo? = nil, audioPath: String? = nil, loudness: [Float]? = nil) {
         self.id = id; self.result = result; self.error = error; self.event = event; self.message = message
         self.scenes = scenes; self.version = version; self.protocolVersion = protocolVersion
+        self.streamID = streamID; self.frame = frame; self.info = info
+        self.audioPath = audioPath; self.loudness = loudness
     }
 
     public static func response(_ id: Int, _ result: HostResult) -> HostMessage { HostMessage(id: id, result: result) }
@@ -174,5 +234,41 @@ public struct LineBuffer: Sendable {
             buffer.removeSubrange(buffer.startIndex...nl)
         }
         return lines
+    }
+}
+
+/// Decodes the host's stdout: JSON lines, where a message whose frame (in
+/// `result.frame` or the `frame` event) has `bytes` set is followed by exactly
+/// that many raw payload bytes.
+public struct HostStreamDecoder: Sendable {
+    private var buffer = Data()
+    private var pending: (HostMessage, Int)? = nil
+    public init() {}
+
+    /// Feed a chunk; returns every complete (message, payload?) in order.
+    public mutating func feed(_ chunk: Data) throws -> [(HostMessage, Data?)] {
+        buffer.append(chunk)
+        var out: [(HostMessage, Data?)] = []
+        while true {
+            if let (msg, n) = pending {
+                guard buffer.count >= n else { break }
+                let payload = Data(buffer.prefix(n))
+                buffer.removeFirst(n)
+                out.append((msg, payload))
+                pending = nil
+                continue
+            }
+            guard let nl = buffer.firstIndex(of: 0x0A) else { break }
+            let line = Data(buffer[buffer.startIndex..<nl])
+            buffer.removeSubrange(buffer.startIndex...nl)
+            if line.isEmpty { continue }
+            let msg = try HostWire.decode(HostMessage.self, line: line)
+            if let n = (msg.result?.frame ?? msg.frame)?.bytes, n > 0 {
+                pending = (msg, n)
+            } else {
+                out.append((msg, nil))
+            }
+        }
+        return out
     }
 }

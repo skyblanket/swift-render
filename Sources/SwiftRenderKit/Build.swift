@@ -140,3 +140,121 @@ private final class BinPathCache: @unchecked Sendable {
     func get(_ k: String) -> URL? { lock.lock(); defer { lock.unlock() }; return map[k] }
     func set(_ k: String, _ v: URL) { lock.lock(); map[k] = v; lock.unlock() }
 }
+
+// MARK: - Streaming build (Studio's build HUD)
+
+public enum BuildEvent: Sendable {
+    /// A progress line, e.g. "[12/40] Compiling SwiftRender NeverHeard.swift".
+    case progress(String)
+    /// Another SwiftPM process holds the scratch-path lock.
+    case waitingForLock
+    case diagnostic(CompilerDiagnostic)
+    case finished(BuildResult)
+}
+
+/// Cancels a running streaming build (SIGINT, then SIGTERM).
+public final class BuildCancel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    fileprivate func attach(_ p: Process) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        process = p
+        return !cancelled
+    }
+    public func cancel() {
+        lock.lock(); cancelled = true; let p = process; lock.unlock()
+        guard let p, p.isRunning else { return }
+        p.interrupt()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { p.terminate() } }
+    }
+}
+
+public extension ProjectBuilder {
+    /// `swift build` with live events. `scratchPath` (e.g. `<root>/.build/studio`) keeps the
+    /// editor's builds from contending with the user's own `swift build` lock.
+    static func stream(_ project: Project, configuration: String = "debug", product: String? = nil,
+                       scratchPath: URL? = nil) -> (events: AsyncStream<BuildEvent>, cancel: BuildCancel) {
+        let canceller = BuildCancel()
+        let prod = product ?? project.config.product
+        var args = ["swift", "build", "-c", configuration, "--product", prod]
+        if let scratchPath { args += ["--scratch-path", scratchPath.path] }
+
+        let events = AsyncStream<BuildEvent> { continuation in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            p.arguments = args
+            p.currentDirectoryURL = project.root
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = out
+            p.standardInput = FileHandle.nullDevice
+
+            let log = LogBox()
+            var lines = LineBuffer()
+            let start = Date()
+            out.fileHandleForReading.readabilityHandler = { h in
+                let chunk = h.availableData
+                guard !chunk.isEmpty else { return }
+                log.append(chunk)
+                for line in lines.append(chunk) {
+                    let text = String(decoding: line, as: UTF8.self)
+                    if text.contains("Another instance of SwiftPM") || text.contains("waiting for lock") {
+                        continuation.yield(.waitingForLock)
+                    } else if let d = CompilerDiagnostic.parse(text).first, log.firstSighting(d) {
+                        continuation.yield(.diagnostic(d))
+                    } else if text.hasPrefix("[") || text.hasPrefix("Build") || text.hasPrefix("Compiling") {
+                        continuation.yield(.progress(text))
+                    }
+                }
+            }
+            p.terminationHandler = { proc in
+                out.fileHandleForReading.readabilityHandler = nil
+                let rest = out.fileHandleForReading.readDataToEndOfFile()
+                log.append(rest)
+                let text = log.text
+                var exe: URL? = nil
+                if proc.terminationStatus == 0 {
+                    if let scratchPath {
+                        exe = scratchPath.appendingPathComponent(configuration).appendingPathComponent(prod)
+                    } else if let bin = try? ProjectBuilder.binPath(project, configuration: configuration) {
+                        exe = bin.appendingPathComponent(prod)
+                    }
+                }
+                continuation.yield(.finished(BuildResult(success: proc.terminationStatus == 0,
+                                                         seconds: Date().timeIntervalSince(start),
+                                                         diagnostics: CompilerDiagnostic.parse(text),
+                                                         log: text, executable: exe)))
+                continuation.finish()
+            }
+            guard canceller.attach(p) else {
+                continuation.yield(.finished(BuildResult(success: false, seconds: 0, diagnostics: [],
+                                                         log: "cancelled", executable: nil)))
+                continuation.finish()
+                return
+            }
+            do { try p.run() } catch {
+                continuation.yield(.finished(BuildResult(success: false, seconds: 0, diagnostics: [],
+                                                         log: "failed to start swift build: \(error)",
+                                                         executable: nil)))
+                continuation.finish()
+            }
+            continuation.onTermination = { reason in
+                if case .cancelled = reason { canceller.cancel() }
+            }
+        }
+        return (events, canceller)
+    }
+}
+
+/// Accumulates build output; dedupes diagnostics (Swift 6 prints each twice).
+private final class LogBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var seen = Set<CompilerDiagnostic>()
+    func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
+    var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
+    func firstSighting(_ d: CompilerDiagnostic) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return seen.insert(d).inserted
+    }
+}

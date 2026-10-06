@@ -73,12 +73,14 @@ public struct Project: Sendable, Equatable {
     }
 
     private static func nearest(from start: URL, containing file: String) -> URL? {
-        var dir = start
+        // Walk path strings: URL.deletingLastPathComponent() on "/" yields "/..", forever.
+        var path = start.standardizedFileURL.path
         while true {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(file).path) { return dir }
-            let parent = dir.deletingLastPathComponent()
-            if parent.path == dir.path { return nil }
-            dir = parent
+            if FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(file)) {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+            if path == "/" || path.isEmpty { return nil }
+            path = (path as NSString).deletingLastPathComponent
         }
     }
 
