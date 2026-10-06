@@ -150,6 +150,23 @@ final class IntrospectionTests: XCTestCase {
         XCTAssertLessThan(ms, 5000)
     }
 
+    /// Outside a probe, Timeline pays one task-local read per init and per body.
+    func testHotPathCostWhenNotProbing() {
+        let n = 200_000
+        var hits = 0
+        var start = Date()
+        for _ in 0..<n where ProbeCollector.current != nil { hits += 1 }
+        let readNS = Date().timeIntervalSince(start) * 1e9 / Double(n)
+        XCTAssertEqual(hits, 0)
+        start = Date()
+        var sum = 0.0
+        for i in 0..<n { sum += Knob.double("bench.knob", Double(i & 1)) }
+        let knobNS = Date().timeIntervalSince(start) * 1e9 / Double(n)
+        XCTAssertEqual(sum, Double(n / 2))
+        print(String(format: "[probe] idle task-local read %.1f ns, Knob.double read %.1f ns", readNS, knobNS))
+        XCTAssertLessThan(readNS, 1000)
+    }
+
     // MARK: knobs
 
     func testKnobsDeclaredWithSourcesAndOverridesApplied() throws {

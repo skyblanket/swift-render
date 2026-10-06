@@ -35,7 +35,9 @@ public enum SceneProbe {
     ///
     /// Nested Timelines report at their parent clip's offset with depth + 1; times
     /// assume a nested Timeline runs at 1× (`Timeline(local)` or `Timeline(local - k)`).
-    /// Knobs read anywhere during the probe, on any thread, are declared.
+    /// Knobs read anywhere during the probe, on any thread, are declared. Knobs read
+    /// only by `soundtrack(duration:)` are declared if the caller evaluates it between
+    /// `KnobStore.shared.beginRecording()` and `endRecording()`.
     public static func probe(duration: Double, size: CGSize, fps: Int,
                              make: @escaping @MainActor (Double) -> AnyView) -> SceneStructure {
         let probe = ProbeCollector()
