@@ -60,6 +60,9 @@ struct CLIArgs {
     var cols: Int = 5
     var rows: Int = 3
     var snapshot: String? = nil     // `preview`: write the window to PNG after layout, then exit
+    var progress: String? = nil     // `render --progress json`: machine-readable progress on stderr
+    var knobs: String? = nil        // `--knobs file.json`: overrides used instead of the project's knob file
+    var json = false                // `list --json`
 }
 
 func parseArgs(_ argv: [String]) -> CLIArgs {
@@ -72,6 +75,7 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
     var args = CLIArgs(subcommand: sub)
 
     if sub == "list" || sub == "--help" || sub == "-h" || sub == "--version" {
+        args.json = argv.dropFirst(2).contains("--json")
         return args
     }
 
@@ -113,6 +117,12 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
         case "--cols":     args.cols = max(1, Int(v) ?? 5); i += 2
         case "--rows":     args.rows = max(1, Int(v) ?? 3); i += 2
         case "--snapshot": args.snapshot = v; i += 2
+        case "--progress":
+            guard v == "json" else {
+                fputs("--progress takes 'json'\n", stderr); exit(64)
+            }
+            args.progress = v; i += 2
+        case "--knobs":    args.knobs = v; i += 2
         case "--range":
             let parts = v.split(separator: ":").compactMap { Double($0) }
             if parts.count == 2 { args.rangeStart = parts[0]; args.rangeEnd = parts[1] }
@@ -140,7 +150,7 @@ func printUsage() {
       swift-render contact <Scene>           Render a grid contact sheet to PNG
       swift-render audio <Scene> --out x.wav Export a scene's Score as WAV
       swift-render captions <Scene> --out x.srt  Export voiceover captions (.srt or .vtt)
-      swift-render list                     List available scenes
+      swift-render list [--json]            List available scenes (--json: SceneSummary array)
       swift-render info <Scene> [--json]    Clips, knobs, score events, captions (agent/editor metadata)
 
     LAUNCH FILMS:
@@ -170,6 +180,8 @@ func printUsage() {
       --preview                Half resolution, 30 fps — fast look at motion
       --open                   Open the result when done
       --snapshot <png>         `preview` only: save the window to PNG and exit (CI/agents)
+      --knobs <file.json>      Knob overrides for this run, used instead of .swift-render/knobs/<Scene>.json
+      --progress json          `render` only: {"progress":{"frame":i,"total":n,"fps":f}} lines on stderr
 
     PREVIEW KEYS:
       space play/pause · ←/→ one frame · ⇧←/⇧→ one second · home start · esc/⌘W close
@@ -213,6 +225,13 @@ func run(_ argv: [String]) async throws {
     switch args.subcommand {
     case "list":
         let names = sceneRunners.keys.sorted()
+        if args.json {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let summaries = names.map { sceneRunners[$0]!.summary(name: $0) }
+            print(String(decoding: try enc.encode(summaries), as: UTF8.self))
+            return
+        }
         for name in names {
             let runner = sceneRunners[name]!
             print("  \(name)  (default: \(runner.defaultDuration)s)")
@@ -246,8 +265,18 @@ func run(_ argv: [String]) async throws {
         fputs("Try: swift-render list\n", stderr)
         exit(1)
     }
-    // Knob overrides from .swift-render/knobs/<Scene>.json apply to every render path.
+    // Knob overrides from .swift-render/knobs/<Scene>.json apply to every render path;
+    // --knobs swaps in another file (Studio: "export with the live values").
     KnobStore.shared.load(scene: args.sceneName, project: Project.discover())
+    if let knobsPath = args.knobs {
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: knobsPath))
+            KnobStore.shared.set(try JSONDecoder().decode([String: KnobValue].self, from: data))
+        } catch {
+            fputs("[swift-render] cannot read --knobs \(knobsPath): \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+    }
 
     if args.subcommand == "props" {
         if let template = runner.propsTemplate {
@@ -324,64 +353,40 @@ func run(_ argv: [String]) async throws {
     if args.subcommand == "contact" || args.subcommand == "check" {
         let isCheck = args.subcommand == "check"
         let defaultOut = isCheck ? "out/check-\(args.sceneName).png" : "out/contact.png"
-        let outPath = args.out == "out/render.mp4" ? defaultOut : args.out
-        // full-size layout, downscaled by ImageRenderer — scenes keep their 1080p coordinates
-        let thumbConfig = Recorder.Config(fps: args.fps, size: size,
-                                          scale: 384.0 / size.width, postFX: args.postFX)
-        let thumbRecorder = Recorder(config: thumbConfig)
+        let outURL = URL(fileURLWithPath: args.out == "out/render.mp4" ? defaultOut : args.out)
         let cols = isCheck && args.cols == 5 && args.rows == 3 ? 4 : args.cols
         let rows = isCheck && args.cols == 5 && args.rows == 3 ? 4 : args.rows
-        let n = cols * rows
-        // sample each cell's midpoint: endpoints land on beat-grid cuts and fades,
-        // which are exactly the frames that don't represent the shot
-        let step = duration / Double(max(1, n))
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sr-contact-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-        var cells: [(Double, URL)] = []
-        let t0 = Date()
-        for i in 0..<n {
-            let t = (Double(i) + 0.5) * step
-            let cell = tmpDir.appendingPathComponent(String(format: "c%03d.png", i))
-            try runner.frame(thumbRecorder, cell, t, duration, audioSource, propsURL)
-            cells.append((t, cell))
-        }
-        let perFrame = Date().timeIntervalSince(t0) / Double(n)
-        try composeContactSheet(cells: cells, columns: cols, to: URL(fileURLWithPath: outPath))
-        print("[swift-render] contact sheet \(cols)×\(rows) → \(outPath)")
-        guard isCheck else { return }
-
-        var report: [String] = []
-        report.append(String(format: "scene %@ · %.2fs · %d×%d @ %dfps · %d frames · %.0f ms/thumb",
-                             args.sceneName, duration, Int(size.width), Int(size.height), args.fps,
-                             Int(duration * Double(args.fps)), perFrame * 1000))
-        let flat = cells.compactMap { t, url -> Double? in
-            guard let sd = luminanceSpread(url) else { return nil }
-            return sd < 0.015 ? t : nil
-        }
-        if flat.isEmpty { report.append("frames: no blank samples") }
-        else {
-            let edge = flat.allSatisfy { $0 < step || $0 > duration - step }
-            report.append("frames: flat/blank at " + flat.map { String(format: "%.2fs", $0) }.joined(separator: ", ")
-                          + (edge ? " (start/end fades — fine)" : "  ⚠︎ check these"))
-        }
+        // Synthesize once: the report and an audio-reactive scene's track share the samples.
+        var checkAudio = CheckAudio.none
+        var track = AudioTrack.silent
         switch audioSource {
         case .score(let score):
-            let (l, r) = ScoreSynth.render(score)
-            report += audioReport(left: l, right: r, rate: scoreSampleRate, events: score.events)
-            report += mediaReport(score)
+            if isCheck || runner.reactsToAudio {
+                let (l, r) = ScoreSynth.render(score)
+                checkAudio = .score(score, left: l, right: r)
+                if runner.reactsToAudio {
+                    var mono = [Float](repeating: 0, count: l.count)
+                    for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
+                    track = try AudioAnalyzer.analyze(samples: mono, sampleRate: scoreSampleRate, fps: args.fps)
+                }
+            }
         case .file(let url):
-            let a = try loadAudioFile(url)
-            report += audioReport(left: a.left, right: a.right, rate: a.rate, events: nil)
+            checkAudio = .file(url)
+            if runner.reactsToAudio { track = try AudioAnalyzer.analyze(url: url, fps: args.fps) }
         case .none:
-            report.append("audio: none — add `soundtrack(duration:)` or pass --audio")
+            break
         }
-        let text = report.joined(separator: "\n")
-        print(text)
-        let txt = URL(fileURLWithPath: outPath).deletingPathExtension().appendingPathExtension("txt")
-        try (text + "\n").write(to: txt, atomically: true, encoding: .utf8)
-        print("[swift-render] report → \(txt.path)")
+        let scene = try PreparedScene(name: args.sceneName, runner: runner, duration: duration, size: size,
+                                      fps: args.fps, postFX: args.postFX, propsURL: propsURL, track: track)
+        guard isCheck else {
+            _ = try renderContactSheet(scene, cols: cols, rows: rows, to: outURL)
+            print("[swift-render] contact sheet \(cols)×\(rows) → \(outURL.path)")
+            return
+        }
+        let result = try runCheck(scene, audio: checkAudio, cols: cols, rows: rows, contact: outURL)
+        print("[swift-render] contact sheet \(cols)×\(rows) → \(outURL.path)")
+        print(result.report.joined(separator: "\n"))
+        print("[swift-render] report → \(result.reportURL.path)")
         return
     }
 
@@ -411,8 +416,17 @@ func run(_ argv: [String]) async throws {
     }
 
     let start = Date()
-    try await runner.render(recorder, outURL, RenderSpan(duration: duration, start: startTime, end: endTime),
-                            args.rangeStart == nil ? audioSource : .none, propsURL)
+    var span = RenderSpan(duration: duration, start: startTime, end: endTime)
+    if args.progress == "json" {
+        span.progress = { done, total in
+            guard done % 10 == 0 || done == total else { return }
+            let fps = Double(done) / max(1e-6, Date().timeIntervalSince(start))
+            if let line = try? HostWire.encode(RenderProgressLine(frame: done, total: total, fps: (fps * 10).rounded() / 10)) {
+                FileHandle.standardError.write(line)
+            }
+        }
+    }
+    try await runner.render(recorder, outURL, span, args.rangeStart == nil ? audioSource : .none, propsURL)
     let elapsed = Date().timeIntervalSince(start)
     print(String(format: "[swift-render] done in %.1fs → %@", elapsed, args.out))
     if args.open { NSWorkspace.shared.open(outURL) }

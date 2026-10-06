@@ -5,7 +5,7 @@ import SwiftRender
 import SwiftRenderKit
 import SwiftUI
 
-enum AudioSource {
+enum AudioSource: Sendable {
     case none
     case file(URL)
     case score(Score)
@@ -78,6 +78,13 @@ public struct SceneRunner {
     let ownsPostFX: Bool
     /// (duration, audioSource, propsURL) → a time → view function (live preview).
     let makeView: (Double, AudioSource, URL?) throws -> (Double) -> AnyView
+    /// (duration, analyzed track, propsURL) → a time → view function. Callers that
+    /// already hold the AudioTrack (host, check) skip `makeView`'s re-synthesis;
+    /// non-reactive scenes ignore the track.
+    let makeViewWithTrack: (Double, AudioTrack, URL?) throws -> (Double) -> AnyView
+
+    /// True when frames depend on the AudioTrack (audio / propsAudio kinds).
+    var reactsToAudio: Bool { kind == .audio || kind == .propsAudio }
 
     public init<S: RenderScene>(_ type: S.Type) {
         kind = .render
@@ -101,6 +108,7 @@ public struct SceneRunner {
         }
         ownsPostFX = S.ownsPostFX
         makeView = { dur, _, _ in { t in AnyView(S.body(at: t, duration: dur)) } }
+        makeViewWithTrack = { dur, _, _ in { t in AnyView(S.body(at: t, duration: dur)) } }
     }
 
     public init<S: AudioReactiveScene>(_ type: S.Type) {
@@ -129,6 +137,7 @@ public struct SceneRunner {
             let plan = try AudioPlan.make(source, fps: 60, needsTrack: true, needsMux: false)
             return { t in AnyView(S.body(at: t, duration: dur, audio: plan.track)) }
         }
+        makeViewWithTrack = { dur, track, _ in { t in AnyView(S.body(at: t, duration: dur, audio: track)) } }
     }
 
     public init<S: PropsScene>(_ type: S.Type) {
@@ -161,6 +170,10 @@ public struct SceneRunner {
         }
         ownsPostFX = S.ownsPostFX
         makeView = { dur, _, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            return { t in AnyView(S.body(at: t, duration: dur, props: props)) }
+        }
+        makeViewWithTrack = { dur, _, propsURL in
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             return { t in AnyView(S.body(at: t, duration: dur, props: props)) }
         }
@@ -200,6 +213,10 @@ public struct SceneRunner {
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let plan = try AudioPlan.make(source, fps: 60, needsTrack: true, needsMux: false)
             return { t in AnyView(S.body(at: t, duration: dur, props: props, audio: plan.track)) }
+        }
+        makeViewWithTrack = { dur, track, propsURL in
+            let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
+            return { t in AnyView(S.body(at: t, duration: dur, props: props, audio: track)) }
         }
     }
 
@@ -251,5 +268,54 @@ extension SceneRunner {
     func summary(name: String) -> SceneSummary {
         SceneSummary(name: name, kind: kind, defaultDuration: defaultDuration,
                      hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil)
+    }
+}
+
+// MARK: - Prepared scene
+
+/// One scene resolved for rasterizing single frames: the host's open scene and
+/// `check`'s thumbnails. Same `RenderFrame` wrapper as the recorder, and a fresh
+/// ImageRenderer per frame (reusing one leaks @State/onAppear between frames).
+@MainActor
+struct PreparedScene {
+    let name: String
+    let runner: SceneRunner
+    let duration: Double
+    let size: CGSize
+    let fps: Int
+    /// Effective global PostFX (requested and the scene doesn't own it).
+    let postFX: Bool
+    let propsURL: URL?
+    private(set) var make: (Double) -> AnyView
+
+    init(name: String, runner: SceneRunner, duration: Double, size: CGSize, fps: Int,
+         postFX: Bool, propsURL: URL?, track: AudioTrack) throws {
+        self.name = name; self.runner = runner; self.duration = duration
+        self.size = size; self.fps = fps
+        self.postFX = postFX && !runner.ownsPostFX
+        self.propsURL = propsURL
+        self.make = try runner.makeViewWithTrack(duration, track, propsURL)
+    }
+
+    /// Swap in a newly analyzed track (only reactive scenes look at it).
+    mutating func setTrack(_ track: AudioTrack) throws {
+        make = try runner.makeViewWithTrack(duration, track, propsURL)
+    }
+
+    /// Raster scale that caps the longest edge at `maxEdge` pixels (never upscales).
+    func scale(maxEdge: Int?) -> CGFloat {
+        guard let maxEdge, maxEdge > 0 else { return 1 }
+        return min(1, CGFloat(maxEdge) / max(size.width, size.height))
+    }
+
+    /// Layout at full `size`, rasterized at `scale`: RGBA8 premultiplied, sRGB.
+    func image(at t: Double, scale: CGFloat) -> CGImage? {
+        autoreleasepool {
+            let make = self.make
+            let root = RenderFrame(size: size, fps: fps, duration: duration, t: t, postFX: postFX) { make(t) }
+            let renderer = ImageRenderer(content: root)
+            renderer.scale = scale
+            return renderer.cgImage
+        }
     }
 }
