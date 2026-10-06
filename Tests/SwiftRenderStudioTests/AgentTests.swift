@@ -110,15 +110,22 @@ final class AgentTests: XCTestCase {
         r.prompt = "P"
         let a = ClaudeCodeBackend.arguments(for: r)
         // docs/review-loop.md: claude -p … --agent swift-render-director --output-format stream-json --verbose
-        //   --permission-mode acceptEdits --allowedTools "mcp__swift-render" --mcp-config .mcp.json --max-budget-usd 1
+        //   --permission-mode default --allowedTools <read-only swift-render tools> --mcp-config .mcp.json --max-budget-usd 1
         XCTAssertEqual(Array(a.prefix(4)), ["-p", "P", "--agent", "swift-render-director"])
         func value(_ flag: String) -> String? { a.firstIndex(of: flag).map { a[$0 + 1] } }
         XCTAssertEqual(value("--output-format"), "stream-json")
         XCTAssertTrue(a.contains("--verbose"))
-        XCTAssertEqual(value("--permission-mode"), "acceptEdits")
-        XCTAssertEqual(value("--allowedTools"), "mcp__swift-render")
+        // Not acceptEdits: it auto-allows Bash rm/mv/cp and redirections the checkpoint can't see.
+        XCTAssertEqual(value("--permission-mode"), "default")
+        XCTAssertEqual(value("--allowedTools"), "mcp__swift-render__list_scenes")
+        XCTAssertTrue(a.contains("mcp__swift-render__reply_comment"))
+        XCTAssertFalse(a.contains("mcp__swift-render"), "not every swift-render tool")
         XCTAssertFalse(a.contains("Bash(swift build:*)"), "reply runs don't build")
-        XCTAssertTrue(a.contains("--disallowedTools"))
+        let denied = Array(a[(a.firstIndex(of: "--disallowedTools") ?? a.count)...])
+        for t in ["Edit", "Write", "Bash", "mcp__swift-render__set_knobs", "mcp__swift-render__resolve_comment",
+                  "mcp__swift-render__claim_comment", "mcp__swift-render__render_video"] {
+            XCTAssertTrue(denied.contains(t), t)
+        }
         XCTAssertEqual(value("--mcp-config"), ".mcp.json")
         XCTAssertEqual(value("--max-budget-usd"), "1.00")
         XCTAssertNil(value("--resume"))
@@ -129,7 +136,10 @@ final class AgentTests: XCTestCase {
         r.systemPrompt = "rules"
         let f = ClaudeCodeBackend.arguments(for: r)
         let allowed = f.firstIndex(of: "--allowedTools")!
-        XCTAssertEqual(Array(f[allowed + 1...allowed + 2]), ["mcp__swift-render", "Bash(swift build:*)"])
+        XCTAssertEqual(Array(f[allowed + 1...allowed + 6]),
+                       ["mcp__swift-render", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(swift build:*)"])
+        XCTAssertEqual(f[f.firstIndex(of: "--permission-mode")! + 1], "default")
+        XCTAssertFalse(f.contains("acceptEdits"))
         XCTAssertFalse(f.contains("--disallowedTools"))
         XCTAssertEqual(f[f.firstIndex(of: "--model")! + 1], "sonnet")
         XCTAssertEqual(f[f.firstIndex(of: "--resume")! + 1], "abc")
@@ -247,8 +257,9 @@ final class AgentTests: XCTestCase {
         ])
 
         var trashed: [String] = []
-        let skipped = try cp.revert(files: [a.path, u.path, new.path]) { trashed.append($0.lastPathComponent); try FileManager.default.removeItem(at: $0) }
-        XCTAssertEqual(skipped, [])
+        let result = try cp.revert(files: [a.path, u.path, new.path]) { trashed.append($0.lastPathComponent); try FileManager.default.removeItem(at: $0) }
+        XCTAssertEqual(result.skipped, [])
+        XCTAssertEqual(Set(result.restored), ["Sources/A.swift", "notes.txt"])
         XCTAssertEqual(try String(contentsOf: a, encoding: .utf8), "a\nB-user\nc\n")
         XCTAssertEqual(try String(contentsOf: u, encoding: .utf8), "untracked v1\n")
         XCTAssertEqual(trashed, ["New.swift"])
@@ -379,6 +390,27 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(agent.currentRun?.reverted, true)
         XCTAssertEqual(agent.currentRun?.canRevert, false)
         XCTAssertEqual(try git(["status", "--porcelain"], root), "")
+    }
+
+    func testRevertKeepsEditsMadeAfterTheRunUnlessAskedAndBacksUp() async throws {
+        let root = try makeRepo()
+        let project = Project.open(root)
+        let file = root.appendingPathComponent("Sources/A.swift")
+        let agent = AgentController(project: project, backend: EditingBackend(file: file))
+        agent.ask(AgentRequest(project: project, scene: "S", commentIDs: [], mode: .fix))
+        try await waitIdle(agent)
+        let run = try XCTUnwrap(agent.currentRun)
+        XCTAssertEqual(run.agentLeft.keys.sorted(), ["Sources/A.swift"])
+        XCTAssertEqual(run.changedOutside, [])
+        let changed = await agent.changedSinceRun(run.id)
+        XCTAssertEqual(changed, [])
+
+        try "a\nb\nc\nd\n// mine\n".write(to: file, atomically: true, encoding: .utf8)   // the user, after the run
+        let changedNow = await agent.changedSinceRun(run.id)
+        XCTAssertEqual(changedNow, ["Sources/A.swift"])
+        await agent.revert(run.id)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "a\nb\nc\nd\n// mine\n", "kept")
+        XCTAssertTrue(agent.transcript.contains { $0.title.contains("changed since the run") })
     }
 
     /// Never ends on its own; `cancel` ends it the way ClaudeCodeBackend does after SIGINT.

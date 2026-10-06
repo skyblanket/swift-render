@@ -6,7 +6,7 @@ import SwiftRenderKit
 // Runs the headless command verified in docs/review-loop.md, cwd = project root:
 //
 //   claude -p "<prompt>" --agent swift-render-director --output-format stream-json --verbose
-//     --permission-mode acceptEdits --allowedTools mcp__swift-render ["Bash(swift build:*)"]
+//     --permission-mode default --allowedTools <tools for the mode> [--disallowedTools …]
 //     --mcp-config .mcp.json --max-budget-usd N [--append-system-prompt …] [--model …] [--resume …]
 //
 // `claude` comes from ToolPaths (Settings override, else the login shell's PATH), and
@@ -55,11 +55,18 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
         var a = ["-p", r.prompt]
         if hasDirector(r.project) { a += ["--agent", agentName] }
         a += ["--output-format", "stream-json", "--verbose"]
-        // Plan/reply runs: MCP tools only. Fix runs also pre-approve builds; acceptEdits
-        // covers Edit/Write, and under -p anything unapproved is denied.
-        a += ["--permission-mode", "acceptEdits"]
-        a += ["--allowedTools", "mcp__swift-render"] + (r.mode.edits ? ["Bash(swift build:*)"] : [])
-        if !r.mode.edits { a += ["--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"] }
+        // Under -p in the default mode anything not pre-approved is denied. Not acceptEdits:
+        // that also auto-allows Bash rm/mv/cp/mkdir/touch and shell redirections, writes the
+        // checkpoint can't see (it tracks Edit/Write) and Revert can't undo.
+        a += ["--permission-mode", "default"]
+        if r.mode.edits {
+            a += ["--allowedTools", "mcp__swift-render"] + editTools + ["Bash(swift build:*)"]
+        } else {
+            // Plan/reply: read the scene, look at frames, answer in the thread — statuses,
+            // knob files and renders stay as they are.
+            a += ["--allowedTools"] + readOnlyMCPTools.map { "mcp__swift-render__" + $0 }
+            a += ["--disallowedTools"] + editTools + ["Bash"] + writingMCPTools.map { "mcp__swift-render__" + $0 }
+        }
         a += ["--mcp-config", mcpConfig(r.project)]
         if !r.systemPrompt.isEmpty { a += ["--append-system-prompt", r.systemPrompt] }
         if let b = r.budgetUSD, b > 0 { a += ["--max-budget-usd", String(format: "%.2f", b)] }
@@ -67,6 +74,13 @@ final class ClaudeCodeBackend: AgentBackend, @unchecked Sendable {
         if let s = r.resumeSessionID, !s.isEmpty { a += ["--resume", s] }
         return a
     }
+
+    static let editTools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+    /// swift-render MCP tools that change nothing the user owns (plan/reply runs).
+    static let readOnlyMCPTools = ["list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene",
+                                   "list_comments", "get_comment", "reply_comment"]
+    /// …and the ones that do: comment statuses, knob files, exports.
+    static let writingMCPTools = ["claim_comment", "resolve_comment", "set_knobs", "render_video"]
 
     /// The project's agent file; without it the house rules travel in the system prompt.
     static func hasDirector(_ p: Project) -> Bool {
