@@ -681,7 +681,14 @@ public enum LaunchText {
             (["health", "fitness"], "heart.fill"),
             (["map", "location"], "map.fill"),
         ]
-        for (keys, symbol) in map where keys.contains(where: { s.contains($0) }) { return symbol }
+        // Keys match the start of a word ("ring" → "rings", not "springs"); two-letter keys
+        // match whole words; keys with spaces or hyphens match as phrases.
+        let words = s.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+        func matches(_ key: String) -> Bool {
+            if key.contains(" ") || key.contains("-") { return s.contains(key) }
+            return words.contains { key.count <= 2 ? $0 == key : $0.hasPrefix(key) }
+        }
+        for (keys, symbol) in map where keys.contains(where: matches) { return symbol }
         return "sparkle"
     }
 }

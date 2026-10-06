@@ -69,6 +69,14 @@ final class LaunchTests: XCTestCase {
         XCTAssertEqual(trimmed.filter { $0 == "{" }.count, trimmed.filter { $0 == "}" }.count, "braces stay balanced")
     }
 
+    func testFeatureSymbolsMatchWordsNotSubstrings() {
+        XCTAssertEqual(LaunchText.symbol(for: "Springs"), "wand.and.stars")
+        XCTAssertEqual(LaunchText.symbol(for: "Progress rings"), "circle.circle")
+        XCTAssertEqual(LaunchText.symbol(for: "On-device"), "lock.fill")
+        XCTAssertEqual(LaunchText.symbol(for: "Air quality"), "sparkle", "two-letter keys need the whole word")
+        XCTAssertEqual(LaunchText.symbol(for: "AI summaries"), "sparkles")
+    }
+
     // MARK: Plan
 
     func testPlanCutsLandOnFramesAndBeats() {
