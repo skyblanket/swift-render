@@ -60,7 +60,10 @@ public struct Eyebrow: View {
 // MARK: - KeynoteTitle
 
 /// The keynote caption block: optional eyebrow, one to three display lines (one of
-/// them in the accent), and a secondary sub line. Lines rise in 0.14 s apart.
+/// them in the accent), and a secondary sub line. Lines rise in 0.14 s apart, the first
+/// one from `start` itself — pass `start: 0` and the headline is moving on the cut frame.
+/// All lines share one size: when the widest is too wide for `maxWidth`, the whole block
+/// scales down together.
 public struct KeynoteTitle: View {
     public enum Reveal: Sendable {
         /// Each line rises 28pt and fades in over 0.5 s.
@@ -94,12 +97,13 @@ public struct KeynoteTitle: View {
     }
 
     /// When line `i` starts revealing.
-    public static func lineStart(_ i: Int, start: Double) -> Double { start + 0.12 + 0.14 * Double(i) }
+    public static func lineStart(_ i: Int, start: Double) -> Double { start + 0.14 * Double(i) }
 
     public var body: some View {
         let L = LaunchLayout(ctx)
-        let s = size * L.type
         let width = maxWidth ?? L.width
+        // One size for every line (a per-line fit would shrink a long accent line below its setup line).
+        let s = theme.fittedDisplaySize(measured, size: size * L.type, width: width)
         let textAlign: TextAlignment = alignment == .leading ? .leading : alignment == .trailing ? .trailing : .center
         let frameAlign: Alignment = alignment == .leading ? .leading : alignment == .trailing ? .trailing : .center
         VStack(alignment: alignment, spacing: 0) {
@@ -109,22 +113,29 @@ public struct KeynoteTitle: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                 lineView(line, i, s)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.45)
+                    .minimumScaleFactor(0.9)   // safety net only; `s` already fits
                     .frame(maxWidth: width, alignment: frameAlign)
             }
             if let sub {
                 let subStart = Self.lineStart(lines.count, start: start) + 0.25
+                let fullSize = size * L.type
                 Text(sub)
-                    .font(theme.text(max(26, s * 0.27)))
+                    .font(theme.text(max(26, fullSize * 0.27)))
                     .foregroundStyle(theme.secondary)
                     .multilineTextAlignment(textAlign)
                     .lineSpacing(6 * L.type)
                     .lineLimit(3)
                     .frame(maxWidth: min(width, 1100 * L.type), alignment: frameAlign)
-                    .padding(.top, max(20, s * 0.26))
+                    .padding(.top, max(20, fullSize * 0.26))
                     .reveal(Motion.rise(t, subStart, 0.6), rise: 14)
             }
         }
+    }
+
+    /// The strings as they are set (the word reveal adds a trailing space per word).
+    private var measured: [String] {
+        if case .words = reveal { return lines.map { $0.split(separator: " ").map { $0 + " " }.joined() } }
+        return lines
     }
 
     @ViewBuilder

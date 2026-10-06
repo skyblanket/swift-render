@@ -496,7 +496,7 @@ extension LaunchProps {
         p.features = p.features.map { f in
             var f = f
             if f.title.count > 32 { f.title = LaunchText.truncate(f.title, 32) }
-            if f.detail.count > 90 { f.detail = LaunchText.truncate(f.detail, 90) }
+            if f.detail.count > 80 { f.detail = LaunchText.truncate(f.detail, 80) }
             if f.symbol.isEmpty { f.symbol = LaunchText.symbol(for: f.title + " " + f.detail) }
             return f
         }
@@ -506,6 +506,27 @@ extension LaunchProps {
             if cut { w.append("code: trimmed to \(trimmed.split(separator: "\n", omittingEmptySubsequences: false).count) lines") }
             code.source = trimmed
             p.code = code.source.isEmpty ? nil : code
+        }
+
+        if let session = p.terminal {
+            // What the longest terminal shot can type and print legibly: three commands,
+            // three output lines after each, eight lines in all.
+            var kept: [String] = [], commands = 0, outputs = 0
+            for line in session {
+                if line.hasPrefix("$ ") {
+                    commands += 1; outputs = 0
+                    if commands > 3 { break }
+                } else {
+                    outputs += 1
+                    if outputs > 3 { continue }
+                }
+                if kept.count == 8 { break }
+                kept.append(line)
+            }
+            if kept.count < session.count {
+                w.append("terminal: \(session.count) lines given, showing \(kept.count) (at most 3 commands, 3 output lines each)")
+            }
+            p.terminal = kept.isEmpty ? nil : kept
         }
 
         if p.highlights.count > 3 {
