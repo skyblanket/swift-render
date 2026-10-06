@@ -102,8 +102,10 @@ struct StudioCommands: Commands {
             Button("Zoom Timeline to Fit") { run(.timelineZoomFit) }
             Divider()
             Button("Next Guide") { run(.cycleGuides) }
-            Toggle("Show Playback Statistics", isOn: Binding(get: { model?.ui.showStats ?? false },
-                                                             set: { _ in run(.toggleStats) }))
+            if PlaybackStats.debugOverlayEnabled {
+                Toggle("Show Playback Statistics", isOn: Binding(get: { model?.ui.showStats ?? false },
+                                                                 set: { _ in run(.toggleStats) }))
+            }
             Picker("Appearance", selection: Binding(get: { appearance }, set: { raw in
                 appearance = raw
                 NSApp.appearance = (StudioAppearance(rawValue: raw) ?? StudioAppearance.fallback).nsAppearance

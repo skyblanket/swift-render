@@ -47,7 +47,7 @@ struct ViewerView: View {
                     // Always present: R arms it, ⌥ activates it, and it hosts the region composer.
                     RegionTool(model: model, canvas: canvas)
                     if model.ui.regionArmed { hint("Drag a box around the spot · Esc to cancel") }
-                    if model.ui.showStats { PlaybackStatsOverlay(engine: model.playback) }
+                    if model.ui.showStats, PlaybackStats.debugOverlayEnabled { PlaybackStatsOverlay(engine: model.playback) }
                     if let crash = model.host.crash {
                         CrashCard(model: model, crash: crash)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -235,8 +235,10 @@ struct ViewMenu: View {
             })) {
                 ForEach(ViewerBackground.allCases) { Text($0.title).tag($0) }
             }
-            Divider()
-            Toggle("Show Playback Statistics", isOn: Binding(get: { model.ui.showStats }, set: { _ in model.perform(.toggleStats) }))
+            if PlaybackStats.debugOverlayEnabled {
+                Divider()
+                Toggle("Show Playback Statistics", isOn: Binding(get: { model.ui.showStats }, set: { _ in model.perform(.toggleStats) }))
+            }
         } label: {
             Text("View")
         }
@@ -245,7 +247,8 @@ struct ViewMenu: View {
     }
 }
 
-/// View › Show Playback Statistics: a small material label in the viewer's corner.
+/// View › Show Playback Statistics (debug builds of the UI only, see
+/// `PlaybackStats.debugOverlayEnabled`): a small material label in the viewer's corner.
 struct PlaybackStatsOverlay: View {
     var engine: PlaybackEngine
 

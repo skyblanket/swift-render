@@ -84,17 +84,105 @@ final class PlaybackTests: XCTestCase {
         var clock = 0.0
         engine.now = { clock }
         engine.play()
-        for _ in 0..<90 {
+        XCTAssertEqual(engine.sampleFPS, 60, "plays at the scene's fps")
+        var steppedAt: Double?
+        for _ in 0..<180 {
+            clock += 1.0 / 60
+            engine.tick()
+            if engine.rung > 0 { steppedAt = clock; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let live = engine.liveStats
+        XCTAssertGreaterThan(engine.rung, 0, "sustained drops step the ladder down")
+        XCTAssertGreaterThanOrEqual(steppedAt ?? 0, 1, "not in the first second after play")
+        XCTAssertEqual(engine.sampleFPS, 30, "fps goes first")
+        XCTAssertEqual(engine.playWidth, 320, "width is kept on the first step")
+        engine.pause()
+        XCTAssertGreaterThan(live.dropped, 0)
+        XCTAssertGreaterThan(live.msPerFrame, 100)
+        XCTAssertNotNil(live.note)
+    }
+
+    func testLightSceneStaysAtFullQuality() async throws {
+        let (engine, _) = try await makeEngine(renderMs: 2)
+        var clock = 0.0
+        engine.now = { clock }
+        engine.play()
+        // A light scene keeps 60 fps at full width.
+        for _ in 0..<120 {
+            clock += 1.0 / 60
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        XCTAssertEqual(engine.rung, 0, "a light scene stays at full quality")
+        engine.pause()
+    }
+
+    func testLadderStepsBackUpWhenHeadroomReturns() async throws {
+        let (engine, _) = try await makeEngine(renderMs: 30, scene: "StyleLab")
+        var clock = 0.0
+        engine.now = { clock }
+        engine.play()
+        for _ in 0..<180 where engine.rung == 0 {
             clock += 1.0 / 60
             engine.tick()
             try await Task.sleep(for: .milliseconds(10))
         }
-        let live = engine.liveStats
+        XCTAssertGreaterThan(engine.rung, 0)
         engine.pause()
-        XCTAssertGreaterThan(live.dropped, 0)
-        XCTAssertGreaterThan(live.msPerFrame, 100)
-        XCTAssertTrue(engine.playWidth < 320 || engine.sampleFPS < 30, "ladder reduced width or fps")
-        XCTAssertNotNil(live.note)
+
+        // Same scene, now cheap (a release host, a quiet machine): back to full quality soon.
+        var o = FakeHostClient.Options()
+        o.renderMs = 0.3
+        let fast = FakeHostClient(options: o)
+        _ = try await fast.waitUntilReady(timeout: 2)
+        let info = try await fast.open(HostParams(scene: "StyleLab", width: 1920, height: 1080, fps: 60))
+        engine.attach(host: fast, info: info)
+        engine.seek(10, precise: true)
+        await waitUntil(5, "frame") { engine.isRequestIdle }
+        engine.play()
+        for _ in 0..<240 where engine.rung > 0 {
+            clock += 1.0 / 60
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(engine.rung, 0, "steps back up once nothing drops and the stream is ahead")
+        engine.pause()
+    }
+
+    func testReplayingACachedRangeRendersNothing() async throws {
+        let (engine, host) = try await makeEngine(renderMs: 1)
+        var clock = 0.0
+        engine.now = { clock }
+        engine.seek(3, precise: true)
+        await waitUntil(5, "frame") { engine.isRequestIdle }
+        engine.play()
+        for _ in 0..<60 {
+            clock += 1.0 / 60
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        engine.pause()
+        await waitUntil(5, "idle") { engine.isRequestIdle }
+        try await Task.sleep(for: .milliseconds(250))
+        await waitUntil(5, "sharpened") { engine.isRequestIdle }
+        // Scrub away and back, then play the same second again.
+        engine.seek(1)
+        await waitUntil(5, "scrub") { engine.isRequestIdle }
+        engine.seek(3, precise: true)
+        await waitUntil(5, "back") { engine.isRequestIdle }
+        let rendered = host.stats.streamFrames
+        let dropped = engine.liveStats.dropped
+        engine.play()
+        for _ in 0..<30 {
+            clock += 1.0 / 60
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        XCTAssertEqual(engine.liveStats.dropped, 0, "every frame of the replay comes from the cache (was \(dropped))")
+        XCTAssertGreaterThanOrEqual(engine.liveStats.shown, 25)
+        engine.pause()
+        XCTAssertLessThan(host.stats.streamFrames - rendered, 70, "the stream starts past the cached second")
     }
 
     func testJumpToEditAndInOut() async throws {

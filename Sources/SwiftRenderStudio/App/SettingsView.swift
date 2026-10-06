@@ -9,7 +9,7 @@ struct SettingsView: View {
     @AppStorage(ToolPaths.overrideKey("claude")) private var claudePath = ""
     @AppStorage(ToolPaths.overrideKey("git")) private var gitPath = ""
     @AppStorage(ToolPaths.overrideKey("ffmpeg")) private var ffmpegPath = ""
-    @AppStorage("cacheBudgetMB") private var cacheBudgetMB = 1024
+    @AppStorage("cacheBudgetMB") private var cacheBudgetMB = FrameCache.defaultBudgetMB
     @AppStorage("playbackQuality") private var quality = PlaybackQuality.auto.rawValue
     @AppStorage("agentModel") private var agentModel = ""
     @AppStorage("agentBudgetUSD") private var agentBudget = 2.0

@@ -13,18 +13,25 @@ import SwiftRenderKit
 // the frame is re-requested at full display resolution, lossless ("sharpen on pause").
 //
 // Playing: the clock is the audio device clock (forward 0.5–2×) or the wall clock.
-// Each display-link tick quantizes t onto the playback grid (30 fps by default),
+// Each display-link tick quantizes t onto the playback grid (the scene's fps at full quality),
 // shows that frame from the cache or holds the nearest earlier one and counts a
 // drop, and keeps a host `stream` running ahead of the clock. Credits: a window of 4,
 // one returned per frame received while the stream head is < 1 s ahead, so host
 // lookahead and Studio memory stay bounded. A stream > 250 ms behind the clock is
 // cancelled and restarted ahead of it by ewma(ms) × window.
 //
-// Quality ladder (auto): budget = 0.8 × 1000 / playback fps. Over budget, step down
-// 100% → 50% of the viewer, then 30 → 20 → 15 fps, and only then 33% → 25% (sharpness
-// first). The ladder is remembered per scene; a scene seen for the first time starts at
-// the top, or at 50% when its first full-size frame already blew the budget. Paused
-// frames are always full display resolution (lossless), and re-sharpen when the canvas grows.
+// Quality ladder (auto), with f = the scene's fps: (100%, f) → (100%, f/2) → (50%, f/2) →
+// (50%, max(15, f/4)): frame rate goes before sharpness, and auto never goes below 50%
+// (Half/Third/Quarter stay available as fixed choices). It reacts to what the viewer sees,
+// not to one slow render: every 0.25 s it looks at the grid ticks of the last second and
+// steps down only when both half-second windows dropped more than 10% of their frames, and
+// never in the first second after play/seek. It steps back up after 0.5 s without a drop
+// once the stream is >= 0.5 s ahead (or throttled by credits); a step up that drops straight
+// back waits 5 s before trying again. Most of the last half second dropped steps down after
+// 0.5 s instead of 1 s. The rung is remembered per scene; a new scene starts sharp.
+// Paused frames are always full display resolution (lossless), and re-sharpen when the
+// canvas grows. While playing, a cached frame only counts if it is at least ~90% of the
+// play width, so a blurry scrub copy is never played back in place of a real render.
 //
 // Scene switch: `beginOpening` stops playback, detaches from the host and bumps the
 // generation at once, so nothing rendered for the old scene can be shown afterwards;
@@ -67,7 +74,7 @@ struct PlaybackStats: Equatable, Sendable {
     /// EWMA of host render+encode ms per frame.
     var msPerFrame: Double = 0
     /// Target playback fps (quality ladder).
-    var targetFPS: Int = 30
+    var targetFPS: Int = 60
     /// Measured frames shown per second while playing.
     var shownFPS: Double = 0
     var dropped: Int = 0
@@ -75,6 +82,13 @@ struct PlaybackStats: Equatable, Sendable {
     var widthScale: Double = 1
     /// "StyleLab ~157 ms/frame → 15 fps preview"
     var note: String?
+
+    /// Playback statistics are a debugging aid: the viewer overlay (View › Show Playback
+    /// Statistics) exists only with `SR_STUDIO_DEBUG=1` or the `studio.debug` default.
+    static let debugOverlayEnabled: Bool = {
+        if let v = ProcessInfo.processInfo.environment["SR_STUDIO_DEBUG"] { return v != "0" && !v.isEmpty }
+        return UserDefaults.standard.bool(forKey: "studio.debug")
+    }()
 }
 
 @MainActor @Observable
@@ -159,12 +173,18 @@ final class PlaybackEngine {
     @ObservationIgnored private var live = PlaybackStats()
     @ObservationIgnored private var lastPublish = 0.0
     @ObservationIgnored private var lastLadderCheck = 0.0
-    @ObservationIgnored private var underBudgetSince: Double?
     @ObservationIgnored private var shownWindow: (count: Int, since: Double) = (0, 0)
-    /// Index into `ladder` (auto quality).
+    /// Index into `rungs` (auto quality).
     @ObservationIgnored private(set) var rung = 0
-    /// The first play of a scene may start lower when its first frame was over budget.
-    @ObservationIgnored private var seedLadder = true
+    /// Grid ticks of roughly the last second while playing: wall time and whether it dropped.
+    @ObservationIgnored private var gridLog: [(wall: Double, dropped: Bool)] = []
+    /// No step-down before this (1 s after play/seek or a ladder move).
+    @ObservationIgnored private var stepDownAfter = 0.0
+    /// No step-up before this.
+    @ObservationIgnored private var stepUpAfter = 0.0
+    @ObservationIgnored private var lastStepUp = -100.0
+    /// Host render ms of the last 30 frames (p90 gates stepping up).
+    @ObservationIgnored private var recentMs: [Double] = []
     /// Per scene: where playback was, the ladder it settled on, its last frame.
     @ObservationIgnored private var memory: [String: SceneMemory] = [:]
     @ObservationIgnored private var memoryOrder: [String] = []
@@ -181,8 +201,20 @@ final class PlaybackEngine {
     static let creditWindow = 4
     static let lookahead = 1.0
     static let restartLag = 0.25
-    /// Auto quality rungs: width scale and playback fps.
-    static let ladder: [(scale: Double, fps: Int)] = [(1, 30), (0.5, 30), (0.5, 20), (0.5, 15), (1.0 / 3, 15), (0.25, 15)]
+    /// Auto quality rungs for a scene at `f` fps: width scale and playback fps. Fps drops
+    /// before width; never below 50% width.
+    static func ladder(fps f: Int) -> [(scale: Double, fps: Int)] {
+        let f = max(1, f), half = max(1, f / 2)
+        let all: [(scale: Double, fps: Int)] = [(1, f), (1, half), (0.5, half), (0.5, min(half, max(15, f / 4)))]
+        var out: [(scale: Double, fps: Int)] = []
+        for r in all where out.last.map({ $0.scale != r.scale || $0.fps != r.fps }) ?? true { out.append(r) }
+        return out
+    }
+    /// The ladder of a 60 fps scene.
+    static var ladder: [(scale: Double, fps: Int)] { ladder(fps: 60) }
+    /// The attached scene's ladder.
+    var rungs: [(scale: Double, fps: Int)] { Self.ladder(fps: fps) }
+    private var currentRung: (scale: Double, fps: Int) { let r = rungs; return r[min(rung, r.count - 1)] }
     /// Scenes whose poster and ladder are remembered.
     static let memoryLimit = 8
 
@@ -278,8 +310,8 @@ final class PlaybackEngine {
         rung = m?.rung ?? 0
         live.msPerFrame = m?.msPerFrame ?? 0
         live.note = nil
-        seedLadder = m == nil
-        underBudgetSince = nil
+        recentMs = []
+        gridLog = []
     }
 
     /// Remember the attached scene's playhead, ladder and last frame (its poster).
@@ -373,7 +405,6 @@ final class PlaybackEngine {
         if rate < 0 && t <= lo + 0.5 / Double(fps) { t = hi }
         isPlaying = true
         sharpenTask?.cancel()
-        seedLadderIfNew()
         live.dropped = 0; live.shown = 0
         shownWindow = (0, now())
         reanchor()
@@ -479,38 +510,53 @@ final class PlaybackEngine {
         if grid != lastGridIndex {
             lastGridIndex = grid
             let target = frameIndex(Double(grid) / Double(sfps), fps: fps)
-            if let f = cache.best(generation: generation, frame: target) {
+            if let f = cache.best(generation: generation, frame: target, minWidth: playMinEdge) {
                 show(f)
                 live.shown += 1
                 shownWindow.count += 1
+                gridLog.append((wall, false))
             } else {
                 live.dropped += 1
-                if let f = cache.nearest(generation: generation, atOrBefore: target, within: fps) { show(f) }
+                gridLog.append((wall, true))
+                if let f = cache.best(generation: generation, frame: target)
+                    ?? cache.nearest(generation: generation, atOrBefore: target, within: fps) { show(f) }
             }
+            if let first = gridLog.first, first.wall < wall - 1.25 { gridLog.removeAll { $0.wall < wall - 1.0 } }
         }
 
         if rate > 0 { manageStream(at: nt, wall: wall) }
         else if let g = lastGridIndex {        // reverse: coalesced single-frame requests
             stopStream()
             let target = Double(g) / Double(sfps)
-            if !cache.contains(generation: generation, frame: frameIndex(target, fps: fps)) {
+            if cache.best(generation: generation, frame: frameIndex(target, fps: fps), minWidth: playMinEdge) == nil {
                 requestFrame(FrameAsk(t: target, width: playWidth, format: .jpeg))
             }
         }
 
-        if quality == .auto, wall - lastLadderCheck > 0.5 { lastLadderCheck = wall; runLadder(wall: wall) }
+        if quality == .auto, wall - lastLadderCheck >= 0.25 { lastLadderCheck = wall; runLadder(wall: wall) }
         publishStats(force: false)
     }
 
     /// Scene frames per scene-second requested from the host at the current rate.
     var sampleFPS: Int {
-        let target = Self.ladder[min(rung, Self.ladder.count - 1)].fps
+        let target = quality == .auto ? currentRung.fps : fps
         return max(1, min(fps, Int((Double(target) / max(1, abs(rate))).rounded())))
     }
 
     var playWidth: Int {
-        let scale = quality.fixedScale ?? Self.ladder[min(rung, Self.ladder.count - 1)].scale
+        let scale = quality.fixedScale ?? currentRung.scale
         return max(160, Int(Double(displayWidth) * scale))
+    }
+
+    /// Smallest longest edge a cached frame needs to be played (not held) at `playWidth`:
+    /// ~90% of it, capped at the scene's own edge (hosts never upscale past it).
+    var playMinEdge: Int {
+        var want = playWidth
+        if let dims = sceneKey.split(separator: "|").last?.split(separator: "x"), dims.count == 2,
+           let w = Int(dims[0]), let h = Int(dims[1]), max(w, h) > 0 {
+            want = min(want, max(w, h))
+        }
+        return want * 9 / 10
     }
 
     private func scrubWidth(precise: Bool) -> Int {
@@ -523,6 +569,8 @@ final class PlaybackEngine {
         anchorT = t
         anchorWall = now()
         lastGridIndex = nil
+        gridLog = []
+        stepDownAfter = anchorWall + 1
         if !audio.play(from: t, rate: rate) { audio.pause() }
         stopStream()
         if rate > 0 { manageStream(at: t, wall: anchorWall) }
@@ -562,7 +610,7 @@ final class PlaybackEngine {
         var g = (t0 * sfps - 1e-6).rounded(.up)
         let limit = g + sfps * 5
         while g < limit, g / sfps <= duration {
-            if !cache.contains(generation: generation, frame: frameIndex(g / sfps, fps: fps)) { break }
+            if cache.best(generation: generation, frame: frameIndex(g / sfps, fps: fps), minWidth: playMinEdge) == nil { break }
             g += 1
         }
         return g / sfps
@@ -717,47 +765,67 @@ final class PlaybackEngine {
 
     private func noteRender(ms: Double) {
         live.msPerFrame = live.msPerFrame == 0 ? ms : live.msPerFrame * 0.8 + ms * 0.2
+        recentMs.append(ms)
+        if recentMs.count > 30 { recentMs.removeFirst(recentMs.count - 30) }
+    }
+
+    /// p90 of the last 30 host render times (0 when none yet).
+    var p90RenderMs: Double {
+        guard !recentMs.isEmpty else { return 0 }
+        let sorted = recentMs.sorted()
+        return sorted[min(sorted.count - 1, Int((Double(sorted.count) * 0.9).rounded(.down)))]
     }
 
     private func applyQualityChoice() {
         rung = 0
-        seedLadder = false
         live.note = nil
+        gridLog = []
         if isPlaying { reanchor() }
     }
 
-    /// First play of a scene in auto: a first full-size frame already over budget starts at 50%.
-    private func seedLadderIfNew() {
-        guard seedLadder, quality == .auto else { return }
-        seedLadder = false
-        let ms = live.msPerFrame
-        guard rung == 0, ms > 0 else { return }
-        let budget = 0.8 * 1000 / Double(Self.ladder[0].fps)
-        if ms > budget { rung = 1; live.note = ladderNote(ms) }
-    }
-
     private func ladderNote(_ ms: Double) -> String {
-        let r = Self.ladder[rung]
+        let r = currentRung
         return "\(sceneName) ~\(Int(ms.rounded())) ms/frame → \(Int(r.scale * 100))% at \(r.fps) fps"
     }
 
+    /// How far the stream is ahead of `t` in scene seconds, and whether it is waiting on credits.
+    private func bufferAhead() -> (seconds: Double, throttled: Bool) {
+        guard let s = streamToken?.stream else { return (0, false) }
+        if s.ended { return (.infinity, true) }
+        return ((s.head ?? s.from) - t, s.owed > 0)
+    }
+
     private func runLadder(wall: Double) {
-        let budget = 0.8 * 1000 / Double(Self.ladder[rung].fps)
-        let ms = live.msPerFrame
-        guard ms > 0 else { return }
-        if ms > budget {
-            underBudgetSince = nil
-            guard rung < Self.ladder.count - 1 else { return }
-            rung += 1
-            live.note = ladderNote(ms)
-        } else if ms < budget * 0.5, rung > 0 {
-            if underBudgetSince == nil { underBudgetSince = wall }
-            if wall - underBudgetSince! > 2 {
-                rung -= 1
-                underBudgetSince = nil
-                live.note = rung == 0 ? nil : ladderNote(ms)
-            }
+        let rs = rungs
+        if rung > rs.count - 1 { rung = rs.count - 1 }
+        var older = (n: 0, drops: 0), recent = (n: 0, drops: 0)
+        for e in gridLog where e.wall > wall - 1 {
+            if e.wall > wall - 0.5 { recent.n += 1; recent.drops += e.dropped ? 1 : 0 }
+            else { older.n += 1; older.drops += e.dropped ? 1 : 0 }
         }
+        func over(_ w: (n: Int, drops: Int)) -> Bool { w.n >= 3 && Double(w.drops) > 0.1 * Double(w.n) }
+        // Sustained: >10% dropped in both halves of the last second. Severe: most of the last
+        // half second dropped (the host is nowhere near keeping up), so don't wait a full second.
+        let sustained = over(older) && over(recent)
+        let severe = recent.n >= 8 && Double(recent.drops) > 0.5 * Double(recent.n)
+        if wall >= stepDownAfter, sustained || severe, rung < rs.count - 1 {
+            rung += 1
+            gridLog = []
+            stepDownAfter = wall + (severe ? 0.5 : 1)
+            // Bounced straight back down after a step up: wait longer before trying again.
+            stepUpAfter = wall + (wall - lastStepUp < 3 ? 5 : 1)
+            live.note = ladderNote(live.msPerFrame)
+            return
+        }
+        guard rung > 0, wall >= stepUpAfter, recent.n >= 3, recent.drops == 0 else { return }
+        let (ahead, throttled) = bufferAhead()
+        guard ahead >= 0.5 || throttled else { return }
+        rung -= 1
+        lastStepUp = wall
+        gridLog = []
+        stepDownAfter = wall + 1
+        stepUpAfter = wall + 0.5
+        live.note = rung == 0 ? nil : ladderNote(live.msPerFrame)
     }
 
     private func publishStats(force: Bool) {
@@ -768,8 +836,8 @@ final class PlaybackEngine {
             live.shownFPS = Double(shownWindow.count) / elapsed
             shownWindow = (0, wall)
         }
-        live.targetFPS = Self.ladder[rung].fps
-        live.widthScale = quality.fixedScale ?? Self.ladder[rung].scale
+        live.targetFPS = sampleFPS
+        live.widthScale = quality.fixedScale ?? currentRung.scale
         lastPublish = wall
         if stats != live { stats = live }
         updateCachedRanges(force: false)

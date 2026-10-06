@@ -257,9 +257,10 @@ final class SceneSwitchTests: XCTestCase {
         var clock = 0.0
         engine.now = { clock }
         engine.play()
-        XCTAssertGreaterThan(engine.rung, 0, "a first frame far over budget starts below full size")
-        for _ in 0..<60 { clock += 1.0 / 60; engine.tick(); try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(engine.rung, 0, "every scene starts sharp")
+        for _ in 0..<180 { clock += 1.0 / 60; engine.tick(); try await Task.sleep(for: .milliseconds(5)) }
         let heavy = engine.rung
+        XCTAssertGreaterThan(heavy, 0, "sustained drops step down")
         engine.pause()
 
         engine.beginOpening(scene: "RepoPromo", key: key("RepoPromo"))
@@ -273,11 +274,14 @@ final class SceneSwitchTests: XCTestCase {
     }
 
     func testAutoLadderKeepsHalfSizeBeforeDroppingFrameRate() {
-        let rungs = PlaybackEngine.ladder
+        let rungs = PlaybackEngine.ladder(fps: 60)
         XCTAssertEqual(rungs.first?.scale, 1)
-        let firstFPSDrop = rungs.firstIndex { $0.fps < 30 }!
-        let firstBelowHalf = rungs.firstIndex { $0.scale < 0.5 }!
-        XCTAssertLessThan(firstFPSDrop, firstBelowHalf, "fps drops before the picture goes below 50%")
+        XCTAssertEqual(rungs.first?.fps, 60, "plays at the scene's fps")
+        let firstFPSDrop = rungs.firstIndex { $0.fps < 60 }!
+        let firstWidthDrop = rungs.firstIndex { $0.scale < 1 }!
+        XCTAssertLessThan(firstFPSDrop, firstWidthDrop, "fps drops before width")
+        XCTAssertNil(rungs.firstIndex { $0.scale < 0.5 }, "auto never goes below 50% width")
+        XCTAssertEqual(PlaybackEngine.ladder(fps: 30).first?.fps, 30)
     }
 
     func testGrowingCanvasResharpensAPausedFrame() async throws {

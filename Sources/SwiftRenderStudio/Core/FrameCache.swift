@@ -37,7 +37,14 @@ final class FrameCache: @unchecked Sendable {
         didSet { lock.lock(); evict(); lock.unlock() }
     }
 
-    init(budgetBytes: Int = 1 << 30) { self.budgetBytes = budgetBytes }
+    init(budgetBytes: Int = FrameCache.defaultBudgetMB << 20) { self.budgetBytes = budgetBytes }
+
+    /// Default RAM budget: an eighth of physical memory, 1–4 GiB (2 GiB on a 16 GB Mac =
+    /// ~258 frames at 1080p, 4.3 s at 60 fps).
+    static let defaultBudgetMB: Int = {
+        let mb = Int(ProcessInfo.processInfo.physicalMemory >> 20) / 8
+        return min(4096, max(1024, mb / 256 * 256))
+    }()
 
     /// Width bucket: 64-px steps so 959/960/961 share a slot.
     static func bucket(_ width: Int) -> Int { max(1, (width + 32) / 64) }
