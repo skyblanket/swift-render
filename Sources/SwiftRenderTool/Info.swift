@@ -82,10 +82,10 @@ func runInfo(_ args: [String]) throws {
     }
     let project = Project.discover()
     KnobStore.shared.load(scene: name, project: project)
-    let dur = duration ?? runner.defaultDuration
+    let dur = duration ?? runner.durationFor(props.map { URL(fileURLWithPath: $0) })
     let audio: AudioSource
     if let audioFile { audio = .file(URL(fileURLWithPath: audioFile)) }
-    else if let score = runner.soundtrack(dur) { audio = .score(score) }
+    else if let score = runner.soundtrack(dur, props.map { URL(fileURLWithPath: $0) }) { audio = .score(score) }
     else { audio = .none }
 
     let info = try buildSceneInfo(name: name, runner: runner, duration: dur, size: aspect.size, fps: fps,

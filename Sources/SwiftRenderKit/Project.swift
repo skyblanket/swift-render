@@ -58,17 +58,24 @@ public struct Project: Sendable, Equatable {
     }
 
     /// Resolve the project for a process: `$SWIFT_RENDER_ROOT`, else the nearest
-    /// ancestor of `start` (default: cwd) containing a Package.swift.
+    /// ancestor of `start` (default: cwd) with a `swift-render.json`, else the
+    /// nearest with a `Package.swift`. The marker file wins over Package.swift so
+    /// a `MyApp/Launch/` package isn't shadowed by `MyApp/Package.swift`.
     public static func discover(from start: URL? = nil) -> Project? {
         if let env = ProcessInfo.processInfo.environment["SWIFT_RENDER_ROOT"], !env.isEmpty {
             return open(URL(fileURLWithPath: env, isDirectory: true))
         }
-        var dir = (start ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+        let begin = (start ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
             .standardizedFileURL
+        if let marked = nearest(from: begin, containing: "swift-render.json") { return open(marked) }
+        if let pkg = nearest(from: begin, containing: "Package.swift") { return open(pkg) }
+        return nil
+    }
+
+    private static func nearest(from start: URL, containing file: String) -> URL? {
+        var dir = start
         while true {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
-                return open(dir)
-            }
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(file).path) { return dir }
             let parent = dir.deletingLastPathComponent()
             if parent.path == dir.path { return nil }
             dir = parent

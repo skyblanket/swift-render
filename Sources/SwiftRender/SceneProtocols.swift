@@ -24,6 +24,10 @@ public protocol PropsScene {
     associatedtype Body: View
     static var defaultDuration: Double { get }
     static var defaultProps: Props { get }
+    /// Length for these props (default: `defaultDuration`).
+    static func duration(for props: Props) -> Double
+    /// Soundtrack for these props (default: `soundtrack(duration:)`).
+    static func soundtrack(duration: Double, props: Props) -> Score?
     @MainActor static func body(at t: Double, duration: Double, props: Props) -> Body
 }
 
@@ -36,6 +40,10 @@ public protocol PropsAudioScene {
     associatedtype Body: View
     static var defaultDuration: Double { get }
     static var defaultProps: Props { get }
+    /// Length for these props (default: `defaultDuration`).
+    static func duration(for props: Props) -> Double
+    /// Soundtrack for these props (default: `soundtrack(duration:)`).
+    static func soundtrack(duration: Double, props: Props) -> Score?
     @MainActor static func body(at t: Double, duration: Double, props: Props, audio: AudioTrack) -> Body
 }
 
@@ -52,4 +60,20 @@ public extension PropsScene {
 public extension PropsAudioScene {
     static var ownsPostFX: Bool { false }
     static func soundtrack(duration: Double) -> Score? { nil }
+}
+
+// MARK: - Props-aware length and soundtrack
+//
+// Data-driven films (a launch film with N features, a voiceover built from the
+// tagline) need the props to decide their length and their score. Override
+// these; the defaults fall back to `defaultDuration` / `soundtrack(duration:)`.
+
+public extension PropsScene {
+    static func duration(for props: Props) -> Double { defaultDuration }
+    static func soundtrack(duration: Double, props: Props) -> Score? { soundtrack(duration: duration) }
+}
+
+public extension PropsAudioScene {
+    static func duration(for props: Props) -> Double { defaultDuration }
+    static func soundtrack(duration: Double, props: Props) -> Score? { soundtrack(duration: duration) }
 }

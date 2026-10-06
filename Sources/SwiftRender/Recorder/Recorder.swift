@@ -53,14 +53,22 @@ public final class Recorder {
 
     /// Render a SwiftUI view that's a pure function of time `t` (in seconds)
     /// to an MP4 at `outputURL`. Optionally muxes in `audioURL`.
+    ///
+    /// `duration` is the scene's full length (what `RenderContext` and the scene
+    /// see); `startTime`/`endTime` select the span to encode, so a `--range`
+    /// render is frame-identical to the same span of a full render.
+    /// `progress(frame, total)` is called after each encoded frame.
     public func render<V: View>(
         to outputURL: URL,
         duration: Double,
         startTime: Double = 0,
+        endTime: Double? = nil,
         audioURL: URL? = nil,
         postFX: Bool = true,
+        progress: (@MainActor (Int, Int) -> Void)? = nil,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) async throws {
+        let endTime = min(duration, endTime ?? duration)
         let applyFX = config.postFX && postFX
         // Make sure parent dir exists, remove stale file
         try FileManager.default.createDirectory(
@@ -101,7 +109,7 @@ public final class Recorder {
         }
         writer.startSession(atSourceTime: .zero)
 
-        let totalFrames = max(1, Int(((duration - startTime) * Double(config.fps)).rounded()))
+        let totalFrames = max(1, Int(((endTime - startTime) * Double(config.fps)).rounded()))
         let timescale: CMTimeScale = CMTimeScale(config.fps)
         let frameDuration = CMTime(value: 1, timescale: timescale)
 
@@ -138,6 +146,7 @@ public final class Recorder {
 
             let pts = CMTimeMultiply(frameDuration, multiplier: Int32(frameIdx))
             adaptor.append(pixelBuffer, withPresentationTime: pts)
+            progress?(frameIdx + 1, totalFrames)
         }
 
         videoInput.markAsFinished()
@@ -150,7 +159,7 @@ public final class Recorder {
         // Audio mux: if an audio file is provided, take the just-finished video
         // and mux in the audio track via AVMutableComposition.
         if let audioURL = audioURL, FileManager.default.fileExists(atPath: audioURL.path) {
-            try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: duration)
+            try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: endTime - startTime)
         }
     }
 

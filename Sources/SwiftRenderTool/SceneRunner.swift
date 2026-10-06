@@ -48,6 +48,15 @@ struct AudioPlan {
     }
 }
 
+/// What part of a scene to encode. `duration` is the full scene length the
+/// scene body sees; `start`/`end` pick the encoded span (`--range`).
+struct RenderSpan {
+    var duration: Double
+    var start: Double = 0
+    var end: Double? = nil
+    var progress: (@MainActor (Int, Int) -> Void)? = nil
+}
+
 /// Type-erased handle on one registered scene. The registry plugin generates
 /// `SceneRunner(MyScene.self)` for every scene; everything else is internal.
 @MainActor
@@ -58,10 +67,12 @@ public struct SceneRunner {
     let defaultDuration: Double
     /// Pretty-printed default-props JSON; nil for prop-less scenes.
     let propsTemplate: (() -> String)?
-    /// Scene-declared soundtrack, if any (duration-aware).
-    let soundtrack: (Double) -> Score?
-    /// (recorder, outURL, endTime, startTime, audioSource, propsURL)
-    let render: (Recorder, URL, Double, Double, AudioSource, URL?) async throws -> Void
+    /// Scene-declared soundtrack, if any: (duration, propsURL) → Score.
+    let soundtrack: (Double, URL?) -> Score?
+    /// Scene length for these props (props scenes may size themselves to their data).
+    let durationFor: (URL?) -> Double
+    /// (recorder, outURL, RenderSpan, audioSource, propsURL)
+    let render: (Recorder, URL, RenderSpan, AudioSource, URL?) async throws -> Void
     /// (recorder, outURL, t, duration, audioSource, propsURL)
     let frame: (Recorder, URL, Double, Double, AudioSource, URL?) throws -> Void
     let ownsPostFX: Bool
@@ -72,11 +83,14 @@ public struct SceneRunner {
         kind = .render
         defaultDuration = S.defaultDuration
         propsTemplate = nil
-        soundtrack = { S.soundtrack(duration: $0) }
-        render = { recorder, out, dur, start, source, _ in
+        soundtrack = { d, _ in S.soundtrack(duration: d) }
+        durationFor = { _ in S.defaultDuration }
+        render = { recorder, out, span, source, _ in
+            let dur = span.duration
             let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
+                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur)
             }
         }
@@ -93,11 +107,14 @@ public struct SceneRunner {
         kind = .audio
         defaultDuration = S.defaultDuration
         propsTemplate = nil
-        soundtrack = { S.soundtrack(duration: $0) }
-        render = { recorder, out, dur, start, source, _ in
+        soundtrack = { d, _ in S.soundtrack(duration: d) }
+        durationFor = { _ in S.defaultDuration }
+        render = { recorder, out, span, source, _ in
+            let dur = span.duration
             let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
+                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, audio: plan.track)
             }
         }
@@ -118,12 +135,21 @@ public struct SceneRunner {
         kind = .props
         defaultDuration = S.defaultDuration
         propsTemplate = { Self.templateJSON(S.defaultProps) }
-        soundtrack = { S.soundtrack(duration: $0) }
-        render = { recorder, out, dur, start, source, propsURL in
+        soundtrack = { d, url in
+            let props = (try? Self.loadProps(S.Props.self, defaults: S.defaultProps, from: url)) ?? S.defaultProps
+            return S.soundtrack(duration: d, props: props)
+        }
+        durationFor = { url in
+            let props = (try? Self.loadProps(S.Props.self, defaults: S.defaultProps, from: url)) ?? S.defaultProps
+            return S.duration(for: props)
+        }
+        render = { recorder, out, span, source, propsURL in
+            let dur = span.duration
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
+                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, props: props)
             }
         }
@@ -144,12 +170,21 @@ public struct SceneRunner {
         kind = .propsAudio
         defaultDuration = S.defaultDuration
         propsTemplate = { Self.templateJSON(S.defaultProps) }
-        soundtrack = { S.soundtrack(duration: $0) }
-        render = { recorder, out, dur, start, source, propsURL in
+        soundtrack = { d, url in
+            let props = (try? Self.loadProps(S.Props.self, defaults: S.defaultProps, from: url)) ?? S.defaultProps
+            return S.soundtrack(duration: d, props: props)
+        }
+        durationFor = { url in
+            let props = (try? Self.loadProps(S.Props.self, defaults: S.defaultProps, from: url)) ?? S.defaultProps
+            return S.duration(for: props)
+        }
+        render = { recorder, out, span, source, propsURL in
+            let dur = span.duration
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
             let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: start, audioURL: plan.muxURL, postFX: !S.ownsPostFX) { t in
+            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
+                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, props: props, audio: plan.track)
             }
         }
@@ -168,7 +203,7 @@ public struct SceneRunner {
         }
     }
 
-    private static func loadProps<P: Codable>(_: P.Type, defaults: P, from url: URL?) throws -> P {
+    static func loadProps<P: Codable>(_: P.Type, defaults: P, from url: URL?) throws -> P {
         guard let url else { return defaults }
         let data: Data
         do { data = try Data(contentsOf: url) }
@@ -215,6 +250,6 @@ extension SceneRunner {
 
     func summary(name: String) -> SceneSummary {
         SceneSummary(name: name, kind: kind, defaultDuration: defaultDuration,
-                     hasSoundtrack: soundtrack(defaultDuration) != nil, hasProps: propsTemplate != nil)
+                     hasSoundtrack: soundtrack(defaultDuration, nil) != nil, hasProps: propsTemplate != nil)
     }
 }

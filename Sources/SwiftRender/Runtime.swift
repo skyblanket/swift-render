@@ -27,3 +27,12 @@ public func registerBundledFonts() {
 
 // MARK: - Shader freshness
 
+
+// MARK: - Shader library for scenes outside this module
+
+public extension ShaderLibrary {
+    /// swift-render's compiled shaders. Inside the SwiftRender module this is
+    /// `.bundle(.module)`; scenes in your own package must use this instead,
+    /// because their `.module` is their own bundle.
+    static var swiftRender: ShaderLibrary { .bundle(.module) }
+}
