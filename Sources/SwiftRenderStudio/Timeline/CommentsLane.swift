@@ -3,23 +3,23 @@ import SwiftRenderKit
 
 // MARK: - Comments lane
 //
-// Markers (point comments) and ranges colored by status, numbered in scene order
-// (resolved ones show ✓). Click selects the thread; dragging a point or a range
-// body moves it, dragging a range's start/end handle retimes that end. The drag
-// draws from `preview` and is written once, on release, through `ReviewController`.
+// Each comment is its numbered disc (the same grammar as the pins and the list) and,
+// for a range, a bar to its end. Click opens the thread; dragging a point or a range
+// body moves it, dragging a range's start/end handle retimes that end. The drag draws
+// from `preview` and is written once, on release, through `ReviewController`.
 
 struct CommentsLane: LaneRenderer {
-    var title = "NOTES"
+    var title = "Comments"
     var comments: [ReviewComment]
     var selection: String?
     /// A retime in progress: the comment drawn at these times instead.
     var preview: RetimePreview?
-    var height: CGFloat = 22
+    var height: CGFloat = 26
 
-    static let markerSize: CGFloat = 14
+    static let markerSize: CGFloat = 18
     static let handleSlop: CGFloat = 6
 
-    /// Scene order (by stored time), so numbers don't jump while dragging.
+    /// Scene order (by stored time), so overlapping discs stack the same way while dragging.
     var ordered: [ReviewComment] { comments.sorted { ($0.t, $0.createdAt) < ($1.t, $1.createdAt) } }
 
     private func times(_ c: ReviewComment) -> (t: Double, end: Double?) {
@@ -30,9 +30,10 @@ struct CommentsLane: LaneRenderer {
     func draw(in ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         let list = ordered
         guard !list.isEmpty else {
-            LaneDraw.empty(&ctx, "No comments — press C at the playhead", size: size)
+            LaneDraw.empty(&ctx, "Press C to add a comment", size: size)
             return
         }
+        let numbers = ReviewController.numbering(comments)
         let mid = size.height / 2
         // Selected and dragged comments draw last (on top).
         let order = list.indices.sorted { a, b in
@@ -43,51 +44,81 @@ struct CommentsLane: LaneRenderer {
         for i in order {
             let c = list[i]
             let (t, end) = times(c)
-            let color = StudioStyle.color(c.status)
-            let dim = c.status == .resolved || c.status == .wontFix
+            let state = CommentState(c)
+            let tone = state == .readyForReview ? StudioStyle.accent : StudioStyle.discFill
+            let faded = state.isSettled
             let x = v.x(t)
             if let p = preview, p.id == c.id {
                 // Ghost of where it was.
                 let gx = v.x(c.t)
                 let ghost = c.end.map { CGRect(x: gx, y: mid - 2, width: max(2, v.x($0) - gx), height: 4) }
-                    ?? CGRect(x: gx - 5, y: mid - 5, width: 10, height: 10)
-                ctx.stroke(Path(roundedRect: ghost, cornerRadius: 3), with: .color(color.opacity(0.5)),
+                    ?? CGRect(x: gx - 6, y: mid - 6, width: 12, height: 12)
+                ctx.stroke(Path(roundedRect: ghost, cornerRadius: 3), with: .color(tone.opacity(0.5)),
                            style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
             }
             if let end {
                 let x1 = v.x(end)
                 if x1 >= 0, x <= size.width {
-                    let bar = CGRect(x: x, y: mid - 2.5, width: max(2, x1 - x), height: 5)
-                    ctx.fill(Path(roundedRect: bar, cornerRadius: 2.5), with: .color(color.opacity(dim ? 0.35 : 0.7)))
+                    let bar = CGRect(x: x, y: mid - 2, width: max(2, x1 - x), height: 4)
+                    ctx.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(tone.opacity(faded ? 0.25 : 0.5)))
                     // End handle: a slim tab.
-                    let tab = CGRect(x: x1 - 2, y: mid - 6, width: 4, height: 12)
-                    ctx.fill(Path(roundedRect: tab, cornerRadius: 1.5), with: .color(color.opacity(dim ? 0.5 : 1)))
+                    let tab = CGRect(x: x1 - 1.5, y: mid - 6, width: 3, height: 12)
+                    ctx.fill(Path(roundedRect: tab, cornerRadius: 1.5), with: .color(tone.opacity(faded ? 0.4 : 0.9)))
                 }
             }
-            guard x >= -10, x <= size.width + 10 else { continue }
-            let s = Self.markerSize
-            let r = CGRect(x: x - s / 2, y: mid - s / 2, width: s, height: s)
-            ctx.fill(Path(ellipseIn: r.insetBy(dx: -1.5, dy: -1.5)), with: .color(StudioStyle.laneBackground))
-            ctx.fill(Path(ellipseIn: r), with: .color(color.opacity(dim ? 0.55 : 1)))
-            // Agent comments get the violet ring the viewer pins use.
-            let agent = c.author.kind == .agent
-            if agent { ctx.stroke(Path(ellipseIn: r.insetBy(dx: -1.5, dy: -1.5)), with: .color(ReviewStyle.agent), lineWidth: 1.5) }
-            if c.id == selection || c.id == preview?.id {
-                let o: CGFloat = agent ? -3.5 : -2.5
-                ctx.stroke(Path(ellipseIn: r.insetBy(dx: o, dy: o)), with: .color(.white), lineWidth: 1.5)
-            }
-            let label = c.status == .resolved ? "✓" : c.status == .wontFix ? "–" : "\(i + 1)"
-            ctx.draw(Text(label).font(.system(size: i + 1 >= 10 ? 7.5 : 8.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(.black.opacity(0.85)),
-                     at: CGPoint(x: r.midX, y: r.midY))
+            guard x >= -12, x <= size.width + 12 else { continue }
+            let selected = c.id == selection || c.id == preview?.id
+            Self.disc(&ctx, center: CGPoint(x: x, y: mid), number: numbers[c.id], state: state, selected: selected)
+        }
+    }
+
+    /// `CommentDisc`, drawn into a lane Canvas.
+    static func disc(_ ctx: inout GraphicsContext, center: CGPoint, number: Int?, state: CommentState, selected: Bool) {
+        let s = markerSize
+        let r = CGRect(x: center.x - s / 2, y: center.y - s / 2, width: s, height: s)
+        ctx.fill(Path(ellipseIn: r.insetBy(dx: -1.5, dy: -1.5)), with: .color(StudioStyle.chrome))
+        let ink: Color
+        switch state {
+        case .open:
+            ctx.fill(Path(ellipseIn: r), with: .color(StudioStyle.discFill))
+            ink = StudioStyle.discInk
+        case .inProgress, .claudeOnIt:
+            ctx.fill(Path(ellipseIn: r), with: .color(StudioStyle.raised))
+            ctx.stroke(Path(ellipseIn: r.insetBy(dx: 0.75, dy: 0.75)), with: .color(StudioStyle.discFill), lineWidth: 1.5)
+            ink = StudioStyle.discFill
+        case .readyForReview:
+            ctx.fill(Path(ellipseIn: r), with: .color(StudioStyle.accent))
+            ink = .white
+        case .done:
+            ctx.fill(Path(ellipseIn: r), with: .color(StudioStyle.discFill.opacity(0.35)))
+            ink = StudioStyle.discInk.opacity(0.9)
+        case .wontFix:
+            ctx.stroke(Path(ellipseIn: r.insetBy(dx: 0.75, dy: 0.75)), with: .color(StudioStyle.discFill.opacity(0.45)),
+                       style: StrokeStyle(lineWidth: 1.25, dash: [2.5, 2]))
+            ink = StudioStyle.discFill.opacity(0.6)
+        }
+        if selected {
+            ctx.stroke(Path(ellipseIn: r.insetBy(dx: -3, dy: -3)), with: .color(StudioStyle.accent), lineWidth: 2)
+        }
+        let label = number.map(String.init) ?? "•"
+        ctx.draw(Text(label).font(StudioStyle.Fonts.rounded(10, weight: .bold)).monospacedDigit().foregroundStyle(ink),
+                 at: CGPoint(x: r.midX, y: r.midY))
+        if state == .done {
+            let b = CGRect(x: r.maxX - 6, y: r.maxY - 6, width: 8, height: 8)
+            ctx.fill(Path(ellipseIn: b), with: .color(StudioStyle.discFill))
+            var check = Path()
+            check.move(to: CGPoint(x: b.minX + 2, y: b.midY)); check.addLine(to: CGPoint(x: b.midX - 0.5, y: b.maxY - 2.2))
+            check.addLine(to: CGPoint(x: b.maxX - 1.8, y: b.minY + 2))
+            ctx.stroke(check, with: .color(StudioStyle.discInk), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
         }
     }
 
     func hit(_ p: CGPoint, viewport v: TimelineViewport) -> LaneHit? {
         let list = ordered
+        let numbers = ReviewController.numbering(comments)
         let mid = height / 2
         var best: (LaneHit, CGFloat)?
-        for (i, c) in list.enumerated() {
+        for c in list {
             let (t, end) = times(c)
             let x = v.x(t)
             var part: LaneHit.Part?
@@ -100,24 +131,16 @@ struct CommentsLane: LaneRenderer {
                 else if p.x > x, p.x < x1 { part = .body; dist = Self.markerSize }   // body loses to markers
             }
             guard let part else { continue }
-            let who = c.author.kind == .agent ? "\(c.author.name) (agent)" : c.author.name
+            let n = numbers[c.id] ?? 0
+            let replies = c.replies.filter { !ReviewStyle.isStudioNote($0.author) }.count
             let hit = LaneHit(kind: .comment, id: c.id, start: t, end: end ?? t, part: part,
-                              title: "#\(i + 1) · \(c.body.split(separator: "\n").first.map(String.init) ?? "")",
-                              detail: "\(Self.statusName(c.status)) · \(LaneDraw.range(t, end ?? t)) · \(who)"
-                                + (c.replies.isEmpty ? "" : " · \(c.replies.count) repl\(c.replies.count == 1 ? "y" : "ies")"),
+                              title: "#\(n) · \(c.body.split(separator: "\n").first.map(String.init) ?? "")",
+                              detail: "\(CommentState(c).title) · \(StudioTime.range(t, end)) · \(ReviewStyle.displayName(c.author))"
+                                + (replies == 0 ? "" : " · \(ReviewStyle.replies(replies))"),
                               rect: nil)
             if best == nil || dist < best!.1 { best = (hit, dist) }
         }
         return best?.0
-    }
-
-    static func statusName(_ s: ReviewStatus) -> String {
-        switch s {
-        case .open: return "Open"
-        case .inProgress: return "In progress"
-        case .resolved: return "Resolved"
-        case .wontFix: return "Won't fix"
-        }
     }
 }
 

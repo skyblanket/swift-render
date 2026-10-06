@@ -18,7 +18,7 @@ enum CompareMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .split: return "Split"
         case .toggle: return "Toggle"
-        case .sideBySide: return "Side by side"
+        case .sideBySide: return "Side by Side"
         case .difference: return "Difference"
         }
     }
@@ -100,11 +100,12 @@ enum CompareMath {
                     changed: changedFraction(before, after))
     }
 
-    /// "Δ 3.1%" ("Δ <0.1%" for any change too small to round up, "Δ 0%" for none).
+    /// "12% of the frame changed" ("No visible change in this frame" for none, "Less than
+    /// 1% of the frame changed" for a sliver).
     static func label(_ changed: Double) -> String {
-        if changed == 0 { return "Δ 0%" }
-        if changed < 0.001 { return "Δ <0.1%" }
-        return String(format: "Δ %.1f%%", changed * 100)
+        if changed == 0 { return "No visible change in this frame" }
+        if changed < 0.01 { return "Less than 1% of the frame changed" }
+        return "\(Int((changed * 100).rounded()))% of the frame changed"
     }
 }
 
@@ -139,7 +140,7 @@ struct CompareView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                StudioStyle.viewerBackground
+                StudioStyle.canvas
                 if let c = target, let pair {
                     content(c, pair, container: geo.size)
                 } else {
@@ -171,26 +172,26 @@ struct CompareView: View {
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
                 wipe = min(1, max(0, g.location.x / max(1, canvas.width)))
             })
-            labels(c, left: "BEFORE", right: afterTitle)
+            labels(c, left: "Before", right: afterTitle)
         case .toggle:
             frame(showAfter ? p.after : p.before, c)
                 .frame(width: canvas.width, height: canvas.height)
                 .position(x: canvas.midX, y: canvas.midY)
                 .contentShape(Rectangle())
                 .onTapGesture { showAfter.toggle() }
-            labels(c, left: showAfter ? afterTitle : "BEFORE", right: "click to flip", leftAfter: showAfter)
+            labels(c, left: showAfter ? afterTitle : "Before", right: "Click to flip", leftAfter: showAfter)
         case .sideBySide:
             let half = ViewerGeometry.canvasRect(container: CGSize(width: container.width / 2, height: container.height - 70),
                                                  content: CGSize(width: p.before.width, height: p.before.height),
                                                  zoom: .fit, inset: 10)
             HStack(spacing: 0) {
                 VStack(spacing: 6) {
-                    badge("BEFORE", sub: beforeSub(c), color: .white)
+                    badge("Before", help: beforeSub(c))
                     frame(p.before, c).frame(width: half.width, height: half.height)
                 }
                 .frame(width: container.width / 2)
                 VStack(spacing: 6) {
-                    badge(afterTitle, sub: afterSub(c), color: StudioStyle.ok)
+                    badge(afterTitle, help: afterSub(c))
                     frame(p.after, c).frame(width: half.width, height: half.height)
                 }
                 .frame(width: container.width / 2)
@@ -203,7 +204,7 @@ struct CompareView: View {
             }
             .frame(width: canvas.width, height: canvas.height)
             .position(x: canvas.midX, y: canvas.midY)
-            labels(c, left: "DIFFERENCE ×4", right: "black = unchanged")
+            labels(c, left: "Difference", right: "Black means unchanged")
         }
     }
 
@@ -216,8 +217,7 @@ struct CompareView: View {
                 if let region = c.region, !RegionMath.isPoint(region) {
                     let r = RegionMath.rect(region, in: CGRect(origin: .zero, size: g.size))
                     Rectangle()
-                        .strokeBorder(Color(red: ReviewImage.boxColor.r, green: ReviewImage.boxColor.g, blue: ReviewImage.boxColor.b),
-                                      lineWidth: 1.5)
+                        .strokeBorder(StudioStyle.regionBox, lineWidth: 1.5)
                         .frame(width: r.width, height: r.height)
                         .offset(x: r.minX, y: r.minY)
                 }
@@ -233,7 +233,7 @@ struct CompareView: View {
             Circle()
                 .fill(.white)
                 .frame(width: 26, height: 26)
-                .overlay(Image(systemName: "arrow.left.and.right").font(.system(size: 11, weight: .bold)).foregroundStyle(.black))
+                .overlay(Image(systemName: "arrow.left.and.right").font(StudioStyle.Fonts.footnoteEmphasis).foregroundStyle(.black))
                 .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
         }
         .frame(width: 26, height: canvas.height)
@@ -243,38 +243,35 @@ struct CompareView: View {
 
     private func labels(_ c: ReviewComment, left: String, right: String, leftAfter: Bool = false) -> some View {
         HStack(alignment: .top) {
-            badge(left, sub: leftAfter ? afterSub(c) : (left == "BEFORE" ? beforeSub(c) : nil),
-                  color: leftAfter ? StudioStyle.ok : .white)
+            badge(left, help: leftAfter ? afterSub(c) : (left == "Before" ? beforeSub(c) : nil))
             Spacer()
-            badge(right, sub: right == afterTitle ? afterSub(c) : nil,
-                  color: right == afterTitle ? StudioStyle.ok : .secondary)
+            badge(right, help: right == afterTitle ? afterSub(c) : nil)
         }
-        .padding(8)
+        .padding(StudioStyle.Space.s)
         .frame(width: canvas.width)
         .position(x: canvas.midX, y: canvas.minY + 24)
-        .allowsHitTesting(false)
     }
 
-    private func badge(_ title: String, sub: String?, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Text(title).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(color)
-            if let sub { Text(sub).font(StudioStyle.monoSmall).foregroundStyle(.white.opacity(0.7)) }
-        }
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(.black.opacity(0.7), in: Capsule())
-        .fixedSize()
+    /// Corner label on material; the details (revision, who, when) are in its tooltip.
+    private func badge(_ title: String, help: String?) -> some View {
+        Text(title)
+            .font(StudioStyle.Fonts.subheadline.weight(.semibold))
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .studioGlass(cornerRadius: 12)
+            .fixedSize()
+            .help(help ?? "")
     }
 
-    private var afterTitle: String { effectiveSource == .live ? "AFTER · LIVE" : "AFTER" }
+    private var afterTitle: String { effectiveSource == .live ? "Now" : "After" }
 
     private func beforeSub(_ c: ReviewComment) -> String {
-        [c.revision, StudioStyle.timecode(c.t)].compactMap { $0 }.joined(separator: " · ")
+        ["Posted at \(StudioTime.short(c.t))", c.revision.map { "revision \($0)" }].compactMap { $0 }.joined(separator: ", ")
     }
 
     private func afterSub(_ c: ReviewComment) -> String {
-        if effectiveSource == .live { return "gen \(model.host.generation) · \(StudioStyle.timecode(c.t))" }
-        let who = c.replies.last { $0.attachments.contains { $0.kind == .after } }?.author.name
-        return [who, StudioStyle.timecode(c.latestAfter?.t ?? c.t)].compactMap { $0 }.joined(separator: " · ")
+        if effectiveSource == .live { return "The current build at \(StudioTime.short(c.t))" }
+        let who = c.replies.last { $0.attachments.contains { $0.kind == .after } }?.author
+        return "\(who.map(ReviewStyle.displayName) ?? "Claude")'s frame at \(StudioTime.short(c.latestAfter?.t ?? c.t))"
     }
 
     private var emptyState: some View {
@@ -282,10 +279,10 @@ struct CompareView: View {
             if loading {
                 ProgressView().controlSize(.small)
             } else if let loadError {
-                StudioEmptyState(title: "Can't Compare", symbol: "exclamationmark.triangle", message: loadError)
+                StudioEmptyState(title: "Can't compare this one", symbol: "exclamationmark.triangle", message: loadError)
             } else {
-                StudioEmptyState(title: "Nothing to Compare", symbol: "rectangle.split.2x1",
-                                 message: "Comments posted in Studio capture a BEFORE frame. Select one to compare it with the live build or Claude's after frame.")
+                StudioEmptyState(title: "Nothing to compare yet", symbol: StudioStyle.Symbol.compare,
+                                 message: "Comments you post in Studio save a Before frame. Pick one to compare it with Claude's frame or what's playing now.")
             }
         }
         .frame(width: canvas.width, height: canvas.height)
@@ -296,57 +293,55 @@ struct CompareView: View {
 
     private var controls: some View {
         let c = target
-        return HStack(spacing: 10) {
+        let state = c.map(CommentState.init)
+        return HStack(spacing: StudioStyle.Space.m) {
             Picker("Mode", selection: Binding(get: { mode }, set: { model.ui.compare = $0 })) {
                 ForEach(CompareMode.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 300)
+            .fixedSize()
             if let c, c.latestAfter != nil {
                 Picker("After", selection: $source) {
-                    Text("Claude's frame").tag(AfterSource.attachment)
-                    Text("Live").tag(AfterSource.live)
+                    Text("Claude's Frame").tag(AfterSource.attachment)
+                    Text("Now").tag(AfterSource.live)
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .fixedSize()
-                .help("AFTER shows the attached after-frame, or the current build rendered live")
+                .help("Compare with the frame Claude attached, or with what's playing now")
             }
             if let pair {
                 Text(CompareMath.label(pair.changed))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(pair.changed < 0.001 ? StudioStyle.warn : .primary)
-                    .help("Share of a 64×36 luminance grid that changed by more than 4%")
+                    .font(StudioStyle.Fonts.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Measured on a 64 × 36 grid: a cell counts when its brightness moves more than 4%.")
             }
-            if loading { ProgressView().controlSize(.mini) }
-            if let c {
-                Divider().frame(height: 16)
-                CommentBadge(number: model.review.number(of: c.id), status: c.status, agent: c.author.kind == .agent, size: 16)
-                Text(c.body).font(.system(size: 11)).lineLimit(1).frame(maxWidth: 220, alignment: .leading)
-                if c.status == .resolved, c.acceptedBy == nil {
-                    Button { act { try model.review.accept(c.id) } } label: { Label("Accept", systemImage: "checkmark") }
-                        .buttonStyle(.borderedProminent).tint(StudioStyle.ok)
-                } else if c.acceptedBy != nil {
-                    Label("Accepted", systemImage: "checkmark.seal.fill").font(.system(size: 11)).foregroundStyle(StudioStyle.ok)
-                }
-                if !c.status.isActive {
-                    Button("Reopen") {
+            if loading { ProgressView().controlSize(.small) }
+            if let c, let state {
+                if state == .readyForReview {
+                    Button("Not Quite") {
                         act { try model.review.reopen(c.id, note: nil) }
-                        model.review.selection = c.id
+                        model.review.open(c.id)
                         model.ui.inspectorTab = .comments
                     }
+                    Button("Looks Good") { act { try model.review.accept(c.id) } }
+                        .buttonStyle(.borderedProminent)
+                } else if state.isSettled {
+                    StatusLabel(state: state, font: StudioStyle.Fonts.callout)
                 }
             }
-            Button("Done") { model.ui.compare = nil }
+            Button { model.ui.compare = nil } label: { Image(systemName: StudioStyle.Symbol.close) }
+                .buttonStyle(.borderless)
                 .keyboardShortcut(.cancelAction)
+                .help("Close Compare (Esc)")
         }
-        .controlSize(.small)
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(Color(white: 0.11).opacity(0.94), in: RoundedRectangle(cornerRadius: 9))
-        .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.1)))
-        .padding(.bottom, 10)
+        .controlSize(.regular)
+        .padding(.horizontal, StudioStyle.Space.l).padding(.vertical, StudioStyle.Space.s)
+        .studioGlass(cornerRadius: 22)
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .padding(.bottom, StudioStyle.Space.l)
     }
 
     private func act(_ f: () throws -> Void) {
@@ -374,7 +369,7 @@ struct CompareView: View {
             if let afterURL {
                 a = try await Task.detached { try ReviewImage.load(afterURL) }.value
             } else {
-                guard let host = model.host.active else { throw ReviewError.io("No render host — build first.") }
+                guard let host = model.host.active else { throw ReviewError.io("Nothing is playing yet. Build first.") }
                 let f = try await host.frame(t: c.t, maxWidth: b.width, format: host.supportsBinaryFrames ? .bgra8 : .png)
                 a = f.image
             }

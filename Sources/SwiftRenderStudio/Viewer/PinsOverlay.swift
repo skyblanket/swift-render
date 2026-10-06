@@ -4,10 +4,9 @@ import SwiftRenderKit
 // MARK: - Pins
 //
 // Comments within ±0.25 s of the playhead (`PlaybackEngine.visibleCommentIDs`,
-// republished only when the set changes), numbered in scene order, colored by status,
-// agent comments ringed violet with a sparkle. Hover a pin for its text; click selects
-// the thread; the selected comment shows a caption, and its rect can be dragged to a
-// new spot (written on release). A/B compare draws over them.
+// republished only when the set changes), each a numbered disc in the shared grammar
+// (see `CommentDisc`). Hover a pin for its text; click opens the thread; the selected
+// comment's rect can be dragged to a new spot (written on release). Compare draws over them.
 
 struct PinsOverlay: View {
     @Bindable var model: ProjectModel
@@ -26,8 +25,8 @@ struct PinsOverlay: View {
             ForEach(shown) { c in
                 pin(c, number: numbers[c.id], region: c.region!)
             }
-            if let id = hovered ?? model.review.selection, let c = shown.first(where: { $0.id == id }) {
-                caption(c, number: numbers[c.id], expanded: hovered == id)
+            if let id = hovered, let c = shown.first(where: { $0.id == id }) {
+                caption(c)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -45,62 +44,55 @@ struct PinsOverlay: View {
     private func pin(_ c: ReviewComment, number: Int?, region: ReviewRegion) -> some View {
         let base = RegionMath.rect(region, in: canvas)
         let r = draggingID == c.id ? base.offsetBy(dx: dragOffset.width, dy: dragOffset.height) : base
-        let agent = c.author.kind == .agent
-        let color = agent ? ReviewStyle.agent : StudioStyle.color(c.status)
+        let state = CommentState(c)
         let selected = model.review.selection == c.id
         let isPoint = RegionMath.isPoint(region)
         if !isPoint {
+            let stroke = selected ? StudioStyle.accent : StudioStyle.onPicture.opacity(state.isActive ? 0.85 : 0.45)
             Rectangle()
-                .strokeBorder(color, style: StrokeStyle(lineWidth: selected ? 2 : 1.25, dash: c.status.isActive ? [] : [4, 3]))
-                .background(color.opacity(selected ? 0.12 : 0.05))
+                .strokeBorder(StudioStyle.pictureScrim, lineWidth: 3)
+                .overlay(Rectangle().strokeBorder(stroke, style: StrokeStyle(lineWidth: 1.5, dash: state.isSettled ? [4, 3] : [])))
                 .frame(width: max(1, r.width), height: max(1, r.height))
                 .offset(x: r.minX, y: r.minY)
                 .allowsHitTesting(selected)
                 .gesture(selected ? moveGesture(c, region: region) : nil)
-                .help(selected ? "Drag to move this note's region" : "")
+                .help(selected ? "Drag to move this spot" : "")
         }
-        CommentBadge(number: number, status: c.status, agent: agent, selected: selected, size: selected ? 20 : 18)
-            .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-            .offset(x: (isPoint ? r.minX : r.maxX) - 10, y: r.minY - 10)
+        CommentDisc(number: number, state: state, selected: selected, size: 22)
+            .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+            .offset(x: (isPoint ? r.minX : r.maxX) - (selected ? 14 : 11), y: r.minY - (selected ? 14 : 11))
             .onHover { inside in hovered = inside ? c.id : (hovered == c.id ? nil : hovered) }
             .onTapGesture {
-                model.review.selection = c.id
+                model.review.open(c.id)
                 model.ui.inspectorTab = .comments
                 model.ui.showInspector = true
             }
     }
 
-    /// Text beside the selected (or hovered) pin: one line, or the whole note on hover.
-    private func caption(_ c: ReviewComment, number: Int?, expanded: Bool) -> some View {
+    /// The note beside a hovered pin.
+    private func caption(_ c: ReviewComment) -> some View {
         let r = RegionMath.rect(c.region!, in: canvas)
-        let agent = c.author.kind == .agent
-        let width: CGFloat = expanded ? 260 : 220
-        let x = min(max(canvas.minX + 4, (RegionMath.isPoint(c.region!) ? r.minX : r.maxX) + 14), canvas.maxX - width - 4)
+        let width: CGFloat = 260
+        let x = min(max(canvas.minX + 4, (RegionMath.isPoint(c.region!) ? r.minX : r.maxX) + 16), canvas.maxX - width - 4)
         let below = r.minY - 10 < canvas.minY + 40
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                if agent { Image(systemName: "sparkles").foregroundStyle(ReviewStyle.agent) }
-                Text(c.author.name).font(.system(size: 10, weight: .semibold))
-                Text(c.timecode).font(StudioStyle.monoSmall).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+            HStack(spacing: 6) {
+                AuthorAvatar(author: c.author, size: 18)
+                Text(ReviewStyle.displayName(c.author)).font(StudioStyle.Fonts.subheadline.weight(.semibold))
+                Text(StudioTime.range(c.t, c.end)).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).monospacedDigit()
                 Spacer(minLength: 0)
-                Text(ReviewStyle.shortTitle(c.status)).font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(StudioStyle.color(c.status))
+                StatusLabel(state: CommentState(c), font: StudioStyle.Fonts.footnote)
             }
-            Text(c.body).font(.system(size: 11)).lineLimit(expanded ? 6 : 1)
-            if expanded, let last = c.replies.last {
-                HStack(alignment: .top, spacing: 4) {
-                    Image(systemName: "arrowshape.turn.up.left").font(.system(size: 8))
-                    Text("\(last.author.name): \(last.body)").lineLimit(2)
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(last.author.kind == .agent ? ReviewStyle.agent : .secondary)
+            Text(c.body).font(StudioStyle.Fonts.callout).lineLimit(5)
+            if let last = c.replies.last {
+                Text("\(ReviewStyle.displayName(last.author)): \(last.body)")
+                    .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).lineLimit(2)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(StudioStyle.Space.s)
         .frame(width: width, alignment: .leading)
-        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder((agent ? ReviewStyle.agent : .white).opacity(0.18)))
-        .offset(x: x, y: below ? r.minY + 14 : r.minY - 10)
+        .studioCard(cornerRadius: StudioStyle.Radius.medium)
+        .offset(x: x, y: below ? r.minY + 16 : r.minY - 10)
         .allowsHitTesting(false)
     }
 
@@ -111,7 +103,7 @@ struct PinsOverlay: View {
                 let moved = Self.moved(region, by: g.translation, canvas: canvas)
                 draggingID = nil; dragOffset = .zero
                 if moved != region {
-                    do { try model.review.moveRegion(c.id, to: moved) } catch { model.ui.toast = "\(error)" }
+                    do { try model.review.moveRegion(c.id, to: moved) } catch { model.ui.toast = "Couldn't move it. \(error)" }
                 }
             }
     }

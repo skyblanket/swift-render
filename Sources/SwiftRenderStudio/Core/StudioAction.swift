@@ -9,12 +9,19 @@ import Foundation
 enum InspectorTab: String, CaseIterable, Identifiable, Sendable {
     case comments, knobs, props, info
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .comments: return "Comments"
+        case .knobs: return "Knobs"
+        case .props: return "Content"
+        case .info: return "Info"
+        }
+    }
     var symbol: String {
         switch self {
         case .comments: return "text.bubble"
         case .knobs: return "slider.horizontal.3"
-        case .props: return "curlybraces"
+        case .props: return "doc.richtext"
         case .info: return "info.circle"
         }
     }
@@ -46,7 +53,7 @@ enum StudioAction: Equatable, Sendable {
     case openSource
     // Layout
     case inspectorTab(InspectorTab)
-    case toggleInspector, toggleSidebar, toggleAgentPanel
+    case toggleInspector, toggleSidebar, toggleAgentPanel, toggleStats
     /// Esc: cancel tool, close popover, exit compare.
     case cancel
 }

@@ -39,20 +39,20 @@ enum RenderSnapshot {
             panel = AnyView(RenderSheet(model: model))
             isSheet = true
         case "renders", "render-activity":
-            panel = AnyView(RenderActivityList(model: model).background(Color(white: 0.165)))
+            panel = AnyView(RenderActivityList(model: model).background(StudioStyle.raised))
             isSheet = false
         default:
             FileHandle.standardError.write(Data("[studio] unknown --show \(show) (render-sheet | renders)\n".utf8))
             return png
         }
         guard let base = NSBitmapImageRep(data: png)?.cgImage,
-              let overlay = renderPanel(panel) else { return png }
+              let overlay = renderPanel(panel, like: window) else { return png }
 
         let scale = window.backingScaleFactor
         let size = window.frame.size
         let pw = CGFloat(overlay.width) / scale, ph = CGFloat(overlay.height) / scale
         let top: CGFloat = isSheet ? 52 : 60
-        // The popover's arrow points at the Renders toolbar button (third from the right).
+        // The popover's arrow points at the Export toolbar button (second from the right).
         let x = isSheet ? (size.width - pw) / 2 : size.width - pw - 50
         let rect = CGRect(x: x, y: size.height - top - ph, width: pw, height: ph)   // CG: bottom-left origin
         let radius: CGFloat = isSheet ? 11 : 12
@@ -71,7 +71,7 @@ enum RenderSnapshot {
         let shape = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
         ctx.addPath(shape)
         if !isSheet { ctx.addPath(arrow(at: CGPoint(x: rect.maxX - 18, y: rect.maxY))) }
-        ctx.setFillColor(CGColor(gray: 0.165, alpha: 1))
+        ctx.setFillColor(window.effectiveAppearance.isDark ? CGColor(gray: 0.165, alpha: 1) : CGColor(gray: 0.98, alpha: 1))
         ctx.fillPath()
         ctx.setShadow(offset: .zero, blur: 0)
         ctx.saveGState()
@@ -80,7 +80,7 @@ enum RenderSnapshot {
         ctx.draw(overlay, in: rect)
         ctx.restoreGState()
         ctx.addPath(shape)
-        ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.12))
+        ctx.setStrokeColor(window.effectiveAppearance.isDark ? CGColor(gray: 1, alpha: 0.12) : CGColor(gray: 0, alpha: 0.12))
         ctx.setLineWidth(1)
         ctx.strokePath()
         guard let out = ctx.makeImage() else { return png }
@@ -97,22 +97,23 @@ enum RenderSnapshot {
     }
 
     /// Lays `view` out at its fitting size in an offscreen window and renders its layers.
-    private static func renderPanel(_ view: AnyView) -> CGImage? {
-        let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+    private static func renderPanel(_ view: AnyView, like window: NSWindow) -> CGImage? {
+        let dark = window.effectiveAppearance.isDark
+        let hosting = NSHostingView(rootView: view.environment(\.colorScheme, dark ? .dark : .light))
         let size = hosting.fittingSize
         guard size.width > 0, size.height > 0 else { return nil }
-        let window = NSWindow(contentRect: NSRect(x: -30_000, y: -30_000, width: size.width, height: size.height),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        window.orderFrontRegardless()
+        let panelWindow = NSWindow(contentRect: NSRect(x: -30_000, y: -30_000, width: size.width, height: size.height),
+                                   styleMask: [.borderless], backing: .buffered, defer: false)
+        panelWindow.appearance = window.effectiveAppearance
+        panelWindow.isReleasedWhenClosed = false
+        panelWindow.contentView = hosting
+        panelWindow.orderFrontRegardless()
         hosting.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
+        panelWindow.displayIfNeeded()
         // One runloop turn so SwiftUI commits its layers.
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        defer { window.orderOut(nil) }
-        guard let data = SnapshotRunner.renderLayers(window) else { return nil }
+        defer { panelWindow.orderOut(nil) }
+        guard let data = SnapshotRunner.renderLayers(panelWindow) else { return nil }
         return NSBitmapImageRep(data: data)?.cgImage
     }
 }

@@ -34,6 +34,9 @@ enum ViewerZoom: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum ViewerGeometry {
+    /// Air around the picture at Fit.
+    static let fitInset: CGFloat = 16
+
     /// Canvas rect (view coordinates, y down) for `content` scene size inside `container`.
     static func canvasRect(container: CGSize, content: CGSize, zoom: ViewerZoom, inset: CGFloat = 0) -> CGRect {
         guard content.width > 0, content.height > 0 else { return .zero }
@@ -89,6 +92,12 @@ enum RegionMath {
         let p = scenePoints(r, sceneSize: sceneSize)
         if isPoint(r) { return "point \(f(r.x)), \(f(r.y)) = \(Int(p.minX)),\(Int(p.minY)) scene pt" }
         return "x \(f(r.x)) y \(f(r.y)) w \(f(r.w)) h \(f(r.h)) = \(Int(p.minX)),\(Int(p.minY)) · \(Int(p.width))×\(Int(p.height)) scene pt"
+    }
+
+    /// "768 × 389" in scene points (shown while ⌥ is held during a drag).
+    static func sizeLabel(_ r: ReviewRegion, sceneSize: CGSize) -> String {
+        let p = scenePoints(r, sceneSize: sceneSize)
+        return "\(Int(p.width)) × \(Int(p.height))"
     }
 
     private static func round4(_ v: Double) -> Double { (v * 10_000).rounded() / 10_000 }

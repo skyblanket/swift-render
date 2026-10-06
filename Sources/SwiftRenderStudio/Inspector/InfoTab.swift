@@ -4,13 +4,13 @@ import SwiftRenderKit
 
 // MARK: - Info tab
 //
-// Scene metadata, sources, structure counts, audio (loudness sparkline, peak/RMS
-// from the last check) and host stats. Run Check asks the host for `check`: the
-// 4×4 contact sheet comes back as a PNG whose cells seek on click ((i+0.5)·step),
-// with the playhead's cell outlined, plus the report lines.
+// The scene at a glance (kind, length, canvas, source), Health Check (16 moments across
+// the film in a contact sheet whose cells seek on click, plus a checklist), structure,
+// sound, and a collapsed Technical section for the preview process.
 
 struct InfoTab: View {
     @Bindable var model: ProjectModel
+    @State private var showTechnical = false
 
     var body: some View {
         if let info = model.info {
@@ -19,57 +19,66 @@ struct InfoTab: View {
                 checkSection(info)
                 structureSection(info)
                 audioSection(info)
-                hostSection()
+                technicalSection()
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         } else {
-            StudioEmptyState(title: "No Scene", symbol: "film")
+            StudioEmptyState(title: "Pick a scene", symbol: StudioStyle.Symbol.film,
+                             message: "Choose a scene on the left to see its details.")
+                .inspectorFill()
         }
     }
 
     // MARK: Sections
 
     private func sceneSection(_ info: SceneInfo) -> some View {
-        Section {
-            LabeledContent("Name") {
-                HStack(spacing: 5) {
-                    Text(info.name).font(StudioStyle.mono).textSelection(.enabled)
-                    StudioBadge(text: info.kind.rawValue, color: StudioStyle.accent)
-                }
+        Section("Scene") {
+            LabeledContent("Name") { Text(info.name).textSelection(.enabled) }
+            LabeledContent("Kind") { Text(Self.kind(info.kind)) }
+            LabeledContent("Length") {
+                Text(StudioTime.spoken(info.duration)).monospacedDigit()
+                    .help("\(Int((info.duration * Double(info.fps)).rounded())) frames")
             }
-            row("Duration", String(format: "%.2f s · %d frames", info.duration, Int((info.duration * Double(info.fps)).rounded())))
-            row("Canvas", "\(info.width)×\(info.height) @ \(info.fps) fps")
+            LabeledContent("Canvas") { Text(verbatim: "\(info.width) × \(info.height) · \(info.fps) fps").monospacedDigit() }
             if let src = info.sourcePath {
                 LabeledContent("Source") {
                     Button { SourceOpener.open(file: src, line: 1) } label: {
-                        HStack(spacing: 3) {
-                            Text(relative(src)).lineLimit(1).truncationMode(.head)
-                            Image(systemName: "arrow.up.forward").imageScale(.small)
+                        HStack(spacing: StudioStyle.Space.xs) {
+                            Text(URL(fileURLWithPath: src).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                            Image(systemName: StudioStyle.Symbol.reveal).imageScale(.small)
                         }
-                        .font(StudioStyle.mono)
                     }
-                    .buttonStyle(.link)
-                    .help(src)
+                    .buttonStyle(.borderless)
+                    .help(relative(src))
+                    .contextMenu {
+                        Button("Open") { SourceOpener.open(file: src, line: 1) }
+                        Button("Show in Finder") { SourceOpener.reveal(URL(fileURLWithPath: src)) }
+                    }
                 }
             }
             let files = clipSourceFiles(info)
             if files.count > 1 {
-                LabeledContent("Also") {
+                LabeledContent("Also In") {
                     VStack(alignment: .trailing, spacing: 2) {
                         ForEach(files.dropFirst(), id: \.self) { f in
-                            Button(relative(f)) { SourceOpener.open(file: f, line: 1) }
-                                .buttonStyle(.link)
-                                .font(StudioStyle.monoSmall)
+                            Button(URL(fileURLWithPath: f).lastPathComponent) { SourceOpener.open(file: f, line: 1) }
+                                .buttonStyle(.borderless)
                                 .lineLimit(1)
-                                .truncationMode(.head)
-                                .help(f)
+                                .help(relative(f))
                         }
                     }
                 }
             }
-        } header: {
-            Text("Scene")
+        }
+    }
+
+    static func kind(_ k: SceneKind) -> String {
+        switch k {
+        case .render: return "Render scene"
+        case .audio: return "Moves to the music"
+        case .props: return "Has editable content"
+        case .propsAudio: return "Editable content, moves to the music"
         }
     }
 
@@ -77,30 +86,26 @@ struct InfoTab: View {
         let insp = model.inspector
         let result = insp.currentCheck
         return Section {
-            HStack(spacing: 8) {
-                Button {
+            HStack(spacing: StudioStyle.Space.s) {
+                Button(insp.checkRunning ? "Checking…" : result == nil ? "Check Film" : "Check Again") {
                     Task { await insp.runCheck() }
-                } label: {
-                    Label(insp.checkRunning ? "Checking…" : result == nil ? "Run Check" : "Run Again",
-                          systemImage: "checkmark.seal")
                 }
                 .disabled(insp.checkRunning || model.host.active == nil)
-                .controlSize(.small)
-                if insp.checkRunning { ProgressView().controlSize(.mini) }
+                if insp.checkRunning { ProgressView().controlSize(.small) }
                 Spacer()
                 if let r = result {
                     let stale = r.generation != model.host.generation
-                    Text(stale ? "gen \(r.generation) · stale" : r.at.formatted(date: .omitted, time: .shortened))
-                        .font(StudioStyle.monoSmall)
-                        .foregroundStyle(stale ? AnyShapeStyle(StudioStyle.warn) : AnyShapeStyle(.tertiary))
-                        .help(stale ? "Rebuilt since this check — run it again" : "Checked at \(r.at.formatted())")
+                    Text(stale ? "Out of date" : r.at.formatted(date: .omitted, time: .shortened))
+                        .font(StudioStyle.Fonts.subheadline)
+                        .foregroundStyle(.secondary)
+                        .help(stale ? "You've rebuilt since this check. Check again." : "Checked at \(r.at.formatted())")
                     Button { SourceOpener.reveal(URL(fileURLWithPath: r.sheetPath)) } label: { Image(systemName: "folder") }
                         .buttonStyle(.borderless)
-                        .help("Reveal the contact sheet in Finder")
+                        .help("Show the contact sheet in Finder")
                 }
             }
             if let e = insp.checkError {
-                Label(e, systemImage: "xmark.octagon").font(.system(size: 11)).foregroundStyle(StudioStyle.bad)
+                Label(e, systemImage: StudioStyle.Symbol.error).font(StudioStyle.Fonts.subheadline).foregroundStyle(StudioStyle.error)
             }
             if let r = result {
                 if let img = r.image {
@@ -115,37 +120,37 @@ struct InfoTab: View {
                     ReportLine(text: line)
                 }
             } else if !insp.checkRunning {
-                Text("Renders 16 frames across the scene into a contact sheet, flags blank frames, and measures the mix. Click a frame to jump there.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                Text("Looks at 16 moments across the film for blank frames and checks the sound. Click a frame to jump there.")
+                    .font(StudioStyle.Fonts.subheadline)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
-            Text("Check")
+            Text("Health Check")
         }
     }
 
     private func structureSection(_ info: SceneInfo) -> some View {
         Section("Structure") {
-            row("Clips", info.clips.isEmpty ? "0 (no Timeline)" : clipSummary(info.clips))
-            row("Captions", "\(info.captions.count)")
-            row("Score", scoreSummary(info.events))
+            row("Clips", info.clips.isEmpty ? "One continuous shot" : clipSummary(info.clips))
+            if !info.captions.isEmpty { row("Captions", "\(info.captions.count)") }
+            row("Music", scoreSummary(info.events))
             row("Knobs", knobSummary(info))
             if let json = model.propsJSON ?? info.propsJSON {
-                row("Props", (try? JSONValue.parse(json)).map { "\($0.children.count) top-level keys" } ?? "invalid JSON")
+                row("Content", (try? JSONValue.parse(json)).map { "\($0.children.count) fields" } ?? "Not valid JSON")
             }
         }
     }
 
     @ViewBuilder private func audioSection(_ info: SceneInfo) -> some View {
-        let audioLine = model.inspector.currentCheck?.report.first { $0.hasPrefix("audio:") }
+        // "audio: none …" is already a Health Check line.
+        let audioLine = model.inspector.currentCheck?.report.first { $0.hasPrefix("audio:") && !$0.contains("none") }
         if info.audioPath != nil || !info.loudness.isEmpty || audioLine != nil {
-            Section("Audio") {
+            Section("Sound") {
                 if let p = info.audioPath {
                     LabeledContent("Track") {
                         Button(URL(fileURLWithPath: p).lastPathComponent) { SourceOpener.reveal(URL(fileURLWithPath: p)) }
-                            .buttonStyle(.link)
-                            .font(StudioStyle.monoSmall)
+                            .buttonStyle(.borderless)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .help(p)
@@ -156,25 +161,27 @@ struct InfoTab: View {
                     LoudnessSparkline(levels: info.loudness, rate: info.loudnessRate, duration: info.duration,
                                       playhead: model.playback.t)
                         .frame(height: 34)
-                        .help("RMS loudness · \(Int(info.loudnessRate)) samples/s")
+                        .help("Loudness over time")
                 }
             }
         }
     }
 
-    private func hostSection() -> some View {
-        Section("Host") {
-            row("Process", model.host.pid.map { "pid \($0)" } ?? "—")
-            row("Generation", "\(model.host.generation)")
-            row("Render", String(format: "%.1f ms/frame (EWMA)", model.playback.stats.msPerFrame))
-            if let v = model.host.hostVersion { row("Version", v) }
+    private func technicalSection() -> some View {
+        Section {
+            DisclosureGroup("Technical", isExpanded: $showTechnical) {
+                row("Process", model.host.pid.map { "pid \($0)" } ?? "Not running")
+                row("Build", "\(model.host.generation)")
+                row("Render Time", String(format: "%.1f ms per frame (average)", model.playback.stats.msPerFrame))
+                if let v = model.host.hostVersion { row("Version", v) }
+            }
         }
     }
 
     // MARK: Helpers
 
     private func row(_ k: String, _ v: String) -> some View {
-        LabeledContent(k) { Text(v).font(StudioStyle.mono).textSelection(.enabled) }
+        LabeledContent(k) { Text(verbatim: v).monospacedDigit().textSelection(.enabled) }
     }
 
     private func relative(_ path: String) -> String {
@@ -191,18 +198,19 @@ struct InfoTab: View {
 
     private func clipSummary(_ clips: [ClipInfo]) -> String {
         let depth = (clips.map(\.depth).max() ?? 0) + 1
-        return depth > 1 ? "\(clips.count) · \(depth) levels" : "\(clips.count)"
+        return depth > 1 ? "\(clips.count), \(depth) levels deep" : "\(clips.count)"
     }
 
     private func knobSummary(_ info: SceneInfo) -> String {
         let live = model.knobValues.count
-        return live == 0 ? "\(info.knobs.count)" : "\(info.knobs.count) · \(live) overridden"
+        return live == 0 ? "\(info.knobs.count)" : "\(info.knobs.count), \(live) changed"
     }
 
     private func scoreSummary(_ e: [ScoreEventInfo]) -> String {
-        guard !e.isEmpty else { return "none" }
+        guard !e.isEmpty else { return "None" }
         let counts = Dictionary(grouping: e, by: \.kind).mapValues(\.count).sorted { $0.value > $1.value }
-        return "\(e.count): " + counts.prefix(3).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
+        return "\(e.count) notes and hits"
+            + (counts.isEmpty ? "" : ", mostly " + counts.prefix(2).map(\.key).joined(separator: " and "))
     }
 
     /// "audio: 93.00s · peak -0.3 dBFS · RMS -21.0 dBFS · clipped samples 0" → "peak -0.3 · RMS -21.0 dBFS".
@@ -235,16 +243,16 @@ struct ContactSheetView: View {
                     let s = geo.size.width / sheet.width
                     ZStack(alignment: .topLeading) {
                         if let c = ContactSheetGeometry.cell(for: playhead, duration: duration) {
-                            outline(c, scale: s, sheet: sheet, color: StudioStyle.playhead, width: 1.5)
+                            outline(c, scale: s, sheet: sheet, color: StudioStyle.onPicture, width: 1.5)
                         }
                         if let h = hovered {
                             outline(h, scale: s, sheet: sheet, color: StudioStyle.accent, width: 2)
                             let r = ContactSheetGeometry.cellRect(h, sheet: sheet)
-                            Text(StudioStyle.timecode(ContactSheetGeometry.time(cell: h, duration: duration)))
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                .padding(.horizontal, 4).padding(.vertical, 1)
-                                .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 3))
-                                .foregroundStyle(StudioStyle.accent)
+                            Text(StudioTime.short(ContactSheetGeometry.time(cell: h, duration: duration)))
+                                .font(StudioStyle.Fonts.footnote.weight(.semibold)).monospacedDigit()
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(StudioStyle.pictureScrim, in: StudioStyle.rounded(StudioStyle.Radius.small))
+                                .foregroundStyle(StudioStyle.onPicture)
                                 .offset(x: r.minX * s + 3, y: r.minY * s + 3)
                         }
                     }
@@ -261,7 +269,7 @@ struct ContactSheetView: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(StudioStyle.rounded(StudioStyle.Radius.small))
             .help("Click a frame to jump there")
     }
 
@@ -274,7 +282,7 @@ struct ContactSheetView: View {
     }
 }
 
-/// One `check` report line; ⚠︎ lines are called out.
+/// One `check` report line as a checklist item; only warnings take a color (orange).
 struct ReportLine: View {
     let text: String
 
@@ -282,19 +290,28 @@ struct ReportLine: View {
         // "⚠︎" is U+26A0 + a variation selector: a different Character than "⚠", so match the scalar.
         let warn = text.unicodeScalars.contains("\u{26A0}")
         let (head, rest) = split(warn ? Self.stripWarning(text) : text)
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: warn ? "exclamationmark.triangle.fill" : "checkmark.circle")
-                .imageScale(.small)
-                .foregroundStyle(warn ? StudioStyle.warn : StudioStyle.ok.opacity(0.8))
-            VStack(alignment: .leading, spacing: 1) {
-                if let head { Text(head).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary) }
-                Text(rest)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(warn ? AnyShapeStyle(StudioStyle.warn) : AnyShapeStyle(.primary))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+            Image(systemName: warn ? "exclamationmark.triangle" : StudioStyle.Symbol.ok)
+                .foregroundStyle(warn ? AnyShapeStyle(StudioStyle.warning) : AnyShapeStyle(.secondary))
+            Text(Self.friendly(head: head, rest: rest))
+                .font(StudioStyle.Fonts.callout)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// "frames: no blank samples" → "Frames: none blank"; backticks render as code.
+    static func friendly(head: String?, rest: String) -> AttributedString {
+        var body = rest
+        if head == "frames", rest == "no blank samples" { body = "none blank" }
+        if head == "audio", rest.hasPrefix("none") {
+            body = "none yet. Add `soundtrack(duration:)` to give it a beat."
+        }
+        let label = head.map { $0.prefix(1).uppercased() + $0.dropFirst() + ": " } ?? ""
+        let md = (try? AttributedString(markdown: body)) ?? AttributedString(body)
+        var out = AttributedString(label)
+        out.font = StudioStyle.Fonts.calloutEmphasis
+        return out + md
     }
 
     static func stripWarning(_ s: String) -> String {
@@ -333,13 +350,12 @@ struct LoudnessSparkline: View {
             }
             area.addLine(to: CGPoint(x: size.width, y: size.height))
             area.closeSubpath()
-            ctx.fill(area, with: .linearGradient(Gradient(colors: [StudioStyle.accent.opacity(0.75), StudioStyle.accent.opacity(0.15)]),
-                                                 startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
+            ctx.fill(area, with: .color(StudioStyle.Lane.audio.opacity(0.45)))
             if duration > 0 {
                 let x = CGFloat(min(1, max(0, playhead / duration))) * size.width
                 ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height)), with: .color(StudioStyle.playhead))
             }
         }
-        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 3))
+        .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.small))
     }
 }

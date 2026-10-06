@@ -14,6 +14,20 @@ import SwiftRenderKit
 //
 // UI-facing layout state lives in `StudioUIState` so views stay dumb.
 
+/// What surrounds the picture in the viewer.
+enum ViewerBackground: String, CaseIterable, Identifiable, Sendable {
+    case automatic, black, gray, white
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .black: return "Black"
+        case .gray: return "Gray"
+        case .white: return "White"
+        }
+    }
+}
+
 enum AspectChoice: String, CaseIterable, Identifiable, Sendable {
     case landscape = "16:9", vertical = "9:16", square = "1:1"
     var id: String { rawValue }
@@ -74,6 +88,8 @@ struct LaunchOptions: Equatable, Sendable {
     var askSheet = false
     /// Snapshot mode: run "New Launch Film…" (scan, open AppleLaunch with the props) first.
     var newLaunchFilm = false
+    /// `--appearance light|dark|system`: overrides View › Appearance for this process.
+    var appearance: StudioAppearance?
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -104,6 +120,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--agent-replay": o.agentReplay = v; i += 2
             case "--ask-sheet": o.askSheet = true; i += 1
             case "--new-launch-film": o.newLaunchFilm = true; i += 1
+            case "--appearance": o.appearance = v.flatMap(StudioAppearance.init(rawValue:)); i += 2
             case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
             case "--render-wait": o.renderWaitDone = v == "done"; i += 2
             case "--show": o.show = v; i += 2
@@ -128,7 +145,14 @@ struct LaunchOptions: Equatable, Sendable {
 final class StudioUIState {
     var showInspector = true
     var showSidebar = true
-    var showAgentPanel = true
+    /// Hidden while idle; slides up when a run starts (unless closed during that run).
+    var showAgentPanel = false
+    /// The person closed the panel during the current run: leave it closed.
+    var agentPanelClosed = false
+    /// View › Show Playback Statistics: a small overlay in the viewer corner.
+    var showStats = UserDefaults.standard.bool(forKey: "viewer.showStats")
+    /// View › Background: what surrounds the picture.
+    var viewerBackground = ViewerBackground(rawValue: UserDefaults.standard.string(forKey: "viewer.background") ?? "") ?? .automatic
     var inspectorTab: InspectorTab = .comments
     var guides: GuideMode = .off
     var zoom: ViewerZoom = .fit
@@ -277,6 +301,10 @@ final class ProjectModel {
         // While an agent edits, its half-done states don't shout, and a multi-file edit is one build.
         agent.onRunningChanged = { [weak self] running in
             guard let self else { return }
+            if running {
+                self.ui.agentPanelClosed = false
+                self.ui.showAgentPanel = true
+            }
             self.build.agentEditing = running
             self.watcher?.debounce = .milliseconds(running ? 600 : 150)
         }
@@ -376,7 +404,7 @@ final class ProjectModel {
                 ui.viewport.fit(info.duration)
             }
         } catch {
-            ui.toast = "Couldn't open \(scene): \(HostSupervisor.describe(error))"
+            ui.toast = "Couldn't open \(scene). \(HostSupervisor.describe(error))"
         }
     }
 
@@ -440,11 +468,11 @@ final class ProjectModel {
     /// an already-edited `.swift-render/launch/<Name>.json`), then AppleLaunch opens with those props.
     func newLaunchFilm() async {
         guard !isFake, let exe = build.lastGoodExecutable else {
-            ui.toast = "New launch film needs a successful build of the project CLI"
+            ui.toast = "A launch film needs one good build first"
             return
         }
         guard scenes.contains(where: { $0.name == "AppleLaunch" }) else {
-            ui.toast = "This project's CLI has no AppleLaunch scene (swift-render 0.9+ registers it built in)"
+            ui.toast = "This project has no AppleLaunch scene yet (it comes with swift-render 0.9 and later)"
             return
         }
         let target = Self.launchTarget(project: project, scenes: scenes)
@@ -453,7 +481,7 @@ final class ProjectModel {
             // An `init` scaffold: the app was scanned into this file (asset paths under assets/).
             result = .success(json)
         } else {
-            ui.toast = "Scanning \(target.root.lastPathComponent) for a launch film…"
+            ui.toast = "Reading \(target.root.lastPathComponent) for your launch film…"
             let root = target.root, cwd = project.root
             let out = project.cacheDir.appendingPathComponent("launch-props.json")
             result = await Task.detached { () -> Result<String, Error> in
@@ -472,12 +500,12 @@ final class ProjectModel {
             await select(scene: "AppleLaunch")
             do {
                 try await setProps(json)
-                ui.toast = "Launch film props: .swift-render/launch/ — edit them in the Props tab"
+                ui.toast = "Your launch film is ready. Edit its words in the Content tab."
             } catch {
-                ui.toast = "Couldn't apply launch props: \(HostSupervisor.describe(error))"
+                ui.toast = "Couldn't apply the launch film's content. \(HostSupervisor.describe(error))"
             }
         case .failure(let error):
-            ui.toast = "Launch scan failed: \(error)"
+            ui.toast = "Couldn't read the project for a launch film. \(error)"
         }
     }
 
@@ -543,7 +571,10 @@ final class ProjectModel {
             ui.showInspector = true
         case .armRegion: ui.regionArmed.toggle()
         case .selectComment(let next):
-            if let t = review.selectAdjacent(next: next, from: p.t) { p.seek(t, precise: true) }
+            if let t = review.selectAdjacent(next: next, from: p.t) {
+                p.seek(t, precise: true)
+                if review.threadOpen, let id = review.selection { review.open(id) }
+            }
         case .toggleCompare: ui.compare = ui.compare == nil ? .split : nil
         case .cycleCompare: ui.compare = (ui.compare ?? .split).next
         case .cycleGuides: ui.guides = ui.guides.next
@@ -567,7 +598,12 @@ final class ProjectModel {
         case .inspectorTab(let t): ui.inspectorTab = t; ui.showInspector = true
         case .toggleInspector: ui.showInspector.toggle()
         case .toggleSidebar: ui.showSidebar.toggle()
-        case .toggleAgentPanel: ui.showAgentPanel.toggle()
+        case .toggleAgentPanel:
+            ui.showAgentPanel.toggle()
+            if !ui.showAgentPanel, agent.isRunning { ui.agentPanelClosed = true }
+        case .toggleStats:
+            ui.showStats.toggle()
+            UserDefaults.standard.set(ui.showStats, forKey: "viewer.showStats")
         case .cancel:
             if ui.regionArmed { ui.regionArmed = false }
             else if review.draft != nil { review.draft = nil }
@@ -583,18 +619,7 @@ final class ProjectModel {
         } else if let path = info?.sourcePath {
             SourceOpener.open(file: path, line: 1)
         } else {
-            ui.toast = "No source location for this scene"
-        }
-    }
-
-    /// Display name of the build/host state for the toolbar pill.
-    var buildSummary: String {
-        switch build.phase {
-        case .idle: return host.active == nil ? "Starting" : "Ready"
-        case .waitingForLock: return "Waiting for another swift build"
-        case .building(let line): return line
-        case .succeeded(let s, _): return String(format: "Built %.1fs", s)
-        case .failed(let errs, _): return "\(errs.count) error\(errs.count == 1 ? "" : "s")"
+            ui.toast = "This scene has no source file to open"
         }
     }
 }

@@ -10,10 +10,10 @@ enum GuideMode: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .off: return "No guides"
-        case .safe: return "Safe areas"
+        case .off: return "No Guides"
+        case .safe: return "Safe Areas"
         case .thirds: return "Thirds"
-        case .social: return "Social zones"
+        case .social: return "Social Zones"
         }
     }
     var next: GuideMode {
@@ -26,6 +26,7 @@ struct SafeAreaOverlay: View {
     var mode: GuideMode
     /// Canvas rect in this view's coordinates.
     var canvas: CGRect
+    private let ink = StudioStyle.onPicture
 
     var body: some View {
         Canvas { ctx, _ in
@@ -35,10 +36,10 @@ struct SafeAreaOverlay: View {
             case .off:
                 break
             case .safe:
-                for (pct, label, style) in [(0.93, "ACTION SAFE 93%", dash), (0.90, "TITLE SAFE 90%", StrokeStyle(lineWidth: 1))] {
+                for (pct, label, style) in [(0.93, "Action Safe 93%", dash), (0.90, "Title Safe 90%", StrokeStyle(lineWidth: 1))] {
                     let r = c.insetBy(dx: c.width * (1 - pct) / 2, dy: c.height * (1 - pct) / 2)
-                    ctx.stroke(Path(r), with: .color(.white.opacity(0.45)), style: style)
-                    ctx.draw(Text(label).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white.opacity(0.55)),
+                    ctx.stroke(Path(r), with: .color(ink.opacity(0.45)), style: style)
+                    ctx.draw(Text(label).font(StudioStyle.Fonts.overlay).foregroundStyle(ink.opacity(0.6)),
                              at: CGPoint(x: r.minX + 4, y: r.minY + 4), anchor: .topLeading)
                 }
                 cross(&ctx, at: CGPoint(x: c.midX, y: c.midY))
@@ -49,16 +50,16 @@ struct SafeAreaOverlay: View {
                     p.move(to: CGPoint(x: x, y: c.minY)); p.addLine(to: CGPoint(x: x, y: c.maxY))
                     p.move(to: CGPoint(x: c.minX, y: y)); p.addLine(to: CGPoint(x: c.maxX, y: y))
                 }
-                ctx.stroke(p, with: .color(.white.opacity(0.4)), lineWidth: 1)
+                ctx.stroke(p, with: .color(ink.opacity(0.4)), lineWidth: 1)
                 cross(&ctx, at: CGPoint(x: c.midX, y: c.midY))
             case .social:
                 let top = CGRect(x: c.minX, y: c.minY, width: c.width, height: c.height * 0.14)
                 let bottom = CGRect(x: c.minX, y: c.maxY - c.height * 0.20, width: c.width, height: c.height * 0.20)
-                ctx.fill(Path(top), with: .color(.black.opacity(0.45)))
-                ctx.fill(Path(bottom), with: .color(.black.opacity(0.45)))
-                ctx.draw(Text("PLATFORM UI").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6)),
+                ctx.fill(Path(top), with: .color(StudioStyle.pictureScrim))
+                ctx.fill(Path(bottom), with: .color(StudioStyle.pictureScrim))
+                ctx.draw(Text("App Controls").font(StudioStyle.Fonts.overlay).foregroundStyle(ink.opacity(0.7)),
                          at: CGPoint(x: top.midX, y: top.midY))
-                ctx.draw(Text("CAPTIONS · ACTIONS").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6)),
+                ctx.draw(Text("Captions and Buttons").font(StudioStyle.Fonts.overlay).foregroundStyle(ink.opacity(0.7)),
                          at: CGPoint(x: bottom.midX, y: bottom.midY))
             }
         }
@@ -69,6 +70,6 @@ struct SafeAreaOverlay: View {
         var path = Path()
         path.move(to: CGPoint(x: p.x - 8, y: p.y)); path.addLine(to: CGPoint(x: p.x + 8, y: p.y))
         path.move(to: CGPoint(x: p.x, y: p.y - 8)); path.addLine(to: CGPoint(x: p.x, y: p.y + 8))
-        ctx.stroke(path, with: .color(.white.opacity(0.6)), lineWidth: 1)
+        ctx.stroke(path, with: .color(ink.opacity(0.6)), lineWidth: 1)
     }
 }

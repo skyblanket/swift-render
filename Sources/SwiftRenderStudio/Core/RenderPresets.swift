@@ -13,6 +13,8 @@ enum RenderPreset: String, CaseIterable, Identifiable, Sendable {
 
     enum Group: String, CaseIterable, Sendable {
         case master = "Master", social = "Social", appStore = "App Store", draft = "Draft"
+        /// Column header on the Export sheet.
+        var title: String { self == .master ? "Best Quality" : rawValue }
     }
 
     var group: Group {

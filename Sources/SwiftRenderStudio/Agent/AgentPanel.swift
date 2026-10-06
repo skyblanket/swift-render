@@ -2,49 +2,51 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Agent panel
+// MARK: - Claude panel
 //
-// Header: run state with live elapsed time (cost and duration once finished), comment
-// chips that open their threads, Revert run, Stop. Body: the transcript — the agent's
-// text, one row per tool call (icon, name, one-line summary, file chips with +/− since
-// the checkpoint, result mark), notices and the final line — and, when the run wrote
-// files, a column listing them with their diff stats.
+// Hidden while idle; slides up when a run starts. Header: Claude's avatar and state
+// ("Working… 0:42", "Done in 1:04 · $0.38"), the comments it's on (#1 #2), Undo Claude's
+// Changes and Stop, and one … menu. Body: the run as plain steps ("Rebuilt the film ·
+// 1.3 s", "Checked 3 frames around 0:07"), Claude's own words, and the files it changed
+// with their +/− counts. Show Raw switches to the exact tool calls in monospace.
 
 struct AgentPanel: View {
     @Bindable var model: ProjectModel
     @State private var confirmRevert = false
-    /// Touched files edited again since the run (computed when Revert Run is clicked).
+    @State private var showRaw = false
+    /// Touched files edited again since the run (computed when Undo is clicked).
     @State private var changedSinceRun: [String] = []
 
     var body: some View {
         let agent = model.agent
+        let numbers = model.review.comments.isEmpty ? [:] : ReviewController.numbering(model.review.comments)
         VStack(spacing: 0) {
-            header(agent)
+            header(agent, numbers: numbers)
             Divider()
             if agent.transcript.isEmpty {
                 empty
             } else {
                 HStack(spacing: 0) {
-                    transcript(agent)
+                    transcript(agent, numbers: numbers)
                     if let run = agent.currentRun, !run.touched.isEmpty {
                         Divider()
                         FilesColumn(run: run, root: model.project.root)
-                            .frame(width: 230)
+                            .frame(width: 240)
                     }
                 }
             }
         }
-        .background(StudioStyle.laneBackground)
+        .background(StudioStyle.chrome)
         .confirmationDialog(revertTitle, isPresented: $confirmRevert) {
             if changedSinceRun.isEmpty {
-                Button("Revert Files", role: .destructive) {
+                Button("Undo Changes", role: .destructive) {
                     if let id = agent.currentRun?.id { Task { await agent.revert(id) } }
                 }
             } else {
-                Button("Revert, Keep Later Edits", role: .destructive) {
+                Button("Undo Claude's, Keep Mine", role: .destructive) {
                     if let id = agent.currentRun?.id { Task { await agent.revert(id) } }
                 }
-                Button("Revert All, Discard Later Edits", role: .destructive) {
+                Button("Undo Everything", role: .destructive) {
                     if let id = agent.currentRun?.id { Task { await agent.revert(id, includeChanged: true) } }
                 }
             }
@@ -55,117 +57,111 @@ struct AgentPanel: View {
 
     // MARK: Header
 
-    private func header(_ agent: AgentController) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles").foregroundStyle(.purple)
-            Text("Agent").font(.system(size: 11, weight: .semibold))
+    private func header(_ agent: AgentController, numbers: [String: Int]) -> some View {
+        HStack(spacing: StudioStyle.Space.s) {
+            AuthorAvatar(author: AgentController.agentAuthor, size: 22)
+            Text("Claude").font(StudioStyle.Fonts.bodyEmphasis)
             if let run = agent.currentRun {
-                RunStateBadge(run: run, running: agent.isRunning, stopping: agent.isStopping)
-                Text(run.mode.title).foregroundStyle(.tertiary)
-                if run.fixBuild { StudioBadge(text: "build", color: StudioStyle.bad) }
-                ForEach(run.commentIDs, id: \.self) { id in commentChip(id) }
+                RunState(run: run, running: agent.isRunning, stopping: agent.isStopping)
+                ForEach(run.commentIDs, id: \.self) { id in commentChip(id, number: numbers[id]) }
+                if run.fixBuild { Text("Build errors").font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary) }
             } else {
-                Text("idle").foregroundStyle(.secondary)
+                Text("· Ready").foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            if let run = agent.currentRun, run.canRevert {
-                Button {
-                    Task {
-                        changedSinceRun = await agent.changedSinceRun(run.id)
-                        confirmRevert = true
+            Spacer(minLength: StudioStyle.Space.s)
+            if let run = agent.currentRun, run.canRevert || agent.isRunning {
+                ControlGroup {
+                    if run.canRevert {
+                        Button("Undo Claude's Changes") {
+                            Task {
+                                changedSinceRun = await agent.changedSinceRun(run.id)
+                                confirmRevert = true
+                            }
+                        }
+                        .help("Put the \(run.touched.count) file\(run.touched.count == 1 ? "" : "s") Claude changed back the way they were")
                     }
-                } label: { Label("Revert Run", systemImage: "arrow.uturn.backward") }
-                    .help("Restore the \(run.touched.count) file\(run.touched.count == 1 ? "" : "s") this run wrote to checkpoint \(run.checkpoint?.sha.prefix(8) ?? "")")
-            }
-            if agent.isRunning {
-                Button { model.perform(.stop) } label: { Label("Stop", systemImage: "stop.fill") }
-                    .disabled(agent.isStopping)
-                    .help("Stop the agent (⌘.)")
-            } else {
-                Button { model.perform(.askAgent) } label: { Label("Ask…", systemImage: "sparkles") }
-                    .help("Ask Claude (⌘⇧A)")
-                if !agent.transcript.isEmpty {
-                    Button { agent.clearTranscript() } label: { Image(systemName: "clear") }
-                        .buttonStyle(.borderless)
-                        .help("Clear transcript")
+                    if agent.isRunning {
+                        Button("Stop") { model.perform(.stop) }
+                            .disabled(agent.isStopping)
+                            .help("Stop Claude (⌘.)")
+                    }
                 }
+                .fixedSize()
             }
-            if let run = agent.currentRun {
-                Menu {
-                    if let p = run.prompt {
-                        Button("Copy Prompt") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(p, forType: .string)
-                        }
-                    }
-                    if let log = run.logURL, FileManager.default.fileExists(atPath: log.path) {
-                        Button("Show Raw Stream in Finder") { SourceOpener.reveal(log) }
-                    }
-                    if let sid = run.sessionID {
-                        Button("Copy Session ID") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(sid, forType: .string)
-                        }
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Prompt, raw stream, session")
+            if !agent.isRunning {
+                Button("Ask Claude…") { model.perform(.askAgent) }
+                    .help("⌘⇧A")
             }
-            Button { model.ui.showAgentPanel = false } label: { Image(systemName: "chevron.down") }
+            Menu {
+                if let p = agent.currentRun?.prompt {
+                    Button("Copy Prompt") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(p, forType: .string)
+                    }
+                }
+                Toggle("Show Raw Stream", isOn: $showRaw)
+                if let log = agent.currentRun?.logURL, FileManager.default.fileExists(atPath: log.path) {
+                    Button("Show Raw Stream in Finder") { SourceOpener.reveal(log) }
+                }
+                if let sid = agent.currentRun?.sessionID {
+                    Button("Copy Session ID") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(sid, forType: .string)
+                    }
+                }
+                Divider()
+                Button("Clear Transcript") { agent.clearTranscript() }
+                    .disabled(agent.isRunning || agent.transcript.isEmpty)
+            } label: { Image(systemName: StudioStyle.Symbol.more) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("More")
+            Button {
+                model.ui.showAgentPanel = false
+                if agent.isRunning { model.ui.agentPanelClosed = true }
+            } label: { Image(systemName: StudioStyle.Symbol.close) }
                 .buttonStyle(.borderless)
-                .help("Hide agent panel (⌘⌥J)")
+                .help("Hide the Claude panel (⌘⌥J)")
         }
         .controlSize(.small)
-        .font(.system(size: 11))
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(.bar)
+        .font(StudioStyle.Fonts.callout)
+        .padding(.horizontal, StudioStyle.Space.m)
+        .frame(height: 36)
     }
 
-    private func commentChip(_ id: String) -> some View {
+    private func commentChip(_ id: String, number: Int?) -> some View {
         let c = model.review.comments.first { $0.id == id }
         return Button {
-            model.review.selection = id
+            model.review.open(id)
             model.ui.inspectorTab = .comments
             model.ui.showInspector = true
             if let c { model.playback.seek(c.t, precise: true) }
         } label: {
-            HStack(spacing: 3) {
-                Circle().fill(c.map { StudioStyle.color($0.status) } ?? .gray).frame(width: 6, height: 6)
-                Text(String(id.prefix(5))).font(StudioStyle.monoSmall)
-            }
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.primary.opacity(0.07), in: Capsule())
+            CommentDisc(number: number, state: c.map(CommentState.init) ?? .open, size: 18)
         }
         .buttonStyle(.plain)
-        .help(c.map { "\($0.timecode) · \($0.status.rawValue) — \($0.body)" } ?? id)
+        .help(c.map { "#\(number ?? 0) · \(StudioTime.short($0.t)) · \(CommentState($0).title): \($0.body)" } ?? "A comment in another scene")
     }
 
     // MARK: Body
 
     private var empty: some View {
-        HStack(spacing: 6) {
-            Text("No agent run yet.").foregroundStyle(.secondary)
-            Text("Select comments and press ⌘⇧A to ask Claude to fix them.").foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .font(.system(size: 11))
-        .padding(.horizontal, 12)
-        .frame(maxHeight: .infinity)
+        StudioEmptyState(title: "Claude's ready when you are", symbol: StudioStyle.Symbol.comments,
+                         message: "Pick a comment and press ⌘⇧A.")
     }
 
-    private func transcript(_ agent: AgentController) -> some View {
+    private func transcript(_ agent: AgentController, numbers: [String: Int]) -> some View {
         let run = agent.currentRun
+        let rows = showRaw ? agent.transcript : agent.transcript.filter { TranscriptText.isShown($0) }
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(agent.transcript) { row in
-                        TranscriptRow(row: row, run: run, root: model.project.root,
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(rows) { row in
+                        TranscriptRow(row: row, run: run, root: model.project.root, numbers: numbers, raw: showRaw,
                                       pending: agent.isRunning && row.kind == .tool && row.ok == nil)
                             .id(row.id)
                     }
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, StudioStyle.Space.s)
             }
             .defaultScrollAnchor(.bottom)
             .onChange(of: agent.transcript.count) {
@@ -179,144 +175,247 @@ struct AgentPanel: View {
 
     private var revertTitle: String {
         let n = model.agent.currentRun?.touched.count ?? 0
-        return "Revert \(n) file\(n == 1 ? "" : "s") written by this run?"
+        return "Undo the changes Claude made to \(n) file\(n == 1 ? "" : "s")?"
     }
 
     private var revertMessage: String {
-        guard let run = model.agent.currentRun, let cp = run.checkpoint else { return "" }
+        guard let run = model.agent.currentRun, run.checkpoint != nil else { return "" }
         let names = run.touched.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
-        var text = "\(names) go back to checkpoint \(cp.sha.prefix(8)) (taken before the run). Files the agent created move to the Trash. Their current content is saved to \(Checkpoint.backupPrefix)\(run.id) first. Comment threads are not changed."
+        var text = "\(names) go back to how they were before Claude started. New files Claude made move to the Trash. Studio keeps a copy of the current versions first, and your comments stay as they are."
         if !changedSinceRun.isEmpty {
             let changed = changedSinceRun.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
-            text += "\n\nEdited again since the run: \(changed). Keep those edits (skip these files), or discard them too."
+            text += "\n\nYou've edited \(changed) since then. Keep your edits, or undo everything."
         }
         return text
     }
 }
 
+// MARK: - Plain-language steps
+
+/// Turns transcript rows into short sentences, and comment IDs into "#1".
+enum TranscriptText {
+    /// Rows the friendly view shows (session and checkpoint bookkeeping stays in Show Raw).
+    static func isShown(_ row: AgentTranscriptRow) -> Bool {
+        guard row.kind == .status else { return true }
+        return !(row.title.hasPrefix("Session ") || row.title.hasPrefix("Checkpoint "))
+    }
+
+    /// Every known comment ID becomes "#n".
+    static func numbered(_ s: String, _ numbers: [String: Int]) -> String {
+        var out = s
+        for (id, n) in numbers.sorted(by: { $0.key.count > $1.key.count }) where out.contains(id) {
+            out = out.replacingOccurrences(of: id, with: "#\(n)")
+        }
+        return out
+    }
+
+    /// "#1, #2 and #3".
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items.last!
+    }
+
+    /// The headline for a tool call.
+    static func step(_ row: AgentTranscriptRow, numbers: [String: Int]) -> String {
+        let file = row.files.first.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let refs = numbers.filter { row.detail.contains($0.key) }.values.sorted().map { "#\($0)" }
+        let which = refs.isEmpty ? "a comment" : list(refs)
+        switch row.title {
+        case "Read": return "Read \(file ?? "a file")"
+        case "Edit", "MultiEdit": return "Edited \(file ?? "a file")"
+        case "Write": return "Wrote \(file ?? "a file")"
+        case "Bash":
+            if row.detail.contains("swift build") { return "Rebuilt the film" + seconds(row.detail) }
+            return "Ran a command"
+        case "build": return "Rebuilt the film" + seconds(row.detail)
+        case "Glob", "Grep": return "Searched the code"
+        case "render_frames":
+            let times = frameTimes(row.detail)
+            guard !times.isEmpty else { return "Checked some frames" }
+            let mid = times.reduce(0, +) / Double(times.count)
+            return "Checked \(times.count) frame\(times.count == 1 ? "" : "s") around \(StudioTime.short(mid.rounded()))"
+        case "contact_sheet": return "Made a contact sheet"
+        case "check_scene": return "Ran a health check"
+        case "list_comments": return "Looked over the comments"
+        case "list_scenes": return "Looked at the scenes"
+        case "get_comment": return "Read \(which)"
+        case "claim_comment": return "Picked up \(which)"
+        case "reply_comment": return "Replied on \(which)"
+        case "resolve_comment": return "Marked \(which) ready for review"
+        case "scene_info": return "Looked at the scene"
+        case "set_knobs": return "Adjusted knobs"
+        case "render_video": return "Exported a video"
+        case "TodoWrite": return "Made a plan"
+        case "Result": return "Got a result"
+        case "Error": return "Something went wrong"
+        default: return row.title
+        }
+    }
+
+    /// Status and notice lines, in plain words.
+    static func line(_ text: String, numbers: [String: Int]) -> String {
+        if text.hasPrefix("Back to open: ") {
+            let ids = text.dropFirst("Back to open: ".count).split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let refs = ids.map { numbers[$0].map { "#\($0)" } ?? $0 }
+            return "\(list(refs)) \(refs.count == 1 ? "is" : "are") back on your list"
+        }
+        return numbered(text, numbers)
+    }
+
+    /// "c1 resolved: stagger halved" → "#1 is ready for review: stagger halved".
+    static func result(_ text: String, numbers: [String: Int]) -> String {
+        var s = numbered(text, numbers)
+        if let r = s.range(of: #"(#\d+) resolved:"#, options: .regularExpression) {
+            let ref = s[r].split(separator: " ").first.map(String.init) ?? ""
+            s.replaceSubrange(r, with: "\(ref) is ready for review:")
+        }
+        return s
+    }
+
+    /// " · 1.3 s" from "… → Build complete! (1.3s)".
+    private static func seconds(_ detail: String) -> String {
+        guard let r = detail.range(of: #"\((\d+(\.\d+)?)s\)"#, options: .regularExpression) else { return "" }
+        let n = detail[r].dropFirst().dropLast(2)
+        return " · \(n) s"
+    }
+
+    /// "AppleLaunch @ 6.2s, 6.8s, 7.4s" → [6.2, 6.8, 7.4].
+    private static func frameTimes(_ detail: String) -> [Double] {
+        guard let at = detail.range(of: "@") else { return [] }
+        let head = detail[at.upperBound...].components(separatedBy: "→").first ?? ""
+        return head.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "s", with: "")) }
+    }
+}
+
 // MARK: - Rows
 
-private struct RunStateBadge: View {
+private struct RunState: View {
     var run: AgentRun
     var running: Bool
     var stopping: Bool
 
     var body: some View {
-        if running {
-            SwiftUI.TimelineView(.periodic(from: run.startedAt, by: 1)) { ctx in
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 10, height: 10)
-                    Text(stopping ? "Stopping" : "Running").foregroundStyle(.purple)
-                    Text(AgentController.duration(ctx.date.timeIntervalSince(run.startedAt)))
-                        .monospacedDigit().foregroundStyle(.secondary)
+        Group {
+            if running {
+                SwiftUI.TimelineView(.periodic(from: run.startedAt, by: 1)) { ctx in
+                    HStack(spacing: StudioStyle.Space.xs) {
+                        ProgressView().controlSize(.mini)
+                        Text("\(stopping ? "Stopping…" : "Working…") \(AgentController.duration(ctx.date.timeIntervalSince(run.startedAt)))")
+                            .monospacedDigit()
+                    }
                 }
-            }
-        } else {
-            HStack(spacing: 4) {
-                Image(systemName: icon).foregroundStyle(color)
-                Text(title).foregroundStyle(color)
-                if let s = run.seconds { Text(AgentController.duration(s)).monospacedDigit().foregroundStyle(.secondary) }
-                if let c = run.costUSD { Text(String(format: "$%.2f", c)).monospacedDigit().foregroundStyle(.secondary) }
-                if run.reverted { StudioBadge(text: "reverted", color: StudioStyle.warn) }
+            } else {
+                Text("· " + summary).monospacedDigit()
             }
         }
+        .foregroundStyle(.secondary)
+        .help("Mode: \(run.mode.title)")
     }
 
-    private var title: String { run.stopped ? "Stopped" : run.ok == true ? "Done" : "Failed" }
-    private var icon: String { run.stopped ? "stop.circle.fill" : run.ok == true ? "checkmark.circle.fill" : "xmark.octagon.fill" }
-    private var color: Color { run.stopped ? .secondary : run.ok == true ? StudioStyle.ok : StudioStyle.bad }
+    private var summary: String {
+        if run.reverted { return "Changes undone" }
+        if run.stopped { return "Stopped" }
+        guard run.ok == true else { return "Didn't finish" }
+        var s = "Done"
+        if let secs = run.seconds { s += " in " + AgentController.duration(secs) }
+        if let c = run.costUSD { s += String(format: " · $%.2f", c) }
+        return s
+    }
 }
 
 private struct TranscriptRow: View {
     var row: AgentTranscriptRow
     var run: AgentRun?
     var root: URL
+    var numbers: [String: Int]
+    var raw: Bool
     var pending: Bool
 
     var body: some View {
+        if raw { rawRow } else { friendlyRow }
+    }
+
+    @ViewBuilder private var friendlyRow: some View {
         switch row.kind {
         case .text:
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "text.bubble").foregroundStyle(.purple.opacity(0.8)).frame(width: 16)
-                Text(row.title)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.primary.opacity(0.92))
-                    .lineLimit(6)
+            HStack(alignment: .top, spacing: StudioStyle.Space.s) {
+                AuthorAvatar(author: AgentController.agentAuthor, size: 18)
+                Text(TranscriptText.numbered(row.title, numbers))
+                    .font(StudioStyle.Fonts.callout)
+                    .lineLimit(8)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12).padding(.vertical, 4)
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.xs)
         case .tool, .result:
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: Self.symbol(row.title)).foregroundStyle(row.writes ? StudioStyle.accent : .secondary)
-                    .frame(width: 16)
-                Text(row.title)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(row.writes ? StudioStyle.accent : .primary)
-                    .fixedSize()
-                ForEach(row.files, id: \.self) { f in FileChip(path: f, stat: run?.stat(for: f), root: root) }
-                Text(detail)
-                    .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 6)
+            HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                Image(systemName: Self.symbol(row.title)).foregroundStyle(.secondary).frame(width: 18)
+                Text(TranscriptText.step(row, numbers: numbers))
+                    .font(StudioStyle.Fonts.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if row.writes, let f = row.files.first, let stat = run?.stat(for: f) { DiffStat(stat: stat) }
+                Spacer(minLength: StudioStyle.Space.s)
                 mark
             }
-            .padding(.horizontal, 12).padding(.vertical, 2.5)
+            .help(([row.title, row.detail].filter { !$0.isEmpty }).joined(separator: " "))
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 2)
         case .status:
-            HStack(spacing: 8) {
-                Rectangle().fill(StudioStyle.hairline).frame(width: 14, height: 1)
-                Text(row.title).font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary).lineLimit(1)
-                Rectangle().fill(StudioStyle.hairline).frame(height: 1)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 4)
+            Text(TranscriptText.line(row.title, numbers: numbers))
+                .font(StudioStyle.Fonts.footnote).foregroundStyle(.tertiary).lineLimit(1)
+                .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.xs)
+                .padding(.leading, 26)
         case .notice:
-            Label(row.title, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 11)).foregroundStyle(StudioStyle.warn)
-                .padding(.horizontal, 12).padding(.vertical, 2.5)
-        case .error:
-            Label(row.title, systemImage: "xmark.octagon.fill")
-                .font(.system(size: 11)).foregroundStyle(StudioStyle.bad)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12).padding(.vertical, 2.5)
-        case .finished:
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Image(systemName: row.ok == true ? "checkmark.seal.fill" : "xmark.seal.fill")
-                    Text(row.title).font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(row.ok == true ? StudioStyle.ok : StudioStyle.bad)
-                if !row.detail.isEmpty {
-                    Text(row.detail).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .lineLimit(8).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                }
+            HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                Image(systemName: "info.circle").foregroundStyle(.secondary).frame(width: 18)
+                Text(TranscriptText.line(row.title, numbers: numbers))
+                    .font(StudioStyle.Fonts.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background((row.ok == true ? StudioStyle.ok : StudioStyle.bad).opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
-            .padding(.horizontal, 10).padding(.vertical, 4)
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 2)
+        case .error:
+            HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                Image(systemName: StudioStyle.Symbol.error).foregroundStyle(StudioStyle.error).frame(width: 18)
+                Text(TranscriptText.numbered(row.title, numbers)).font(StudioStyle.Fonts.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 2)
+        case .finished:
+            HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                Image(systemName: row.ok == true ? "checkmark.circle" : StudioStyle.Symbol.error)
+                    .foregroundStyle(row.ok == true ? AnyShapeStyle(.secondary) : AnyShapeStyle(StudioStyle.error))
+                    .frame(width: 18)
+                Text(row.detail.isEmpty ? (row.ok == true ? "Done." : "Claude didn't finish.")
+                                        : TranscriptText.result(row.detail, numbers: numbers))
+                    .font(StudioStyle.Fonts.calloutEmphasis)
+                    .lineLimit(6).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.s)
         }
     }
 
-    private var detail: String {
-        // The file is already a chip; keep only what follows it.
-        guard !row.files.isEmpty else { return row.detail }
-        let rel = row.files.first.map { relative($0) } ?? ""
-        return row.detail.hasPrefix(rel) ? String(row.detail.dropFirst(rel.count)).trimmingCharacters(in: .whitespaces) : row.detail
-    }
-
-    private func relative(_ p: String) -> String {
-        let r = root.path + "/"
-        return p.hasPrefix(r) ? String(p.dropFirst(r.count)) : p
+    /// Show Raw: the exact tool calls and lines, monospace.
+    private var rawRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+            Text(row.kind.rawValue).foregroundStyle(.tertiary).frame(width: 56, alignment: .leading)
+            Text(row.title).fontWeight(.semibold).fixedSize()
+            Text(row.detail).foregroundStyle(.secondary).lineLimit(2).truncationMode(.tail)
+            Spacer(minLength: StudioStyle.Space.s)
+            mark
+        }
+        .font(StudioStyle.Fonts.codeSmall)
+        .textSelection(.enabled)
+        .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 1)
     }
 
     @ViewBuilder private var mark: some View {
         if pending {
-            ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
+            ProgressView().controlSize(.mini)
         } else if let ok = row.ok {
-            Image(systemName: ok ? "checkmark" : "xmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(ok ? StudioStyle.ok : StudioStyle.bad)
+            Image(systemName: ok ? "checkmark" : StudioStyle.Symbol.close)
+                .font(StudioStyle.Fonts.footnote)
+                .foregroundStyle(ok ? AnyShapeStyle(.tertiary) : AnyShapeStyle(StudioStyle.error))
         }
     }
 
@@ -325,44 +424,20 @@ private struct TranscriptRow: View {
         case "Read": return "doc.text"
         case "Edit", "MultiEdit": return "pencil"
         case "Write": return "doc.badge.plus"
-        case "Bash": return "terminal"
+        case "Bash", "build": return "hammer"
         case "Glob", "Grep": return "magnifyingglass"
-        case "build": return "hammer"
         case "render_frames", "contact_sheet": return "photo"
-        case "check_scene": return "stethoscope"
+        case "check_scene": return "checklist"
         case "list_comments", "list_scenes": return "list.bullet"
-        case "get_comment": return "text.bubble"
+        case "get_comment", "reply_comment": return "text.bubble"
         case "claim_comment": return "hand.raised"
-        case "reply_comment": return "arrowshape.turn.up.left"
         case "resolve_comment": return "checkmark.circle"
         case "scene_info": return "info.circle"
         case "set_knobs": return "slider.horizontal.3"
         case "render_video": return "film"
-        case "Result": return "arrow.turn.down.right"
-        case "Error": return "xmark.circle"
-        default: return "wrench.and.screwdriver"
+        case "Error": return "exclamationmark.circle"
+        default: return "circle"
         }
-    }
-}
-
-private struct FileChip: View {
-    var path: String
-    var stat: Checkpoint.FileStat?
-    var root: URL
-
-    var body: some View {
-        Button { SourceOpener.open(file: path, line: 1) } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "swift").font(.system(size: 9)).foregroundStyle(.orange)
-                Text(URL(fileURLWithPath: path).lastPathComponent).font(.system(size: 10.5, weight: .medium))
-                if let stat { DiffStat(stat: stat) }
-            }
-            .padding(.horizontal, 6).padding(.vertical, 1.5)
-            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-        }
-        .buttonStyle(.plain)
-        .help("Open \(path) in \(SourceOpener.preferred.title)")
-        .fixedSize()
     }
 }
 
@@ -370,57 +445,56 @@ private struct DiffStat: View {
     var stat: Checkpoint.FileStat
     var body: some View {
         HStack(spacing: 3) {
-            if stat.created { Text("new").foregroundStyle(StudioStyle.accent) }
-            Text("+\(stat.added)").foregroundStyle(StudioStyle.ok)
-            if !stat.created { Text("−\(stat.removed)").foregroundStyle(StudioStyle.bad) }
+            if stat.created { Text("New") }
+            Text("+\(stat.added)")
+            if !stat.created { Text("−\(stat.removed)") }
         }
-        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+        .font(StudioStyle.Fonts.footnote.weight(.medium))
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
     }
 }
 
-/// Files the run wrote, with diff stats once it finishes.
+/// Files the run changed, with real file icons and +/− counts.
 private struct FilesColumn: View {
     var run: AgentRun
     var root: URL
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("FILES").font(StudioStyle.laneLabel).foregroundStyle(.tertiary)
-                Spacer()
-                if let cp = run.checkpoint {
-                    Text("since \(cp.sha.prefix(7))").font(StudioStyle.monoSmall).foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            SectionLabel(text: "Changed Files")
+                .padding(.horizontal, StudioStyle.Space.m).padding(.top, StudioStyle.Space.s).padding(.bottom, StudioStyle.Space.xs)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(run.touched, id: \.self) { f in
                         Button { SourceOpener.open(file: f, line: 1) } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "doc").font(.system(size: 10)).foregroundStyle(.secondary)
+                            HStack(spacing: StudioStyle.Space.s) {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: f))
+                                    .resizable().frame(width: 18, height: 18)
                                 VStack(alignment: .leading, spacing: 0) {
-                                    Text(URL(fileURLWithPath: f).lastPathComponent).font(.system(size: 11, weight: .medium))
-                                    Text(folder(f)).font(.system(size: 9.5)).foregroundStyle(.tertiary)
+                                    Text(URL(fileURLWithPath: f).lastPathComponent).font(StudioStyle.Fonts.callout).lineLimit(1)
+                                    Text(folder(f)).font(StudioStyle.Fonts.footnote).foregroundStyle(.secondary)
                                         .lineLimit(1).truncationMode(.head)
                                 }
-                                Spacer(minLength: 4)
+                                Spacer(minLength: StudioStyle.Space.xs)
                                 if let s = run.stat(for: f) { DiffStat(stat: s) }
-                                else if run.reverted { Text("reverted").font(.system(size: 9.5)).foregroundStyle(.tertiary) }
+                                else if run.reverted { Text("Undone").font(StudioStyle.Fonts.footnote).foregroundStyle(.secondary) }
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .help("Open \(f)")
+                        .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, StudioStyle.Space.xs)
                     }
                 }
             }
-            if let why = run.checkpointError {
-                Text("No checkpoint: \(why)").font(.system(size: 9.5)).foregroundStyle(StudioStyle.warn)
-                    .lineLimit(2).padding(8)
+            if run.checkpointError != nil {
+                Text("Studio couldn't save a restore point, so these can't be undone from here.")
+                    .font(StudioStyle.Fonts.footnote).foregroundStyle(.secondary)
+                    .lineLimit(3).padding(StudioStyle.Space.s)
+                    .help(run.checkpointError ?? "")
             }
         }
-        .background(Color.black.opacity(0.12))
     }
 
     private func folder(_ p: String) -> String {

@@ -3,10 +3,10 @@ import SwiftUI
 
 // MARK: - Menus
 //
-// Modified shortcuts live here. Unmodified keys (Space, J/K/L, I/O, C, R, G…) are NOT
-// menu key equivalents — AppKit matches those before a text field sees keyDown, so
-// typing "j" in the composer would shuttle playback. KeyRouter handles them; the
-// menus show them as hints only.
+// Modified shortcuts are real key equivalents here. Unmodified keys (Space, J/K/L, I/O,
+// C, R, G…) are NOT menu key equivalents: AppKit matches those before a text field sees
+// keyDown, so typing "j" in the composer would shuttle playback. KeyRouter handles them,
+// and Help › Keyboard Shortcuts lists them.
 
 struct ProjectFocusKey: FocusedValueKey {
     typealias Value = ProjectModel
@@ -22,6 +22,7 @@ extension FocusedValues {
 struct StudioCommands: Commands {
     @FocusedValue(\.project) private var model: ProjectModel?
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(StudioAppearance.key) private var appearance = StudioAppearance.fallback.rawValue
 
     private func run(_ a: StudioAction) { model?.perform(a) }
 
@@ -36,28 +37,33 @@ struct StudioCommands: Commands {
         }
 
         CommandMenu("Playback") {
-            Button("Play / Pause  (Space)") { run(.playPause) }
-            Button("Shuttle  (J · K · L)") { run(.shuttle(.l)) }
-            Button("Previous / Next Frame  (← →)") { run(.stepFrames(1)) }
-            Button("Previous / Next Edit  (↑ ↓)") { run(.jumpEdit(next: true)) }
+            Button("Play or Pause") { run(.playPause) }
+            Button("Play Forward") { run(.shuttle(.l)) }
+            Button("Play Backward") { run(.shuttle(.j)) }
             Divider()
-            Button("Set In  (I)") { run(.setIn) }
-            Button("Set Out  (O)") { run(.setOut) }
-            Button("Clear In/Out  (⌥X)") { run(.clearInOut) }
-            Button("Loop In→Out  (/)") { run(.loopInOut) }
+            Button("Next Frame") { run(.stepFrames(1)) }
+            Button("Previous Frame") { run(.stepFrames(-1)) }
+            Button("Next Edit") { run(.jumpEdit(next: true)) }
+            Button("Previous Edit") { run(.jumpEdit(next: false)) }
+            Divider()
+            Button("Set In") { run(.setIn) }
+            Button("Set Out") { run(.setOut) }
+            Button("Clear Range") { run(.clearInOut) }
+            Button("Loop Range") { run(.loopInOut) }
         }
 
-        CommandMenu("Review") {
-            Button("New Comment at Playhead  (C)") { run(.newComment) }
-            Button("Mark Region  (R)") { run(.armRegion) }
-            Button("Previous / Next Comment  ([ ])") { run(.selectComment(next: true)) }
+        CommandMenu("Comments") {
+            Button("New Comment at Playhead") { run(.newComment) }
+            Button("Mark a Spot on the Frame") { run(.armRegion) }
             Divider()
-            Button("Toggle A/B Compare  (\\)") { run(.toggleCompare) }
-            Button("Cycle Guides  (G)") { run(.cycleGuides) }
+            Button("Next Comment") { run(.selectComment(next: true)) }
+            Button("Previous Comment") { run(.selectComment(next: false)) }
+            Divider()
+            Button("Compare Before and After") { run(.toggleCompare) }
         }
 
         CommandMenu("Build") {
-            Button("Build Now") { run(.build) }
+            Button("Rebuild Now") { run(.build) }
                 .keyboardShortcut("b")
             Button("Stop") { run(.stop) }
                 .keyboardShortcut(".")
@@ -66,34 +72,81 @@ struct StudioCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
         }
 
-        CommandMenu("Agent") {
+        CommandMenu("Claude") {
             Button("Ask Claude…") { run(.askAgent) }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
-            Button("Show Agent Panel") { run(.toggleAgentPanel) }
+            Button(model?.ui.showAgentPanel == true ? "Hide Claude Panel" : "Show Claude Panel") { run(.toggleAgentPanel) }
                 .keyboardShortcut("j", modifiers: [.command, .option])
         }
 
-        CommandMenu("Render") {
-            Button("Render with Last Preset") { run(.render) }
+        CommandMenu("Export") {
+            Button("Export Again") { run(.render) }
                 .keyboardShortcut("r")
-            Button("Render…") { run(.renderSheet) }
+            Button("Export…") { run(.renderSheet) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .sidebar) {
-            Button("Toggle Scenes Sidebar") { run(.toggleSidebar) }
+            Button("Show or Hide Scenes") { run(.toggleSidebar) }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-            Button("Toggle Inspector") { run(.toggleInspector) }
+            Button("Show or Hide Inspector") { run(.toggleInspector) }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
             Button("Comments") { run(.inspectorTab(.comments)) }.keyboardShortcut("1")
             Button("Knobs") { run(.inspectorTab(.knobs)) }.keyboardShortcut("2")
-            Button("Props") { run(.inspectorTab(.props)) }.keyboardShortcut("3")
+            Button("Content") { run(.inspectorTab(.props)) }.keyboardShortcut("3")
             Button("Info") { run(.inspectorTab(.info)) }.keyboardShortcut("4")
             Divider()
             Button("Zoom Timeline In") { run(.timelineZoomIn) }.keyboardShortcut("=")
             Button("Zoom Timeline Out") { run(.timelineZoomOut) }.keyboardShortcut("-")
-            Button("Zoom Timeline to Fit  (⇧Z)") { run(.timelineZoomFit) }
+            Button("Zoom Timeline to Fit") { run(.timelineZoomFit) }
+            Divider()
+            Button("Next Guide") { run(.cycleGuides) }
+            Toggle("Show Playback Statistics", isOn: Binding(get: { model?.ui.showStats ?? false },
+                                                             set: { _ in run(.toggleStats) }))
+            Picker("Appearance", selection: Binding(get: { appearance }, set: { raw in
+                appearance = raw
+                NSApp.appearance = (StudioAppearance(rawValue: raw) ?? StudioAppearance.fallback).nsAppearance
+            })) {
+                ForEach(StudioAppearance.allCases) { Text($0.title).tag($0.rawValue) }
+            }
         }
+
+        CommandGroup(after: .help) {
+            Button("Keyboard Shortcuts") { openWindow(id: "shortcuts") }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+        }
+    }
+}
+
+/// Help › Keyboard Shortcuts: the single keys KeyRouter handles, and the ⌘ ones.
+struct ShortcutsView: View {
+    private static let groups: [(String, [(String, String)])] = [
+        ("Playback", [("Space", "Play or pause"), ("J  K  L", "Play backward, stop, play forward (hold K and tap J or L to step)"),
+                      ("←  →", "Previous or next frame"), ("⇧←  ⇧→", "Back or ahead one second"),
+                      ("↑  ↓", "Previous or next edit"), ("Home  End", "Start or end")]),
+        ("Range", [("I  O", "Set In or Out"), ("⇧I  ⇧O", "Go to In or Out"), ("⌥X", "Clear the range"), ("/", "Loop the range")]),
+        ("Comments", [("C", "Comment at the playhead"), ("R", "Mark a spot on the frame (or hold ⌥ and drag)"),
+                      ("[  ]", "Previous or next comment"), ("\\", "Compare before and after"), ("|", "Next compare mode"),
+                      ("⌘↩", "Post"), ("⌘⇧↩", "Post and ask Claude")]),
+        ("View", [("G", "Next guide"), ("⇧Z", "Zoom the timeline to fit"), ("⌘=  ⌘−", "Zoom the timeline in or out"),
+                  ("⌘1 … ⌘4", "Comments, Knobs, Content, Info")]),
+        ("Actions", [("⌘⇧A", "Ask Claude"), ("⌘R", "Export again"), ("⌘⇧R", "Export…"), ("⌘B", "Rebuild now"), ("⌘.", "Stop")]),
+    ]
+
+    var body: some View {
+        Form {
+            ForEach(Self.groups, id: \.0) { group in
+                Section(group.0) {
+                    ForEach(group.1, id: \.0) { key, what in
+                        LabeledContent(what) {
+                            Text(key).font(StudioStyle.Fonts.body.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 460, height: 560)
     }
 }

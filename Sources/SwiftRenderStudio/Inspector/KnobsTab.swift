@@ -4,13 +4,46 @@ import SwiftRenderKit
 
 // MARK: - Knobs tab
 //
-// One row per `SceneInfo.knobs` entry: a slider + field for ranged doubles, a
-// toggle, a text field, or a color well. Changes go live through
-// `InspectorController.knobs` (paced to ~30 Hz, `reprobe: false` while dragging,
-// a re-probe on release). ● marks a value the knobs file doesn't have yet; Save
-// writes `.swift-render/knobs/<Scene>.json`, Revert goes back to it, ↺ returns a
-// knob to its source literal and ↗ opens that line. Knobs declared in the scene
-// file that no probe has read are listed as "not reached yet".
+// A grouped form: a section per key prefix ("title.scale" → Title › Scale), each knob a
+// slider with a value field, a switch, a text field or a color swatch. Changes go live
+// through `InspectorController.knobs` (paced to ~30 Hz, `reprobe: false` while dragging,
+// a re-probe on release). A dot marks a value that isn't saved yet; Save writes
+// `.swift-render/knobs/<Scene>.json` so exports and Claude use it; Revert goes back to the
+// file; the reset button (on hover) returns a knob to its default. Knobs declared in the
+// scene file that no frame has read yet are listed under Not Used Yet.
+
+/// "title.scale" → ("Title", "Scale"); "glowRadius" → ("General", "Glow Radius").
+enum KnobNames {
+    static func split(_ key: String) -> (section: String, label: String) {
+        guard let dot = key.firstIndex(of: ".") else { return ("General", humanize(key)) }
+        return (humanize(String(key[..<dot])), humanize(String(key[key.index(after: dot)...])))
+    }
+
+    /// "glowRadius" / "glow_radius" / "glow-radius" / "cta" → "Glow Radius" / "Call to Action".
+    static func humanize(_ s: String) -> String {
+        if let known = known[s.lowercased()] { return known }
+        var words: [String] = []
+        var cur = ""
+        for ch in s {
+            if ch == "_" || ch == "-" || ch == "." || ch == " " {
+                if !cur.isEmpty { words.append(cur); cur = "" }
+            } else if ch.isUppercase, let last = cur.last, last.isLowercase || last.isNumber {
+                words.append(cur); cur = String(ch)
+            } else {
+                cur.append(ch)
+            }
+        }
+        if !cur.isEmpty { words.append(cur) }
+        return words.enumerated().map { i, w in
+            let lower = w.lowercased()
+            if i > 0, ["a", "an", "and", "of", "to", "in", "on", "for", "the"].contains(lower) { return lower }
+            if w.count <= 3, w == w.uppercased(), w.rangeOfCharacter(from: .letters) != nil { return w }
+            return lower.prefix(1).uppercased() + lower.dropFirst()
+        }.joined(separator: " ")
+    }
+
+    private static let known = ["cta": "Call to Action", "url": "URL", "id": "ID", "fps": "FPS", "ui": "UI"]
+}
 
 struct KnobsTab: View {
     @Bindable var model: ProjectModel
@@ -20,107 +53,96 @@ struct KnobsTab: View {
         let insp = model.inspector
         let unreached = insp.unreachedKnobs
         if knobs.isEmpty && unreached.isEmpty {
-            StudioEmptyState(title: "No Knobs", symbol: "slider.horizontal.3",
-                             message: "Declare tunables in the scene with Knob.double(\"key\", 0.4, in: 0...2).")
+            StudioEmptyState(title: "No knobs yet", symbol: StudioStyle.Symbol.knobs,
+                             message: "Add `Knob.double(\"speed\", 0.4, in: 0...2)` to your scene to get a live slider here.")
                 .inspectorFill()
         } else {
             VStack(spacing: 0) {
                 header(knobs, insp)
                 Divider()
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(knobs, id: \.key) { k in
-                            KnobRow(insp: insp, knob: k)
-                            Rectangle().fill(StudioStyle.hairline).frame(height: 1).padding(.leading, 12)
+                Form {
+                    ForEach(sections(knobs), id: \.title) { section in
+                        Section(section.title) {
+                            ForEach(section.knobs, id: \.key) { k in KnobRow(insp: insp, knob: k) }
                         }
-                        if !unreached.isEmpty { unreachedSection(unreached) }
                     }
+                    if !unreached.isEmpty { unreachedSection(unreached) }
+                    Section {
+                        Button("Reset All to Defaults") {
+                            model.knobValues = [:]
+                            insp.knobs.submit([:], dragging: false)
+                        }
+                        .disabled(model.knobValues.isEmpty)
+                        Button("Show Knobs File in Finder") {
+                            if let s = model.selectedScene { SourceOpener.reveal(model.project.knobsURL(scene: s)) }
+                        }
+                        .disabled(insp.fileValues.isEmpty)
+                    }
+                    .buttonStyle(.link)
                 }
-                Divider()
-                footer(insp)
+                .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
             }
         }
+    }
+
+    private func sections(_ knobs: [KnobInfo]) -> [(title: String, knobs: [KnobInfo])] {
+        var order: [String] = []
+        var groups: [String: [KnobInfo]] = [:]
+        for k in knobs {
+            let s = KnobNames.split(k.key).section
+            if groups[s] == nil { order.append(s) }
+            groups[s, default: []].append(k)
+        }
+        return order.map { ($0, groups[$0]!) }
     }
 
     private func header(_ knobs: [KnobInfo], _ insp: InspectorController) -> some View {
         let changed = knobs.filter { insp.differsFromFile($0.key) }.count
-        return HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(knobs.count) knob\(knobs.count == 1 ? "" : "s")").font(.system(size: 12, weight: .semibold))
-                Text(changed == 0 ? "matches knobs file" : "\(changed) unsaved change\(changed == 1 ? "" : "s")")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(changed == 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(StudioStyle.accent))
+        return HStack(spacing: StudioStyle.Space.s) {
+            if changed > 0 {
+                Circle().fill(StudioStyle.accent).frame(width: 6, height: 6)
             }
-            Spacer()
-            Menu {
-                Button("Reset All to Source Defaults") {
-                    model.knobValues = [:]
-                    insp.knobs.submit([:], dragging: false)
-                }
-                .disabled(model.knobValues.isEmpty)
-                Button("Reveal Knobs File in Finder") {
-                    if let s = model.selectedScene { SourceOpener.reveal(model.project.knobsURL(scene: s)) }
-                }
-                .disabled(insp.fileValues.isEmpty)
-            } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More")
+            Text(changed == 0 ? "Saved" : "\(changed) unsaved change\(changed == 1 ? "" : "s")")
+                .font(StudioStyle.Fonts.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: StudioStyle.Space.xs)
             Button("Revert") { insp.revertKnobs() }
                 .disabled(!insp.isDirty)
-                .help("Back to the values in the knobs file")
+                .help("Go back to the saved values")
             Button("Save") { insp.saveKnobs() }
                 .buttonStyle(.borderedProminent)
-                .tint(insp.isDirty ? StudioStyle.accent.opacity(0.85) : .gray)
                 .disabled(!insp.isDirty)
                 .keyboardShortcut("s", modifiers: [.command])
-                .help("Write .swift-render/knobs/\(model.selectedScene ?? "Scene").json (renders and agents read it)")
+                .help("Saves so exports and Claude use these values. (⌘S)")
         }
         .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, StudioStyle.Space.gutter)
+        .padding(.vertical, StudioStyle.Space.s)
     }
 
     private func unreachedSection(_ list: [DeclaredKnob]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("NOT REACHED YET").font(StudioStyle.laneLabel).foregroundStyle(.secondary)
-            Text("Declared in the scene file, but no frame has read \(list.count == 1 ? "it" : "them") yet — play or flip the switch that guards \(list.count == 1 ? "it" : "them").")
-                .font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+        Section {
             ForEach(list, id: \.key) { d in
-                HStack(spacing: 6) {
-                    Image(systemName: KnobRow.icon(d.kind)).foregroundStyle(.tertiary).frame(width: 14)
-                    Text(d.key).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
-                    Spacer()
+                LabeledContent {
                     if let path = model.info?.sourcePath {
-                        Button {
-                            SourceOpener.open(file: path, line: d.line)
-                        } label: {
-                            Text("\(URL(fileURLWithPath: path).lastPathComponent):\(d.line)").font(StudioStyle.monoSmall)
+                        Button { SourceOpener.open(file: path, line: d.line) } label: {
+                            Image(systemName: StudioStyle.Symbol.reveal)
                         }
-                        .buttonStyle(.link)
-                        .help("Open the declaration")
+                        .buttonStyle(.borderless)
+                        .help("Open line \(d.line) of \(URL(fileURLWithPath: path).lastPathComponent)")
                     }
+                } label: {
+                    Text(KnobNames.split(d.key).label).foregroundStyle(.secondary).help(d.key)
                 }
             }
+        } header: {
+            Text("Not Used Yet")
+        } footer: {
+            Text("These haven't shown up yet. Play the film, or turn on the switch that shows them.")
+                .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private func footer(_ insp: InspectorController) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(StudioStyle.accent).frame(width: 6, height: 6)
-            Text("not in knobs file").foregroundStyle(.secondary)
-            Text("·").foregroundStyle(.tertiary)
-            Image(systemName: "arrow.counterclockwise").imageScale(.small).foregroundStyle(.secondary)
-            Text("source default").foregroundStyle(.secondary)
-            Spacer()
-        }
-        .font(.system(size: 10))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 }
 
@@ -129,41 +151,62 @@ struct KnobsTab: View {
 struct KnobRow: View {
     let insp: InspectorController
     let knob: KnobInfo
+    @State private var hovering = false
 
     var body: some View {
         let v = insp.value(knob)
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(insp.differsFromFile(knob.key) ? StudioStyle.accent : .clear)
-                    .frame(width: 6, height: 6)
-                    .help("Live value isn't in the knobs file yet")
-                Text(knob.key)
-                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(knob.key)
-                Spacer(minLength: 4)
-                inlineControl(v)
-                actions
-            }
-            if case .double = knob.kind, let range = range {
-                KnobSlider(value: v.doubleValue ?? knob.defaultValue.doubleValue ?? 0, range: range,
-                           step: KnobCoercion.step(for: range)) { d, dragging in
-                    insp.set(knob, .number(d), dragging: dragging)
+        let label = KnobNames.split(knob.key).label
+        Group {
+            switch knob.kind {
+            case .double:
+                VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                    HStack(spacing: 6) {
+                        title(label)
+                        Spacer(minLength: StudioStyle.Space.xs)
+                        resetButton
+                        let step = range.map(KnobCoercion.step(for:)) ?? Self.freeStep(v.doubleValue ?? 0)
+                        KnobNumberField(value: v.doubleValue ?? 0, decimals: KnobCoercion.decimals(for: step)) { d in
+                            insp.set(knob, .number(d))
+                        }
+                        if range == nil {
+                            Stepper("", onIncrement: { insp.set(knob, .number(KnobCoercion.snap((v.doubleValue ?? 0) + step, step: step))) },
+                                    onDecrement: { insp.set(knob, .number(KnobCoercion.snap((v.doubleValue ?? 0) - step, step: step))) })
+                                .labelsHidden()
+                        }
+                    }
+                    if let range {
+                        KnobSlider(value: v.doubleValue ?? knob.defaultValue.doubleValue ?? 0, range: range,
+                                   step: KnobCoercion.step(for: range)) { d, dragging in
+                            insp.set(knob, .number(d), dragging: dragging)
+                        }
+                    }
                 }
-                .padding(.leading, 12)
-            }
-            if case .text = knob.kind {
-                KnobTextField(text: v.stringValue ?? "") { s, editing in insp.set(knob, .string(s), dragging: editing) }
-                    .padding(.leading, 12)
+            case .bool:
+                Toggle(isOn: Binding(get: { v.boolValue ?? false }, set: { insp.set(knob, .bool($0)) })) {
+                    HStack(spacing: 6) { title(label); Spacer(minLength: 0); resetButton }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            case .text:
+                VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                    HStack(spacing: 6) { title(label); Spacer(minLength: 0); resetButton }
+                    KnobTextField(text: v.stringValue ?? "") { s, editing in insp.set(knob, .string(s), dragging: editing) }
+                }
+            case .color:
+                HStack(spacing: 6) {
+                    title(label)
+                    Spacer(minLength: StudioStyle.Space.xs)
+                    resetButton
+                    KnobColorControl(hex: v.stringValue ?? "#FFFFFF") { hex, editing in
+                        insp.set(knob, .string(hex), dragging: editing)
+                    }
+                }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(help)
         .contextMenu {
-            Button("Reset to Source Default") { insp.reset(knob) }.disabled(!insp.isOverridden(knob))
+            Button("Back to Default") { insp.reset(knob) }.disabled(!insp.isOverridden(knob))
             Button("Copy Value") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(KnobCoercion.display(v), forType: .string)
@@ -172,51 +215,35 @@ struct KnobRow: View {
         }
     }
 
+    private var help: String {
+        var parts = [knob.key]
+        if let range { parts.append("From \(KnobCoercion.format(range.lowerBound)) to \(KnobCoercion.format(range.upperBound))") }
+        parts.append("Default \(KnobCoercion.display(knob.defaultValue))")
+        return parts.joined(separator: " · ")
+    }
+
+    private func title(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(insp.differsFromFile(knob.key) ? StudioStyle.accent : .clear)
+                .frame(width: 6, height: 6)
+                .help("Not saved yet")
+            Text(label).lineLimit(1).truncationMode(.middle)
+        }
+    }
+
+    private var resetButton: some View {
+        Button { insp.reset(knob) } label: { Image(systemName: StudioStyle.Symbol.reset) }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .opacity(hovering && insp.isOverridden(knob) ? 1 : 0)
+            .disabled(!insp.isOverridden(knob))
+            .help("Back to default (\(KnobCoercion.display(knob.defaultValue)))")
+    }
+
     private var range: ClosedRange<Double>? {
         guard let lo = knob.min, let hi = knob.max, hi > lo else { return nil }
         return lo...hi
-    }
-
-    @ViewBuilder private func inlineControl(_ v: KnobValue) -> some View {
-        switch knob.kind {
-        case .double:
-            let step = range.map(KnobCoercion.step(for:)) ?? Self.freeStep(v.doubleValue ?? 0)
-            KnobNumberField(value: v.doubleValue ?? 0, decimals: KnobCoercion.decimals(for: step),
-                            highlighted: insp.isOverridden(knob)) { d in insp.set(knob, .number(d)) }
-            if range == nil {
-                Stepper("", onIncrement: { insp.set(knob, .number(KnobCoercion.snap((v.doubleValue ?? 0) + step, step: step))) },
-                        onDecrement: { insp.set(knob, .number(KnobCoercion.snap((v.doubleValue ?? 0) - step, step: step))) })
-                    .labelsHidden()
-                    .controlSize(.mini)
-            }
-        case .bool:
-            Toggle("", isOn: Binding(get: { v.boolValue ?? false }, set: { insp.set(knob, .bool($0)) }))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .tint(StudioStyle.accent)
-        case .text:
-            EmptyView()
-        case .color:
-            KnobColorControl(hex: v.stringValue ?? "#FFFFFF") { hex, editing in
-                insp.set(knob, .string(hex), dragging: editing)
-            }
-        }
-    }
-
-    private var actions: some View {
-        HStack(spacing: 2) {
-            Button { insp.reset(knob) } label: { Image(systemName: "arrow.counterclockwise") }
-                .help("Reset to the source default (\(KnobCoercion.display(knob.defaultValue)))")
-                .opacity(insp.isOverridden(knob) ? 1 : 0)
-                .disabled(!insp.isOverridden(knob))
-            Button { if let s = knob.source { SourceOpener.open(s) } } label: { Image(systemName: "arrow.up.forward.square") }
-                .help(knob.source.map { "Open \(URL(fileURLWithPath: $0.file).lastPathComponent):\($0.line)" } ?? "No source location")
-                .disabled(knob.source == nil)
-        }
-        .buttonStyle(.borderless)
-        .imageScale(.small)
-        .foregroundStyle(.secondary)
     }
 
     /// Stepper increment for an unranged double: about a tenth of its magnitude.
@@ -224,21 +251,12 @@ struct KnobRow: View {
         let m = max(abs(v), 1)
         return KnobCoercion.step(for: 0...(m * 20))
     }
-
-    static func icon(_ k: KnobInfo.Kind) -> String {
-        switch k {
-        case .double: return "dial.medium"
-        case .bool: return "switch.2"
-        case .text: return "textformat"
-        case .color: return "paintpalette"
-        }
-    }
 }
 
 // MARK: - Controls
 
-/// A slider over the knob's declared range with min/max labels. Reports
-/// `dragging: true` per move and a final `dragging: false` on release.
+/// A slider over the knob's declared range. Reports `dragging: true` per move and a final
+/// `dragging: false` on release.
 struct KnobSlider: View {
     var value: Double
     var range: ClosedRange<Double>
@@ -247,19 +265,14 @@ struct KnobSlider: View {
     @State private var editing = false
 
     var body: some View {
-        let decimals = KnobCoercion.decimals(for: step)
-        HStack(spacing: 6) {
-            Text(String(format: "%.\(decimals)f", range.lowerBound)).font(StudioStyle.monoSmall).foregroundStyle(.tertiary)
-            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, value)) },
-                                  set: { onChange(KnobCoercion.snap($0, step: step), true) }),
-                   in: range) { e in
-                editing = e
-                if !e { onChange(KnobCoercion.snap(value, step: step), false) }
-            }
-            .controlSize(.mini)
-            .tint(StudioStyle.accent)
-            Text(String(format: "%.\(decimals)f", range.upperBound)).font(StudioStyle.monoSmall).foregroundStyle(.tertiary)
+        Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, value)) },
+                              set: { onChange(KnobCoercion.snap($0, step: step), true) }),
+               in: range) { e in
+            editing = e
+            if !e { onChange(KnobCoercion.snap(value, step: step), false) }
         }
+        .controlSize(.small)
+        .labelsHidden()
     }
 }
 
@@ -267,7 +280,6 @@ struct KnobSlider: View {
 struct KnobNumberField: View {
     var value: Double
     var decimals: Int
-    var highlighted: Bool
     var commit: (Double) -> Void
     @State private var text = ""
     @State private var invalid = false
@@ -275,18 +287,16 @@ struct KnobNumberField: View {
 
     var body: some View {
         TextField("", text: $text)
-            .textFieldStyle(.plain)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(StudioStyle.Fonts.callout.monospacedDigit())
             .multilineTextAlignment(.trailing)
-            .foregroundStyle(invalid ? StudioStyle.bad : highlighted ? StudioStyle.accent : .primary)
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .frame(width: 58)
-            .background(Color.white.opacity(focused ? 0.1 : 0.05), in: RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(invalid ? StudioStyle.bad : .clear))
+            .labelsHidden()
             .focused($focused)
+            .studioField(focused: focused, invalid: invalid)
+            .frame(width: 60)
             .onSubmit(apply)
             .onChange(of: focused) { _, f in if !f { apply() } }
             .onChange(of: value, initial: true) { _, _ in if !focused { text = formatted } }
+            .help(invalid ? "That isn't a number" : "")
     }
 
     private var formatted: String { String(format: "%.\(decimals)f", value) }
@@ -312,12 +322,11 @@ struct KnobTextField: View {
 
     var body: some View {
         TextField("", text: $draft, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12))
+            .font(StudioStyle.Fonts.callout)
             .lineLimit(1...4)
-            .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(Color.white.opacity(focused ? 0.1 : 0.05), in: RoundedRectangle(cornerRadius: 5))
+            .labelsHidden()
             .focused($focused)
+            .studioField(focused: focused)
             .onChange(of: text, initial: true) { _, t in if !focused { draft = t } }
             .onChange(of: draft) { _, d in
                 // Only typing commits: `draft` also changes when a new value arrives from outside.
@@ -330,37 +339,23 @@ struct KnobTextField: View {
     }
 }
 
-/// Color well + hex field. The system color panel streams changes, so they go out as
-/// drags and settle into a re-probe after a short pause.
+/// A color swatch (the system color panel). Changes stream as drags and settle into a
+/// re-probe after a short pause; the hex value is in the tooltip.
 struct KnobColorControl: View {
     var hex: String
     var onChange: (String, Bool) -> Void
     @State private var settle: Task<Void, Never>?
-    @State private var text = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 5) {
-            TextField("", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .frame(width: 66)
-                .padding(.horizontal, 4).padding(.vertical, 2)
-                .background(Color.white.opacity(focused ? 0.1 : 0.05), in: RoundedRectangle(cornerRadius: 4))
-                .focused($focused)
-                .onSubmit { if let h = KnobCoercion.normalizeHex(text) { onChange(h, false) } else { text = hex } }
-                .onChange(of: hex, initial: true) { _, h in if !focused { text = h } }
-            ColorPicker("", selection: Binding(get: { Self.color(hex) }, set: { c in
-                let h = Self.hex(c)
-                guard h != hex else { return }
-                onChange(h, true)
-                settle?.cancel()
-                settle = Task { try? await Task.sleep(for: .milliseconds(350)); if !Task.isCancelled { onChange(h, false) } }
-            }), supportsOpacity: true)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(width: 34)
-        }
+        ColorPicker("", selection: Binding(get: { Self.color(hex) }, set: { c in
+            let h = Self.hex(c)
+            guard h != hex else { return }
+            onChange(h, true)
+            settle?.cancel()
+            settle = Task { try? await Task.sleep(for: .milliseconds(350)); if !Task.isCancelled { onChange(h, false) } }
+        }), supportsOpacity: true)
+        .labelsHidden()
+        .help(hex)
     }
 
     static func color(_ hex: String) -> Color {

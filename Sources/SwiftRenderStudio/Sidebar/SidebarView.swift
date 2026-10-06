@@ -3,8 +3,8 @@ import SwiftRenderKit
 
 // MARK: - Sidebar
 //
-// SCENES (kind icon, ~ audio-reactive, {} props, open-comment badge) · REVIEW
-// (open / in progress) · RENDERS (recent outputs) · new scene / launch film.
+// Scenes (kind icon, open-comment badge) · Comments (Open, Ready for Review: each opens
+// that segment) · Exports (recent files) · a + menu to add a scene or a launch film.
 
 struct SidebarView: View {
     @Bindable var model: ProjectModel
@@ -15,11 +15,8 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 list
                     .onChange(of: model.selectedScene) { _, name in
+                        // A pick from the title menu: bring the row into view (no centering).
                         if let name { withAnimation { proxy.scrollTo(name) } }
-                    }
-                    .onChange(of: model.scenes.count) {
-                        // First listing: the selected scene in the middle, not jammed against an edge.
-                        if let name = model.selectedScene { proxy.scrollTo(name, anchor: .center) }
                     }
             }
             footer
@@ -32,82 +29,93 @@ struct SidebarView: View {
         })) {
             Section("Scenes") {
                 if model.scenes.isEmpty {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text(model.build.isBuilding ? "Building…" : "Waiting for host…").foregroundStyle(.secondary)
+                    if case .failed = model.build.phase {
+                        Text("Scenes show up after the first good build.")
+                            .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: StudioStyle.Space.s) {
+                            ProgressView().controlSize(.small)
+                            Text("Getting your scenes ready…").foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                 }
                 ForEach(model.scenes, id: \.name) { s in
                     SceneRow(scene: s, openCount: model.review.openCounts[s.name] ?? 0)
                         .tag(s.name)
                         .id(s.name)
+                        .opacity(sceneListIsStale ? 0.5 : 1)
+                }
+                if sceneListIsStale {
+                    Text("Scenes come back after the next good build.")
+                        .font(StudioStyle.Fonts.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
-            Section("Review") {
-                reviewRow("Open", count: model.review.openCount, symbol: "circle", color: StudioStyle.color(.open)) {
-                    model.review.filter = .open
-                }
-                reviewRow("In progress", count: model.review.inProgressCount, symbol: "circle.lefthalf.filled",
-                          color: StudioStyle.color(.inProgress)) {
-                    model.review.filter = .agent
-                }
+            Section("Comments") {
+                commentsRow("Open", count: model.review.count(segment: .open), symbol: "circle", segment: .open)
+                commentsRow("Ready for Review", count: model.review.readyForReviewCount, symbol: "checkmark.circle", segment: .review)
             }
-            Section("Renders") {
+            Section("Exports") {
                 let outs = model.renders.recentOutputs(limit: 5)
                 if outs.isEmpty {
-                    Text("No renders yet").foregroundStyle(.tertiary)
+                    Text("Nothing exported yet").foregroundStyle(.secondary)
                 }
                 ForEach(outs, id: \.self) { url in
-                    Label(url.lastPathComponent, systemImage: "film.stack")
+                    Label(url.lastPathComponent, systemImage: url.pathExtension == "gif" ? "photo" : "film")
                         .lineLimit(1).truncationMode(.middle)
-                        .contextMenu { Button("Reveal in Finder") { SourceOpener.reveal(url) } }
+                        .contextMenu {
+                            Button("Open") { NSWorkspace.shared.open(url) }
+                            Button("Show in Finder") { SourceOpener.reveal(url) }
+                        }
+                        .help(url.path)
                 }
             }
         }
         .listStyle(.sidebar)
     }
 
+    /// A failed build with no live preview: the list is the last good one.
+    private var sceneListIsStale: Bool {
+        if case .failed = model.build.phase, model.host.active == nil, !model.scenes.isEmpty { return true }
+        return false
+    }
+
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider().padding(.bottom, 2)
-            footerButton("New Scene", symbol: "plus") {
-                // No scene template writer yet: point at the file-based path, which Studio already watches.
-                let dir = model.project.config.scenesDir ?? "your scenes target"
-                model.ui.toast = "Add a RenderScene file under \(dir) — Studio rebuilds and lists it on save"
+        HStack {
+            Menu {
+                Button("Add a Scene…") {
+                    // No scene template writer yet: point at the file-based path, which Studio already watches.
+                    let dir = model.project.config.scenesDir ?? "your scenes folder"
+                    model.ui.toast = "Scenes are Swift files. Add one to \(dir) and it shows up here when you save."
+                }
+                Button("New Launch Film…") { Task { await model.newLaunchFilm() } }
+            } label: {
+                Image(systemName: StudioStyle.Symbol.add)
             }
-            footerButton("New Launch Film…", symbol: "sparkles") {
-                Task { await model.newLaunchFilm() }
-            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Add a scene or a launch film")
+            Spacer()
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 10)
+        .padding(.horizontal, StudioStyle.Space.m)
+        .padding(.vertical, StudioStyle.Space.s)
+        .overlay(alignment: .top) { StudioStyle.hairline.frame(height: 1) }
     }
 
-    private func footerButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: symbol).frame(width: 16)
-                Text(title).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
+    private func commentsRow(_ title: String, count: Int, symbol: String, segment: ReviewSegment) -> some View {
+        Button {
+            model.review.query = ReviewQuery(segment: segment)
+            model.review.threadOpen = false
+            model.ui.inspectorTab = .comments
+            model.ui.showInspector = true
+        } label: {
+            Label(title, systemImage: symbol)
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .font(.system(size: 12))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-    }
-
-    private func reviewRow(_ title: String, count: Int, symbol: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: { action(); model.ui.inspectorTab = .comments; model.ui.showInspector = true }) {
-            HStack {
-                Label { Text(title) } icon: { Image(systemName: symbol).foregroundStyle(color) }
-                Spacer()
-                if count > 0 { Text("\(count)").monospacedDigit().foregroundStyle(.secondary) }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        .badge(count)
     }
 }
 
@@ -116,24 +124,16 @@ struct SceneRow: View {
     var openCount: Int
 
     var body: some View {
-        HStack(spacing: 6) {
-            Label(scene.name, systemImage: StudioStyle.symbol(scene.kind))
-            Spacer(minLength: 4)
-            if scene.kind == .audio || scene.kind == .propsAudio {
-                Text("~").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(.secondary)
-                    .help("Audio-reactive")
-            }
-            if scene.hasProps {
-                Text("{}").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.secondary)
-                    .help("Props scene")
-            }
-            if openCount > 0 {
-                Text("\(openCount)")
-                    .font(.system(size: 10, weight: .semibold)).monospacedDigit()
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(StudioStyle.color(.open).opacity(0.25), in: Capsule())
-                    .help("\(openCount) open comment\(openCount == 1 ? "" : "s")")
-            }
-        }
+        Label(scene.name, systemImage: StudioStyle.symbol(scene.kind))
+            .badge(openCount)
+            .help(help)
+    }
+
+    private var help: String {
+        var parts: [String] = []
+        if scene.hasProps { parts.append("Has editable content") }
+        if scene.kind == .audio || scene.kind == .propsAudio { parts.append("Moves to the music") }
+        if openCount > 0 { parts.append("\(openCount) open comment\(openCount == 1 ? "" : "s")") }
+        return parts.joined(separator: ". ")
     }
 }

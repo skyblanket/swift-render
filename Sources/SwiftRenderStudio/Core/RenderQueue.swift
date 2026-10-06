@@ -90,8 +90,8 @@ struct RenderJob: Identifiable, Equatable, Sendable {
 
     /// The span of scene time the export covers.
     var durationLabel: String {
-        if let r = range { return "\(StudioStyle.timecode(r.lowerBound))–\(StudioStyle.timecode(r.upperBound))" }
-        return "whole scene"
+        if let r = range { return StudioTime.range(r.lowerBound, r.upperBound) }
+        return "Whole film"
     }
 }
 
@@ -527,8 +527,8 @@ final class RenderQueue {
     @discardableResult
     func attach(_ id: RenderJob.ID, toComment commentID: String, author: String) throws -> ReviewComment {
         guard let job = job(id), case .finished = job.state else { throw ReviewError.io("render isn't finished") }
-        var body = "Rendered \(job.preset.title) (\(job.preset.sizeLabel) @ \(job.preset.fps)"
-        if let r = job.range { body += ", \(StudioStyle.timecode(r.lowerBound))–\(StudioStyle.timecode(r.upperBound))" }
+        var body = "Exported \(job.preset.title) (\(job.preset.sizeLabel) at \(job.preset.fps) fps"
+        if let r = job.range { body += ", \(StudioTime.range(r.lowerBound, r.upperBound))" }
         body += "): \(relativePath(job.output))"
         let reply = ReviewReply(author: ReviewAuthor(name: author), body: body,
                                 attachments: [ReviewAttachment(kind: .video, path: relativePath(job.output),

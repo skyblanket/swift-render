@@ -67,8 +67,8 @@ final class ViewportTests: XCTestCase {
             XCTAssertLessThanOrEqual(minor, major)
             XCTAssertGreaterThanOrEqual(minor, 1.0 / 60 - 1e-12)
         }
-        XCTAssertEqual(TimelineViewport.label(72.4, major: 5), "01:12")
-        XCTAssertEqual(TimelineViewport.label(12.4, major: 0.5), "00:12.40")
+        XCTAssertEqual(TimelineViewport.label(72.4, major: 5), "1:12")
+        XCTAssertEqual(TimelineViewport.label(12.4, major: 0.5), "0:12.40")
     }
 }
 

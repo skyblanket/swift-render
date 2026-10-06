@@ -22,7 +22,7 @@ struct TimelineLayout: Equatable, Sendable {
     }
 
     static let rulerHeight: CGFloat = 28
-    static let scrollerHeight: CGFloat = 16
+    static let scrollerHeight: CGFloat = 22
 
     var slots: [Slot] = []
     var contentHeight: CGFloat = 0
@@ -40,10 +40,12 @@ struct TimelineLayout: Equatable, Sendable {
     init(info: SceneInfo?) {
         let clips = ClipsLane(clips: info?.clips ?? [])
         var s: [(LaneKey, String, CGFloat)] = [(.clips, clips.title, clips.height)]
-        if let c = info?.captions, !c.isEmpty { s.append((.captions, "CAPTIONS", CaptionsLane(captions: c).height)) }
+        if let c = info?.captions, !c.isEmpty { s.append((.captions, "Captions", CaptionsLane(captions: c).height)) }
         for lane in ScoreLanes.renderers(info?.events ?? []) { s.append((.score(lane.title), lane.title, lane.height)) }
-        s.append((.audio, "AUDIO", WaveformLane(loudness: [], rate: 50).height))
-        s.append((.notes, "NOTES", CommentsLane(comments: []).height))
+        // No sound yet: the lane collapses to one quiet line.
+        let sound = info.map { $0.audioPath != nil || !$0.loudness.isEmpty } ?? false
+        s.append((.audio, "Audio", sound ? WaveformLane(loudness: [], rate: 50).height : WaveformLane.collapsedHeight))
+        s.append((.notes, "Comments", CommentsLane(comments: []).height))
         self.init(slots: s)
     }
 

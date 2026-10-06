@@ -9,7 +9,7 @@ import SwiftRenderKit
 // Drawn with `rendersAsynchronously` — the only lane heavy enough to need it.
 
 struct WaveformLane: LaneRenderer {
-    var title = "AUDIO"
+    var title = "Audio"
     var loudness: [Float]
     var rate: Double
     var overview: AudioOverview?
@@ -17,12 +17,14 @@ struct WaveformLane: LaneRenderer {
     var pending = false
     var height: CGFloat = 40
 
-    static let wave = Color(red: 0.36, green: 0.78, blue: 0.70)
+    static let wave = StudioStyle.Lane.audio
+    /// "No sound yet": the lane folds down to a single line.
+    static let collapsedHeight: CGFloat = 22
 
     func draw(in ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         let hasEnvelope = !loudness.isEmpty && rate > 0
         guard overview != nil || hasEnvelope else {
-            LaneDraw.empty(&ctx, pending ? "Synthesizing score…" : "No audio", size: size)
+            LaneDraw.empty(&ctx, pending ? "Mixing the music…" : "No sound yet", size: size)
             return
         }
         let mid = size.height / 2
@@ -42,15 +44,14 @@ struct WaveformLane: LaneRenderer {
                     p.addLine(to: CGPoint(x: CGFloat(i) + 0.5, y: mid - CGFloat(max(-1, pk.min)) * (mid - 2)))
                 }
                 p.closeSubpath()
-                ctx.fill(p, with: .color(Self.wave.opacity(0.62)))
+                ctx.fill(p, with: .color(Self.wave.opacity(0.55)))
             }
             for s in o.silences where s.upperBound >= v.start && s.lowerBound <= v.end {
                 let x0 = max(0, v.x(s.lowerBound)), x1 = min(size.width, v.x(s.upperBound))
                 let r = CGRect(x: x0, y: 1, width: max(0, x1 - x0), height: size.height - 2)
-                ctx.fill(Path(r), with: .color(.black.opacity(0.25)))
-                LaneDraw.hatch(&ctx, r, color: .white.opacity(0.07), spacing: 5)
+                LaneDraw.hatch(&ctx, r, color: Self.wave.opacity(0.18), spacing: 5)
                 if r.width > 60 {
-                    ctx.draw(Text("silence").font(.system(size: 8.5, weight: .medium)).foregroundStyle(.white.opacity(0.4)),
+                    ctx.draw(Text("Quiet").font(StudioStyle.Fonts.footnote).foregroundStyle(.tertiary),
                              at: CGPoint(x: r.midX, y: r.midY))
                 }
             }
@@ -76,7 +77,7 @@ struct WaveformLane: LaneRenderer {
                 ctx.fill(p, with: .color(Self.wave.opacity(0.45)))
                 var axis = Path()
                 axis.move(to: CGPoint(x: 0, y: mid)); axis.addLine(to: CGPoint(x: last.x, y: mid))
-                ctx.stroke(axis, with: .color(.white.opacity(0.15)), lineWidth: 0.5)
+                ctx.stroke(axis, with: .style(.quaternary), lineWidth: 0.5)
             } else {
                 // Loudness as a line riding over the waveform, bottom = silence.
                 var line = Path()
@@ -84,8 +85,7 @@ struct WaveformLane: LaneRenderer {
                     let q = CGPoint(x: pt.x, y: size.height - 2 - pt.y * (size.height - 5))
                     i == 0 ? line.move(to: q) : line.addLine(to: q)
                 }
-                ctx.stroke(line, with: .color(Color(red: 1.0, green: 0.86, blue: 0.55).opacity(0.85)),
-                           style: StrokeStyle(lineWidth: 1.1, lineJoin: .round))
+                ctx.stroke(line, with: .style(.secondary), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
             }
         }
     }
@@ -94,7 +94,7 @@ struct WaveformLane: LaneRenderer {
         let t = v.t(p.x)
         if let s = overview?.silences.first(where: { $0.contains(t) }) {
             return LaneHit(kind: .silence, id: "silence:\(s.lowerBound)", start: s.lowerBound, end: s.upperBound,
-                           title: "Silence · \(LaneDraw.seconds(s.upperBound - s.lowerBound))",
+                           title: "Quiet for \(LaneDraw.seconds(s.upperBound - s.lowerBound))",
                            detail: LaneDraw.range(s.lowerBound, s.upperBound) + " · below \(Int(AudioOverview.silenceDB)) dBFS",
                            rect: LaneDraw.rect(viewport: v, from: s.lowerBound, to: s.upperBound, y: 1, height: height - 2))
         }
@@ -102,6 +102,6 @@ struct WaveformLane: LaneRenderer {
         let i = Int(t * rate)
         guard i >= 0, i < loudness.count else { return nil }
         return LaneHit(kind: .audio, id: "audio", start: t, end: t, title: "Loudness \(Int((loudness[i] * 100).rounded()))%",
-                       detail: StudioStyle.timecode(t))
+                       detail: StudioTime.precise(t))
     }
 }

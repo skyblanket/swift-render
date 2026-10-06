@@ -3,20 +3,19 @@ import UniformTypeIdentifiers
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Render sheet
+// MARK: - Export sheet
 //
-// ┌ Render NeverHeard ─────────────────── 93.00 s · 60 fps · score ┐
-// │ MASTER        SOCIAL        APP STORE        DRAFT              │
-// │ [1080p60]     [9:16]        [886×1920]       [Preview]          │
-// │ [4K UHD]      [1:1]         [1920×886]       [GIF]              │
-// │ 1920×1080 · 60 fps · H.264 12 Mb/s · 5,580 frames · audio       │
-// │ Range / Build / Knobs / Output [Change…]                        │
-// │                                        [Cancel] [Render ⌘↩]    │
-// └─────────────────────────────────────────────────────────────────┘
+//   Export RepoPromo
+//   25 seconds · 1920×1080 · with music
+//   Best Quality   Social      App Store    Draft
+//   [1080p60]      [9:16]      [Portrait]   [Preview]
+//   [4K UHD]       [1:1]       [Landscape]  [GIF]
+//   960×540 · 30 fps · H.264 · 25 s · with music
+//   Length / Quality / Knobs / Save To
+//                                             [Cancel] [Export]
 //
-// App Store previews are only enabled for a 15–30 s scene or In→Out range; GIFs need
-// ffmpeg. Presets that change the aspect warn (scenes are authored at 16:9) and offer
-// to preview that canvas in the viewer first.
+// App Store previews are only enabled for a 15–30 s film or In→Out range; GIFs need
+// ffmpeg. Presets that change the aspect say so and offer to preview that shape first.
 
 struct RenderSheet: View {
     @Bindable var model: ProjectModel
@@ -52,30 +51,33 @@ struct RenderSheet: View {
     private var output: URL { customOutput ?? model.renders.defaultOutput(scene: scene, preset: preset) }
 
     private var problem: String? {
-        if model.selectedScene == nil { return "Select a scene first." }
+        if model.selectedScene == nil { return "Pick a scene first." }
         return RenderQueue.problem(preset: preset, duration: sceneDuration, range: range,
                                    ffmpegAvailable: !model.renders.ffmpegResolved || model.renders.ffmpeg != nil)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 14)
-            Divider()
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                Text("Export \(scene)").font(StudioStyle.Fonts.title)
+                Text(sceneLine).font(StudioStyle.Fonts.callout).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .padding(.horizontal, StudioStyle.Space.xl).padding(.top, StudioStyle.Space.xl).padding(.bottom, StudioStyle.Space.l)
+            VStack(alignment: .leading, spacing: StudioStyle.Space.m) {
                 presetGrid
                 presetDetail
-                Divider()
+            }
+            .padding(.horizontal, StudioStyle.Space.xl)
+            Form {
                 options
                 notes
             }
-            .padding(.horizontal, 22).padding(.vertical, 16)
-            Divider()
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             footer
-                .padding(.horizontal, 22).padding(.vertical, 14)
+                .padding(.horizontal, StudioStyle.Space.xl).padding(.vertical, StudioStyle.Space.l)
         }
-        .frame(width: 700)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: 680, height: 540)
         .onAppear {
             guard !appeared else { return }
             appeared = true
@@ -86,11 +88,11 @@ struct RenderSheet: View {
         .onChange(of: preset) { _, p in
             build = p.prefersRelease && !useRange ? .optimized : .currentDebug
             if let old = customOutput, old.pathExtension != p.fileExtension {
-                // The user agreed to replace `old`, not whatever already has the new extension.
+                // The person agreed to replace `old`, not whatever already has the new extension.
                 customOutput = RenderQueue.unused(old.deletingPathExtension().appendingPathExtension(p.fileExtension),
                                                   taken: model.renders.pendingOutputs)
             }
-            // A too-long scene with In/Out set: App Store presets need the range.
+            // A too-long film with In/Out set: App Store presets need the range.
             if p.durationLimit != nil, model.playback.inOut != nil,
                p.durationProblem(sceneDuration ?? 0) != nil { useRange = true }
         }
@@ -99,41 +101,19 @@ struct RenderSheet: View {
         }
     }
 
-    // MARK: Header
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(StudioStyle.accent)
-                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Render \(scene)").font(.system(size: 17, weight: .semibold))
-                Text(sceneLine).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-    }
-
     private var sceneLine: String {
-        guard let info = model.info else { return "No scene loaded" }
-        var parts = [String(format: "%.2f s", info.duration), "\(String(info.width))×\(String(info.height)) canvas"]
-        parts.append(hasSoundtrack ? "scored" : "silent")
-        if !info.knobs.isEmpty { parts.append("\(info.knobs.count) knob\(info.knobs.count == 1 ? "" : "s")") }
-        return parts.joined(separator: " · ")
+        guard let info = model.info else { return "Nothing loaded yet" }
+        return [StudioTime.spoken(info.duration), "\(info.width)×\(info.height)", hasSoundtrack ? "with music" : "no sound"]
+            .joined(separator: " · ")
     }
 
     // MARK: Presets
 
     private var presetGrid: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: StudioStyle.Space.s) {
             ForEach(RenderPreset.Group.allCases, id: \.self) { g in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(g.rawValue.uppercased())
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(.tertiary)
-                        .padding(.leading, 2)
+                    SectionLabel(text: g.title).padding(.leading, 2)
                     ForEach(RenderPreset.allCases.filter { $0.group == g }) { p in
                         PresetTile(preset: p, selected: p == preset, disabled: !usable(p))
                             .onTapGesture { preset = p }
@@ -144,7 +124,7 @@ struct RenderSheet: View {
         }
     }
 
-    /// Renderable for the whole scene or for the In→Out range.
+    /// Exportable for the whole film or for the In→Out range.
     private func usable(_ p: RenderPreset) -> Bool {
         let ffmpeg = !model.renders.ffmpegResolved || model.renders.ffmpeg != nil
         if RenderQueue.problem(preset: p, duration: sceneDuration, range: nil, ffmpegAvailable: ffmpeg) == nil { return true }
@@ -153,97 +133,63 @@ struct RenderSheet: View {
     }
 
     private var presetDetail: some View {
-        HStack(spacing: 6) {
-            Text(preset.summary)
-            if let d = effectiveDuration {
-                Text("·")
-                Text("\(Int((d * Double(preset.fps)).rounded()).formatted()) frames")
-                Text("·")
-                Text(String(format: "%.2f s", d))
-            }
-            Text("·")
-            Text(audioLabel)
-        }
-        .font(.system(size: 11, design: .monospaced))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+        var parts = ["\(preset.sizeLabel)", "\(preset.fps) fps", preset.isGIF ? "GIF" : "H.264"]
+        if let d = effectiveDuration { parts.append(StudioTime.compact(d)) }
+        parts.append(audioLabel)
+        let frames = effectiveDuration.map { "\(Int(($0 * Double(preset.fps)).rounded()).formatted()) frames" }
+        return Text(parts.joined(separator: " · "))
+            .font(StudioStyle.Fonts.callout)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help([frames, preset.megabitsPerSecond.map { "\($0) Mb/s" }].compactMap { $0 }.joined(separator: " · "))
     }
 
     private var audioLabel: String {
-        if preset.isGIF { return "no audio" }
-        guard hasSoundtrack else { return "silent" }
-        if range != nil { return model.renders.ffmpeg != nil ? "audio: score (muxed)" : "audio skipped" }
-        return "audio: score"
+        if preset.isGIF || !hasSoundtrack { return "no sound" }
+        if range != nil, model.renders.ffmpeg == nil { return "no sound (section)" }
+        return "with music"
     }
 
     // MARK: Options
 
-    private var options: some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 12) {
-            GridRow {
-                label("Range")
-                Picker("", selection: $useRange) {
-                    Text("Whole scene").tag(false)
-                    if let io = model.playback.inOut {
-                        Text("In→Out \(StudioStyle.timecode(io.lowerBound))–\(StudioStyle.timecode(io.upperBound))").tag(true)
-                    } else {
-                        Text("In→Out (set with I / O)").tag(true)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .horizontalRadioGroupLayout()
-                .labelsHidden()
-                .disabled(model.playback.inOut == nil)
-            }
-            GridRow {
-                label("Build")
-                VStack(alignment: .leading, spacing: 4) {
-                    Picker("", selection: $build) {
-                        Text("Optimized (release)").tag(BuildChoice.optimized)
-                        Text("Current debug build").tag(BuildChoice.currentDebug)
-                    }
-                    .pickerStyle(.radioGroup)
-                    .horizontalRadioGroupLayout()
-                    .labelsHidden()
-                    Text(buildHint).font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                }
-            }
-            GridRow {
-                label("Knobs")
-                if knobsDiffer {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Picker("", selection: $knobs) {
-                            Text("Use live values").tag(KnobChoice.useLive)
-                            Text("Save to file, then render").tag(KnobChoice.saveToFile)
-                        }
-                        .pickerStyle(.radioGroup)
-                        .horizontalRadioGroupLayout()
-                        .labelsHidden()
-                        Text("Live values differ from .swift-render/knobs/\(scene).json.")
-                            .font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                    }
+    @ViewBuilder private var options: some View {
+        Section {
+            Picker("Length", selection: $useRange) {
+                Text("Whole Film").tag(false)
+                if let io = model.playback.inOut {
+                    Text("In to Out (\(StudioTime.range(io.lowerBound, io.upperBound)))").tag(true)
                 } else {
-                    Text(savedKnobs.isEmpty ? "Scene defaults" : "\(savedKnobs.count) saved override\(savedKnobs.count == 1 ? "" : "s")")
-                        .foregroundStyle(.secondary)
+                    Text("In to Out (press I and O to set)").tag(true)
                 }
             }
-            GridRow {
-                label("Output")
-                HStack(spacing: 8) {
+            .disabled(model.playback.inOut == nil)
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                Picker("Quality", selection: $build) {
+                    Text("Final (slower the first time)").tag(BuildChoice.optimized)
+                    Text("Quick (what's playing now)").tag(BuildChoice.currentDebug)
+                }
+                Text(buildHint).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+            }
+            if knobsDiffer {
+                Picker("Knobs", selection: $knobs) {
+                    Text("Use What's on Screen").tag(KnobChoice.useLive)
+                    Text("Save Knobs, Then Export").tag(KnobChoice.saveToFile)
+                }
+            } else {
+                LabeledContent("Knobs") {
+                    Text(savedKnobs.isEmpty ? "Defaults" : "\(savedKnobs.count) saved change\(savedKnobs.count == 1 ? "" : "s")")
+                }
+            }
+            LabeledContent("Save To") {
+                HStack(spacing: StudioStyle.Space.s) {
                     Text(model.renders.relativePath(output))
-                        .font(StudioStyle.mono)
                         .lineLimit(1).truncationMode(.head)
                         .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Change…", action: chooseOutput).controlSize(.small)
                 }
             }
         }
-        .font(.system(size: 12))
-    }
-
-    private func label(_ s: String) -> some View {
-        Text(s).foregroundStyle(.secondary).gridColumnAlignment(.trailing).frame(width: 52, alignment: .trailing)
     }
 
     private var buildHint: String {
@@ -252,47 +198,60 @@ struct RenderSheet: View {
             let exe = BuildController.canonical(model.project.root)
                 .appendingPathComponent(".build/studio/release/\(model.project.config.product)")
             return FileManager.default.fileExists(atPath: exe.path)
-                ? "Incremental release build first; renders 1.2–5× faster than debug."
-                : "First release build compiles the whole package (a few minutes); later ones are incremental."
+                ? "Renders a few times faster than Quick."
+                : "The first Final export takes a few extra minutes to get ready. After that it's quick."
         case .currentDebug:
             return model.build.lastGoodExecutable == nil
-                ? "Builds debug first (no live build yet)."
-                : "Starts right away with the build the viewer is running."
+                ? "Builds first, since nothing is playing yet."
+                : "Starts now, using what's playing in Studio."
         }
     }
 
     // MARK: Notes
 
     @ViewBuilder private var notes: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let problem {
-                note(problem, symbol: "exclamationmark.octagon.fill", color: StudioStyle.bad)
-            }
-            if preset.changesAspect {
-                HStack(spacing: 8) {
-                    note("Lays the scene out at \(preset.sizeLabel); it was authored at 16:9.",
-                         symbol: "aspectratio", color: StudioStyle.warn)
-                    if let a = viewerAspect, model.aspect != a {
-                        Button("Preview \(a.rawValue)") { Task { await model.setAspect(a) } }
-                            .controlSize(.small)
+        let items = noteItems
+        if !items.isEmpty {
+            Section {
+                ForEach(items, id: \.text) { n in
+                    HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                        Image(systemName: n.symbol).foregroundStyle(n.color)
+                        Text(n.text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if n.preview, let a = viewerAspect, model.aspect != a {
+                            Spacer(minLength: StudioStyle.Space.s)
+                            Button("Preview \(a.rawValue)") { Task { await model.setAspect(a) } }
+                                .controlSize(.small)
+                        }
                     }
-                }
-            }
-            if range != nil, hasSoundtrack, !preset.isGIF, model.renders.ffmpeg == nil {
-                note("In→Out renders skip the audio mux; install ffmpeg to keep the score.",
-                     symbol: "speaker.slash", color: StudioStyle.warn)
-            }
-            if preset.group == .appStore, problem == nil {
-                if hasSoundtrack && (range == nil || model.renders.ffmpeg != nil) {
-                    note("App Store Connect: 15–30 s, 30 fps, H.264 with an AAC score track.",
-                         symbol: "checkmark.seal", color: StudioStyle.ok)
-                } else {
-                    // Nothing adds a track to a silent scene (or a range without ffmpeg).
-                    note("No audio track: this scene has no score. App Store Connect's app-preview spec lists stereo AAC audio.",
-                         symbol: "speaker.slash", color: StudioStyle.warn)
+                    .font(StudioStyle.Fonts.callout)
                 }
             }
         }
+    }
+
+    private struct Note { var text: String; var symbol: String; var color: AnyShapeStyle; var preview = false }
+
+    private var noteItems: [Note] {
+        var out: [Note] = []
+        if let problem { out.append(Note(text: problem, symbol: StudioStyle.Symbol.error, color: AnyShapeStyle(StudioStyle.error))) }
+        if preset.changesAspect {
+            out.append(Note(text: "Made for widescreen, so it'll be re-laid out for \(preset.pixelSize.height > preset.pixelSize.width ? "portrait" : "this shape").",
+                            symbol: "aspectratio", color: AnyShapeStyle(.secondary), preview: true))
+        }
+        if range != nil, hasSoundtrack, !preset.isGIF, model.renders.ffmpeg == nil {
+            out.append(Note(text: "Exporting a section leaves out the music unless ffmpeg is installed (brew install ffmpeg).",
+                            symbol: "speaker.slash", color: AnyShapeStyle(.secondary)))
+        }
+        if preset.group == .appStore, problem == nil {
+            if hasSoundtrack && (range == nil || model.renders.ffmpeg != nil) {
+                out.append(Note(text: "Ready for App Store Connect: 15 to 30 seconds, 30 fps, with sound.",
+                                symbol: StudioStyle.Symbol.ok, color: AnyShapeStyle(.secondary)))
+            } else {
+                out.append(Note(text: "Heads up: this film has no sound. App Store previews usually do.",
+                                symbol: "speaker.slash", color: AnyShapeStyle(.secondary)))
+            }
+        }
+        return out
     }
 
     private var viewerAspect: AspectChoice? {
@@ -303,25 +262,16 @@ struct RenderSheet: View {
         }
     }
 
-    private func note(_ text: String, symbol: String, color: Color) -> some View {
-        Label {
-            Text(text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: symbol).foregroundStyle(color)
-        }
-        .font(.system(size: 11))
-    }
-
     // MARK: Footer
 
     private var footer: some View {
         HStack {
-            Text("⌘R renders \(model.renders.lastPreset.title) again")
-                .font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            Text("⌘R exports another \(model.renders.lastPreset.tileTitle).")
+                .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-            Button("Render") { render() }
-                .keyboardShortcut(.return, modifiers: .command)
+            Button("Export") { render() }
+                .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(problem != nil)
         }
@@ -353,25 +303,26 @@ struct PresetTile: View {
     var disabled: Bool
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: StudioStyle.Space.s) {
             AspectGlyph(width: preset.pixelSize.width, height: preset.pixelSize.height, highlighted: selected)
-                .frame(width: 26, height: 26)
+                .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(preset.tileTitle)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .lineLimit(1).minimumScaleFactor(0.85)
-                Text("\(preset.sizeLabel) · \(preset.fps)")
-                    .font(.system(size: 9.5, design: .monospaced))
+                    .font(StudioStyle.Fonts.calloutEmphasis)
+                    .lineLimit(1)
+                Text(verbatim: "\(preset.sizeLabel) · \(preset.fps) fps")
+                    .font(StudioStyle.Fonts.footnote).monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 9).padding(.vertical, 8)
+        .padding(.horizontal, 10).padding(.vertical, StudioStyle.Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(selected ? StudioStyle.accent.opacity(0.14) : Color.white.opacity(0.045)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(selected ? StudioStyle.accent.opacity(0.85) : Color.white.opacity(0.07), lineWidth: selected ? 1.5 : 1))
+        .background(StudioStyle.rounded(StudioStyle.Radius.medium)
+            .fill(selected ? StudioStyle.accent.opacity(0.10) : StudioStyle.well))
+        .overlay(StudioStyle.rounded(StudioStyle.Radius.medium)
+            .strokeBorder(selected ? StudioStyle.accent : .clear, lineWidth: 2))
         .opacity(disabled && !selected ? 0.45 : 1)
         .contentShape(Rectangle())
         .help(preset.summary)
@@ -392,7 +343,7 @@ struct AspectGlyph: View {
             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                 .strokeBorder(highlighted ? StudioStyle.accent : Color.secondary, lineWidth: 1.4)
                 .background(RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                    .fill((highlighted ? StudioStyle.accent : Color.secondary).opacity(0.15)))
+                    .fill((highlighted ? StudioStyle.accent : Color.secondary).opacity(0.12)))
                 .frame(width: w, height: h)
                 .frame(width: g.size.width, height: g.size.height)
         }

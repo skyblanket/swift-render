@@ -54,6 +54,7 @@ struct ProjectWindow: View {
 struct ProjectWindowContent: View {
     @Bindable var model: ProjectModel
     @State private var router: KeyRouter?
+    @AppStorage(StudioAppearance.key) private var appearance = StudioAppearance.fallback.rawValue
 
     var body: some View {
         NavigationSplitView(columnVisibility: Binding(
@@ -69,59 +70,92 @@ struct ProjectWindowContent: View {
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 440)
         }
         .toolbar { StudioToolbar(model: model) }
+        // The title is the scene switcher.
         .navigationTitle(model.selectedScene ?? model.title)
-        .navigationSubtitle(model.title)
+        .toolbarTitleMenu { SceneSwitcherMenu(model: model) }
         .sheet(isPresented: $model.ui.showAskSheet) { AskAgentSheet(model: model) }
         .sheet(isPresented: $model.ui.showRenderSheet) { RenderSheet(model: model) }
         .focusedSceneValue(\.project, model)
         .background(WindowAccessor { window in
             if router == nil { router = KeyRouter(model: model) }
             router?.install(window: window)
+            // The project folder (often a worktree name) lives in the title's tooltip, not under it.
+            window.representedURL = model.project.root
         })
         .task { await model.start() }
         .onDisappear { router?.uninstall() }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(scheme)
+    }
+
+    private var scheme: ColorScheme? {
+        if let a = model.options.appearance { return a.colorScheme }
+        return (StudioAppearance(rawValue: appearance) ?? StudioAppearance.fallback).colorScheme
     }
 }
 
-/// Viewer + transport over timeline over agent panel. A hand-rolled split (NSSplitView
-/// via VSplitView ignores ideal heights and hands the agent panel half the window);
-/// heights persist per user.
+/// Scenes by name, for the window title menu.
+struct SceneSwitcherMenu: View {
+    let model: ProjectModel
+
+    var body: some View {
+        ForEach(model.scenes, id: \.name) { s in
+            Button { Task { await model.select(scene: s.name) } } label: {
+                Label(s.name, systemImage: StudioStyle.symbol(s.kind))
+            }
+        }
+    }
+}
+
+/// Viewer + transport over timeline over the Claude panel. A hand-rolled split (NSSplitView
+/// via VSplitView ignores ideal heights). The timeline fits its lanes until it is dragged;
+/// double-click the divider to fit it again.
 struct DetailSplit: View {
     @Bindable var model: ProjectModel
-    @AppStorage("layout.timelineHeight") private var timelineHeight = 268.0
-    @AppStorage("layout.agentHeight") private var agentHeight = 92.0
+    /// 0 = fit the lanes.
+    @AppStorage("layout.timelineHeightManual") private var timelineHeight = 0.0
+    @AppStorage("layout.claudePanelHeight") private var agentHeight = 200.0
+
+    private static let timelineRange: ClosedRange<Double> = 140...560
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 ViewerView(model: model)
-                Divider()
                 TransportBar(model: model)
             }
             .frame(minHeight: 260, maxHeight: .infinity)
-            SplitHandle(height: $timelineHeight, range: 140...560)
+            SplitHandle(height: Binding(get: { effectiveTimelineHeight }, set: { timelineHeight = $0 }),
+                        range: Self.timelineRange, onReset: { timelineHeight = 0 })
             TimelineView(model: model)
-                .frame(height: timelineHeight)
+                .frame(height: effectiveTimelineHeight)
             if model.ui.showAgentPanel {
-                SplitHandle(height: $agentHeight, range: 56...320)
+                SplitHandle(height: $agentHeight, range: 120...420)
                 AgentPanel(model: model)
                     .frame(height: agentHeight)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .background(StudioStyle.viewerBackground)
+        .animation(.smooth(duration: 0.25), value: model.ui.showAgentPanel)
+        .background(StudioStyle.chrome)
+    }
+
+    private var effectiveTimelineHeight: Double {
+        if timelineHeight > 0 { return min(Self.timelineRange.upperBound, max(Self.timelineRange.lowerBound, timelineHeight)) }
+        let content = Double(TimelineLayout(info: model.info).contentHeight + TimelineLayout.rulerHeight + TimelineLayout.scrollerHeight)
+        return min(Self.timelineRange.upperBound, max(Self.timelineRange.lowerBound, content + 2))
     }
 }
 
-/// A 1 pt divider with a 7 pt grab area; dragging up grows the pane below it.
+/// A hairline with a 7 pt grab area; dragging up grows the pane below it.
 struct SplitHandle: View {
     @Binding var height: Double
     var range: ClosedRange<Double>
+    var onReset: (() -> Void)? = nil
     @State private var start: Double?
 
     var body: some View {
         Rectangle()
-            .fill(Color.black)
+            .fill(StudioStyle.hairline)
             .frame(height: 1)
             .overlay {
                 Color.clear
@@ -134,6 +168,7 @@ struct SplitHandle: View {
                             height = min(range.upperBound, max(range.lowerBound, start! - g.translation.height))
                         }
                         .onEnded { _ in start = nil })
+                    .onTapGesture(count: 2) { onReset?() }
             }
             .zIndex(1)
     }

@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Inspector
 //
-// Comments · Knobs · Props · Info (⌘1–⌘4). Trailing `.inspector` column: native,
+// Comments · Knobs · Content · Info (⌘1–⌘4). Trailing `.inspector` column: native,
 // full height, resizable, toggled from the toolbar (⌘⌥I).
 
 struct InspectorView: View {
@@ -12,13 +12,13 @@ struct InspectorView: View {
         VStack(spacing: 0) {
             Picker("Inspector", selection: $model.ui.inspectorTab) {
                 ForEach(InspectorTab.allCases) { tab in
-                    Text(label(tab)).tag(tab)
+                    Text(tab.title).tag(tab)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, StudioStyle.Space.m)
+            .padding(.vertical, StudioStyle.Space.s)
             Divider()
             Group {
                 switch model.ui.inspectorTab {
@@ -31,17 +31,5 @@ struct InspectorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .task(id: model.info?.name) { await model.inspector.sceneOpened() }
-    }
-
-    private func label(_ tab: InspectorTab) -> String {
-        switch tab {
-        case .comments:
-            let n = model.review.openCount + model.review.inProgressCount
-            return n > 0 ? "Comments \(n)" : "Comments"
-        case .knobs:
-            let n = model.info?.knobs.count ?? 0
-            return n > 0 ? "Knobs \(n)" : "Knobs"
-        default: return tab.title
-        }
     }
 }

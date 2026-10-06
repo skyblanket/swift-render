@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Settings
@@ -12,37 +13,49 @@ struct SettingsView: View {
     @AppStorage("playbackQuality") private var quality = PlaybackQuality.auto.rawValue
     @AppStorage("agentModel") private var agentModel = ""
     @AppStorage("agentBudgetUSD") private var agentBudget = 2.0
+    @AppStorage(StudioAppearance.key) private var appearance = StudioAppearance.fallback.rawValue
 
     var body: some View {
         TabView {
             Form {
-                Picker("Open sources in", selection: $editor) {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(StudioAppearance.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .onChange(of: appearance) { _, raw in
+                    NSApp.appearance = (StudioAppearance(rawValue: raw) ?? StudioAppearance.fallback).nsAppearance
+                }
+                Picker("Open Code In", selection: $editor) {
                     ForEach(EditorChoice.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                Section("Tool paths (empty = login shell PATH)") {
-                    TextField("swift", text: $swiftPath, prompt: Text("/usr/bin/swift"))
-                    TextField("claude", text: $claudePath, prompt: Text("~/.local/bin/claude"))
-                    TextField("git", text: $gitPath, prompt: Text("/usr/bin/git"))
+                Section {
+                    TextField("Swift", text: $swiftPath, prompt: Text("/usr/bin/swift"))
+                    TextField("Claude Code", text: $claudePath, prompt: Text("~/.local/bin/claude"))
+                    TextField("Git", text: $gitPath, prompt: Text("/usr/bin/git"))
                     TextField("ffmpeg", text: $ffmpegPath, prompt: Text("/opt/homebrew/bin/ffmpeg"))
+                } header: {
+                    Text("Tool Locations")
+                } footer: {
+                    Text("Leave these empty and Studio finds them the way your Terminal does.")
+                        .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
                 }
             }
             .tabItem { Label("General", systemImage: "gearshape") }
 
             Form {
-                Picker("Default quality", selection: $quality) {
+                Picker("Quality", selection: $quality) {
                     ForEach(PlaybackQuality.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                Stepper("Frame cache: \(cacheBudgetMB) MB", value: $cacheBudgetMB, in: 256...8192, step: 256)
+                Stepper("Frame Memory: \(cacheBudgetMB) MB", value: $cacheBudgetMB, in: 256...8192, step: 256)
             }
             .tabItem { Label("Playback", systemImage: "play.rectangle") }
 
             Form {
-                TextField("Model", text: $agentModel, prompt: Text("default"))
-                TextField("Budget per run (USD)", value: $agentBudget, format: .number)
+                TextField("Model", text: $agentModel, prompt: Text("Default"))
+                TextField("Spend Up To (USD)", value: $agentBudget, format: .number)
             }
-            .tabItem { Label("Agent", systemImage: "sparkles") }
+            .tabItem { Label("Claude", systemImage: "text.bubble") }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 300)
+        .frame(width: 500, height: 340)
     }
 }

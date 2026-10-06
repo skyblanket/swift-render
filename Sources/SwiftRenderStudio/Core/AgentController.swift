@@ -134,7 +134,7 @@ final class AgentController {
                 status("Checkpoint \(cp.sha.prefix(8)) → \(cp.ref)")
             } catch {
                 update(runID) { $0.checkpointError = "\(error)" }
-                notice("No checkpoint (\(error)) — this run can't be reverted from Studio")
+                notice("Studio couldn't save a restore point, so this run can't be undone from here (\(error))")
             }
         }
 
@@ -253,12 +253,12 @@ final class AgentController {
 
         // Claims the agent didn't close go back to the reviewers.
         var released: [String] = []
-        let why = run.stopped ? "the run was stopped" : (run.ok == true ? "it ended" : "the run failed")
+        let why = run.stopped ? "Claude was stopped" : (run.ok == true ? "Claude finished" : "Claude's run failed")
         for id in run.claimed {
             guard let e = try? store.resolve(id: id), e.comment.status == .inProgress,
                   e.comment.assignee?.kind == .agent else { continue }
             _ = try? store.reply(scene: e.scene, id: id, ReviewReply(
-                author: Self.studioAuthor, body: "Agent run ended without resolving this (\(why)); back to open."))
+                author: Self.studioAuthor, body: "\(why) without resolving this, so it's back on your list."))
             if (try? store.setStatus(scene: e.scene, id: id, .open)) != nil { released.append(id) }
         }
         if !released.isEmpty {
@@ -280,7 +280,7 @@ final class AgentController {
                 run.changedOutside = outside
             }
             if !outside.isEmpty {
-                notice("Also changed during the run, not by the agent's edit tools (Revert leaves these alone): "
+                notice("Also changed while Claude worked, not by Claude's edits (Undo leaves these alone): "
                        + outside.prefix(8).joined(separator: ", ") + (outside.count > 8 ? " +\(outside.count - 8) more" : ""))
             }
         }
@@ -323,15 +323,15 @@ final class AgentController {
             }.value
             update(runID) { $0.reverted = true; $0.stats = [] }
             let n = r.restored.count + r.trashed.count
-            status("Reverted \(n) file\(n == 1 ? "" : "s") to \(cp.sha.prefix(8))"
-                   + (r.trashed.isEmpty ? "" : " (\(r.trashed.count) new → Trash)"))
-            if let b = r.backupRef { notice("The files as they were before this revert: \(b)") }
+            status("Undid Claude's changes to \(n) file\(n == 1 ? "" : "s")"
+                   + (r.trashed.isEmpty ? "" : " (\(r.trashed.count) new file\(r.trashed.count == 1 ? "" : "s") moved to the Trash)"))
+            if let b = r.backupRef { notice("Studio kept a copy of the files from before the undo: \(b)") }
             for (reason, paths) in Dictionary(grouping: r.skipped, by: \.reason).sorted(by: { $0.key < $1.key }) {
-                notice("Not restored (\(reason)): " + paths.map(\.path).joined(separator: ", "))
+                notice("Left alone (\(reason)): " + paths.map(\.path).joined(separator: ", "))
             }
         } catch {
             lastError = "\(error)"
-            transcript.append(AgentTranscriptRow(kind: .error, title: "Revert failed: \(error)"))
+            transcript.append(AgentTranscriptRow(kind: .error, title: "Couldn't undo Claude's changes: \(error)"))
         }
     }
 

@@ -17,7 +17,7 @@ struct RulerLane: LaneRenderer {
 
     func draw(in ctx: inout GraphicsContext, size: CGSize, viewport v: TimelineViewport) {
         let (major, minor) = v.tickSpacing()
-        let tickColor = Color.white.opacity(0.30)
+        let tickColor = GraphicsContext.Shading.style(.tertiary)
         var minorPath = Path(), majorPath = Path()
         var t = max(0, (v.start / minor).rounded(.down) * minor)
         let end = min(v.end, duration)
@@ -31,8 +31,8 @@ struct RulerLane: LaneRenderer {
                 if labels < LaneDraw.maxLabels, x + 34 <= size.width {
                     labels += 1
                     ctx.draw(Text(TimelineViewport.label(t, major: major, fps: v.fps))
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.55)),
+                                .font(StudioStyle.Fonts.footnote).monospacedDigit()
+                                .foregroundStyle(.secondary),
                              at: CGPoint(x: x + 3, y: 8), anchor: .leading)
                 }
             } else {
@@ -40,25 +40,25 @@ struct RulerLane: LaneRenderer {
             }
             t += minor
         }
-        ctx.stroke(minorPath, with: .color(tickColor.opacity(0.6)), lineWidth: 1)
-        ctx.stroke(majorPath, with: .color(tickColor), lineWidth: 1)
+        ctx.stroke(minorPath, with: .style(.quaternary), lineWidth: 1)
+        ctx.stroke(majorPath, with: tickColor, lineWidth: 1)
 
         // Cache bar on a faint track, so "nothing cached yet" still reads as a bar.
         let xe = min(size.width, v.x(duration))
         ctx.fill(Path(CGRect(x: max(0, v.x(0)), y: size.height - 3, width: max(0, xe - max(0, v.x(0))), height: 3)),
-                 with: .color(.white.opacity(0.06)))
+                 with: .color(StudioStyle.well))
         for r in cached {
             let x0 = max(0, v.x(r.lowerBound)), x1 = min(v.width, v.x(r.upperBound))
             guard x1 > x0 else { continue }
             ctx.fill(Path(CGRect(x: x0, y: size.height - 3, width: max(1, x1 - x0), height: 3)),
-                     with: .color(StudioStyle.ok.opacity(0.85)))
+                     with: .color(StudioStyle.cached))
         }
 
         // In/out: tinted span and two flags.
         if let io = inOut {
             let x0 = v.x(io.lowerBound), x1 = v.x(io.upperBound)
             ctx.fill(Path(CGRect(x: x0, y: 14, width: max(1, x1 - x0), height: size.height - 17)),
-                     with: .color(StudioStyle.accent.opacity(0.14)))
+                     with: .color(StudioStyle.accent.opacity(0.12)))
             var edges = Path()
             edges.move(to: CGPoint(x: x0, y: 14)); edges.addLine(to: CGPoint(x: x0, y: size.height - 3))
             edges.move(to: CGPoint(x: x1, y: 14)); edges.addLine(to: CGPoint(x: x1, y: size.height - 3))
@@ -69,7 +69,7 @@ struct RulerLane: LaneRenderer {
 
         // Past the end of the scene.
         if xe < size.width {
-            ctx.fill(Path(CGRect(x: xe, y: 0, width: size.width - xe, height: size.height)), with: .color(.black.opacity(0.35)))
+            ctx.fill(Path(CGRect(x: xe, y: 0, width: size.width - xe, height: size.height)), with: .color(StudioStyle.well))
         }
     }
 
@@ -87,8 +87,7 @@ struct RulerLane: LaneRenderer {
         }
         p.closeSubpath()
         ctx.fill(p, with: .color(StudioStyle.accent))
-        ctx.draw(Text(label).font(.system(size: 7.5, weight: .heavy, design: .rounded)).foregroundStyle(.black.opacity(0.8)),
-                 at: CGPoint(x: r.midX, y: r.midY))
+        _ = label
     }
 
     /// The in or out flag under `p` (drag adjusts that edge); nil means scrub.
@@ -101,7 +100,7 @@ struct RulerLane: LaneRenderer {
         let t = isIn ? io.lowerBound : io.upperBound
         return LaneHit(kind: .inOut, id: isIn ? "in" : "out", start: t, end: t,
                        part: isIn ? .startHandle : .endHandle,
-                       title: isIn ? "In \(StudioStyle.timecode(t))" : "Out \(StudioStyle.timecode(t))",
-                       detail: "In→out " + LaneDraw.seconds(io.upperBound - io.lowerBound))
+                       title: isIn ? "In \(StudioTime.precise(t))" : "Out \(StudioTime.precise(t))",
+                       detail: "Range " + LaneDraw.seconds(io.upperBound - io.lowerBound) + ". Drag to adjust.")
     }
 }

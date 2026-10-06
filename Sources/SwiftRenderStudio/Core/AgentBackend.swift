@@ -25,9 +25,9 @@ struct AgentRequest: Sendable, Equatable {
 
         var title: String {
             switch self {
-            case .fix: return "Fix & resolve"
-            case .plan: return "Propose only"
-            case .reply: return "Reply only"
+            case .fix: return "Fix It"
+            case .plan: return "Suggest a Fix"
+            case .reply: return "Just Reply"
             }
         }
 

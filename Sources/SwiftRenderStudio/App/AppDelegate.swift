@@ -11,8 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A bare `swift run` binary isn't a bundle: without this it can launch behind
         // other apps and never become key.
         NSApp.setActivationPolicy(.regular)
-        NSApp.appearance = NSAppearance(named: .darkAqua)      // a pro video app: always dark
-        if Bundle.main.bundleIdentifier == nil, let icon = NSImage(systemSymbolName: "film.stack.fill", accessibilityDescription: nil) {
+        // Dark by default; View › Appearance (or --appearance) can follow the system or go light.
+        NSApp.appearance = StudioAppearance.current.nsAppearance
+        if Bundle.main.bundleIdentifier == nil, let icon = NSImage(systemSymbolName: "film", accessibilityDescription: nil) {
             NSApp.applicationIconImage = icon
         }
         NSApp.activate()

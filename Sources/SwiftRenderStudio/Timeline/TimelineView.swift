@@ -13,23 +13,33 @@ import SwiftRenderKit
 struct TimelineView: View {
     @Bindable var model: ProjectModel
     @State private var state = TimelineState()
-    static let headerWidth: CGFloat = 124
+    static let headerWidth: CGFloat = 116
+    /// Air before 0:00, so the first label and the playhead's cap are never cut off.
+    static let gutter: CGFloat = 10
 
     var body: some View {
         let layout = TimelineLayout(info: model.info)
         HStack(spacing: 0) {
             TimelineHeaderColumn(model: model, state: state, layout: layout)
                 .frame(width: Self.headerWidth)
-                .background(StudioStyle.laneAltBackground)
-            Rectangle().fill(Color.black.opacity(0.6)).frame(width: 1)
+                .background(StudioStyle.chromeAlt)
+            StudioStyle.hairline.frame(width: 1)
             GeometryReader { geo in
-                TimelineLanesColumn(model: model, state: state, layout: layout, size: geo.size)
+                let lanes = CGSize(width: max(1, geo.size.width - Self.gutter), height: geo.size.height)
+                ZStack(alignment: .topLeading) {
+                    StudioStyle.chromeAlt
+                        .frame(width: geo.size.width, height: TimelineLayout.rulerHeight)
+                    TimelineLanesColumn(model: model, state: state, layout: layout, size: lanes)
+                        .offset(x: Self.gutter)
+                    PlayheadOverlay(model: model, inset: Self.gutter)
+                        .frame(width: geo.size.width, height: max(0, geo.size.height - TimelineLayout.scrollerHeight))
+                }
             }
             .clipped()
         }
-        .background(StudioStyle.laneBackground)
+        .background(StudioStyle.chrome)
         .overlay(ScrollCatcher(
-            lanesX: Self.headerWidth + 1,
+            lanesX: Self.headerWidth + 1 + Self.gutter,
             onPan: { dx in model.ui.viewport.pan(by: dx) },
             onZoom: { f, x in model.ui.viewport.zoom(by: f, around: x) },
             onScrollY: { dy in
@@ -58,17 +68,16 @@ struct TimelineLanesColumn: View {
             VStack(spacing: 0) {
                 LaneView(key: .ruler, model: model, state: state)
                     .frame(height: TimelineLayout.rulerHeight)
-                    .background(Color.black.opacity(0.28))
-                    .overlay(alignment: .bottom) { Color.black.opacity(0.5).frame(height: 1) }
+                    .background(StudioStyle.chromeAlt)
+                    .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
                 Color.clear
                     .frame(height: lanesHeight)
                     .overlay(alignment: .top) {
                         VStack(spacing: 0) {
-                            ForEach(Array(layout.slots.enumerated()), id: \.element.key) { i, slot in
+                            ForEach(layout.slots, id: \.key) { slot in
                                 LaneView(key: slot.key, model: model, state: state)
                                     .frame(height: slot.height)
-                                    .background(i % 2 == 0 ? StudioStyle.laneBackground : StudioStyle.laneAltBackground)
-                                    .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+                                    .overlay(alignment: .bottom) { StudioStyle.hairline.opacity(0.6).frame(height: 1) }
                             }
                         }
                         .offset(y: -state.scrollY)
@@ -76,7 +85,7 @@ struct TimelineLanesColumn: View {
                     .overlay(alignment: .bottom) {
                         // More lanes below: scroll vertically to reach them.
                         if state.scrollY < layout.maxScroll(lanesHeight: lanesHeight) - 0.5 {
-                            LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+                            LinearGradient(colors: [.clear, StudioStyle.chrome], startPoint: .top, endPoint: .bottom)
                                 .frame(height: 12)
                                 .allowsHitTesting(false)
                         }
@@ -89,8 +98,6 @@ struct TimelineLanesColumn: View {
                 .frame(height: lanesHeight)
                 .offset(y: TimelineLayout.rulerHeight)
             TimelineHoverOverlay(model: model, state: state, layout: layout, lanesHeight: lanesHeight)
-                .frame(height: TimelineLayout.rulerHeight + lanesHeight)
-            PlayheadOverlay(model: model)
                 .frame(height: TimelineLayout.rulerHeight + lanesHeight)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -268,7 +275,7 @@ struct TimelineInput {
                     try model.review.retimeComment(h.id, t: r.t, end: r.end)
                     model.review.selection = h.id
                 } catch {
-                    model.ui.toast = "Couldn't retime comment: \(error)"
+                    model.ui.toast = "Couldn't move the comment. \(error)"
                 }
             } else {
                 selectComment(h.id, at: h.start)
@@ -299,6 +306,7 @@ struct TimelineInput {
             model.playback.pause()
             model.playback.seek(t, precise: true)
             model.review.beginComment(t: t)
+            model.review.threadOpen = false
             model.ui.inspectorTab = .comments
             model.ui.showInspector = true
             return
@@ -308,7 +316,7 @@ struct TimelineInput {
         case .clip:
             guard let c = model.info?.clips.first(where: { $0.id == h.id }) else { return }
             model.ui.selectedClipID = c.id
-            if let src = c.source { SourceOpener.open(src) } else { model.ui.toast = "No source location for this clip" }
+            if let src = c.source { SourceOpener.open(src) } else { model.ui.toast = "This clip has no source line to open" }
         case .comment:
             selectComment(h.id, at: h.start)
         default:
@@ -317,7 +325,7 @@ struct TimelineInput {
     }
 
     func selectComment(_ id: String, at t: Double) {
-        model.review.selection = id
+        model.review.open(id)
         model.ui.inspectorTab = .comments
         model.ui.showInspector = true
         model.playback.seek(t, precise: true)
@@ -366,7 +374,7 @@ struct TimelineContextMenu: View {
             Button("Set In/Out to Clip") { model.playback.setInOut(c.start...c.end) }
             Button("Go to Clip Start") { model.playback.seek(c.start, precise: true) }
             if let src = c.source {
-                Button("Open Source (\((src.file as NSString).lastPathComponent):\(src.line))") {
+                Button("Open \((src.file as NSString).lastPathComponent)") {
                     model.ui.selectedClipID = c.id
                     SourceOpener.open(src)
                 }

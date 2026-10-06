@@ -3,58 +3,81 @@ import SwiftUI
 import SwiftRenderKit
 
 // MARK: - Welcome
+//
+// Open a project (or start a launch film), see how the loop works in three steps, and
+// pick up a recent project on the right.
 
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var recents = Recents.all
+    @AppStorage(StudioAppearance.key) private var appearance = StudioAppearance.fallback.rawValue
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                Image(systemName: "film.stack.fill")
-                    .font(.system(size: 44))
-                    .foregroundStyle(StudioStyle.accent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("swift-render Studio").font(.system(size: 26, weight: .bold))
-                    Text("Launch films for Swift codebases").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: StudioStyle.Space.l) {
+                Image(systemName: StudioStyle.Symbol.film)
+                    .font(StudioStyle.Fonts.emptyGlyph)
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(StudioStyle.accent, in: StudioStyle.rounded(StudioStyle.Radius.large))
+                VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                    Text("swift-render Studio").font(.largeTitle.weight(.semibold))
+                    Text("Make films with SwiftUI, then polish them with Claude.")
+                        .font(StudioStyle.Fonts.body).foregroundStyle(.secondary)
                 }
-                Spacer().frame(height: 6)
-                action("Open Project…", "folder", "⌘O") { if let url = Self.chooseProject() { open(url) } }
-                action("New Launch Film from Codebase…", "sparkles.tv", nil) {
-                    if let url = Self.chooseProject() { open(url) }
+                VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+                    step(1, "Open a Swift package that uses swift-render.")
+                    step(2, "Watch your film. Press C to leave a comment on any moment.")
+                    step(3, "Ask Claude to fix it. Changes play the moment they build.")
                 }
-                Spacer()
+                .padding(.vertical, StudioStyle.Space.xs)
+                Spacer(minLength: 0)
+                HStack(spacing: StudioStyle.Space.s) {
+                    Button("Open Project…") { if let url = Self.chooseProject() { open(url) } }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut("o")
+                    Button("New Launch Film…") { if let url = Self.chooseProject() { open(url) } }
+                        .help("Pick an app's folder and Studio drafts a launch film from it")
+                }
+                .controlSize(.large)
             }
-            .padding(32)
-            .frame(width: 330, alignment: .leading)
+            .padding(StudioStyle.Space.xl + StudioStyle.Space.s)
+            .frame(width: 400, alignment: .leading)
 
             Divider()
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("Recent").font(.headline).padding(16)
+                Text("Recent").font(StudioStyle.Fonts.headline)
+                    .padding(.horizontal, StudioStyle.Space.l).padding(.top, StudioStyle.Space.l).padding(.bottom, StudioStyle.Space.s)
                 if recents.isEmpty {
-                    ContentUnavailableView("No recent projects", systemImage: "clock",
-                                           description: Text("Open a package whose executable links SwiftRenderTool."))
+                    StudioEmptyState(title: "No recent projects", symbol: "clock",
+                                     message: "Projects you open show up here.")
                 } else {
                     List(recents, id: \.self) { url in
                         Button { open(url) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(url.lastPathComponent).font(.body.weight(.medium))
-                                Text(url.path(percentEncoded: false)).font(.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).truncationMode(.head)
+                            HStack(spacing: StudioStyle.Space.s) {
+                                Image(systemName: "folder").foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(url.lastPathComponent).font(StudioStyle.Fonts.bodyEmphasis)
+                                    Text(url.path(percentEncoded: false)).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.head)
+                                }
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .padding(.vertical, 2)
                     }
                     .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
                 }
             }
-            .frame(width: 360)
+            .frame(width: 340)
+            .background(StudioStyle.chromeAlt)
         }
-        .frame(height: 380)
-        .preferredColorScheme(.dark)
+        .frame(height: 420)
+        .preferredColorScheme(scheme)
         .onAppear {
             if let p = StudioLaunch.options.projectPath {
                 StudioLaunch.options.projectPath = nil      // only the first time
@@ -63,18 +86,21 @@ struct WelcomeView: View {
         }
     }
 
-    private func action(_ title: String, _ symbol: String, _ shortcut: String?, perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
-            HStack {
-                Image(systemName: symbol).frame(width: 20)
-                Text(title)
-                Spacer()
-                if let shortcut { Text(shortcut).foregroundStyle(.tertiary) }
-            }
-            .contentShape(Rectangle())
+    private var scheme: ColorScheme? {
+        if let a = StudioLaunch.options.appearance { return a.colorScheme }
+        return (StudioAppearance(rawValue: appearance) ?? StudioAppearance.fallback).colorScheme
+    }
+
+    private func step(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+            Text("\(n)")
+                .font(StudioStyle.Fonts.rounded(11, weight: .bold))
+                .foregroundStyle(StudioStyle.discInk)
+                .frame(width: 20, height: 20)
+                .background(StudioStyle.discFill, in: Circle())
+            Text(text).font(StudioStyle.Fonts.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.plain)
-        .font(.system(size: 13, weight: .medium))
     }
 
     private func open(_ url: URL) {

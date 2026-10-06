@@ -3,89 +3,71 @@ import SwiftRenderKit
 
 // MARK: - Comment composer
 //
-// One composer for every entry point (C, R/⌥-drag, timeline, toolbar). Region drafts
-// float next to their rect in the viewer; time-only drafts sit atop the Comments tab.
-// Post ⌘↩ · Post & Ask Claude ⌘⇧↩ · Esc cancels. The text lives in `review.draft`
-// so the draft survives switching tabs.
+// One composer for every entry point (C, R/⌥-drag, timeline, toolbar). A region draft
+// floats beside its spot in the viewer (never over it); a time-only draft, or a region
+// with no room beside it, sits atop the Comments tab. Post ⌘↩ · Ask Claude ⌘⇧↩ · Esc
+// cancels. The text lives in `review.draft`, so it survives switching tabs.
 
 struct CommentComposer: View {
     @Bindable var model: ProjectModel
-    /// Floating card (viewer) vs inline banner (inspector).
+    /// Floating card (viewer) vs inline (inspector).
     var floating = false
     @FocusState private var focused: Bool
     @State private var posting = false
 
     var body: some View {
         if let draft = model.review.draft {
-            VStack(alignment: .leading, spacing: 8) {
-                header(draft)
-                TextField("What should change?", text: Binding(
+            VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+                HStack(spacing: StudioStyle.Space.s) {
+                    AuthorAvatar(author: ReviewAuthor(name: model.review.authorName), size: 22)
+                    Text("New Comment · \(StudioTime.range(draft.t, draft.end))")
+                        .font(StudioStyle.Fonts.calloutEmphasis)
+                        .monospacedDigit()
+                        .help(StudioTime.frameHelp(draft.t, fps: model.info?.fps ?? 60))
+                    Spacer(minLength: StudioStyle.Space.xs)
+                    Button { model.review.draft = nil } label: { Image(systemName: StudioStyle.Symbol.close) }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Cancel (Esc)")
+                }
+                TextField("What's off here?", text: Binding(
                     get: { model.review.draft?.body ?? "" },
                     set: { model.review.draft?.body = $0 }), axis: .vertical)
                     .lineLimit(2...6)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
-                    .padding(7)
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(focused ? 0.25 : 0.1)))
+                    .font(StudioStyle.Fonts.body)
                     .focused($focused)
+                    .studioField(focused: focused)
                     .onExitCommand { model.review.draft = nil }
                 if ReviewController.mentionsAgent(draft.body) {
-                    Label("@claude queues this thread for the next run", systemImage: "sparkles")
-                        .font(.system(size: 10)).foregroundStyle(ReviewStyle.agent)
+                    Text("Claude will pick this up next time you ask.")
+                        .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    Image(systemName: "camera.viewfinder").font(.system(size: 10)).foregroundStyle(.tertiary)
-                        .help("Posting saves this frame as the comment's BEFORE still")
-                    Spacer(minLength: 4)
-                    if posting { ProgressView().controlSize(.mini) }
-                    Button("Post & Ask Claude") { post(ask: true) }
+                HStack(spacing: StudioStyle.Space.s) {
+                    if posting { ProgressView().controlSize(.small) }
+                    Spacer(minLength: StudioStyle.Space.xs)
+                    Button("Ask Claude") { post(ask: true) }
                         .keyboardShortcut(.return, modifiers: [.command, .shift])
-                        .help("Post, then ask Claude about this thread (⌘⇧↩)")
+                        .help("Post, then ask Claude about it (⌘⇧↩)")
                     Button("Post") { post(ask: false) }
                         .keyboardShortcut(.return, modifiers: .command)
                         .buttonStyle(.borderedProminent)
-                        .help("Post (⌘↩)")
+                        .help("Saves this frame so you can compare before and after. (⌘↩)")
                 }
-                .controlSize(.small)
                 .disabled(posting || draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(10)
-            .frame(width: floating ? 330 : nil)
+            .padding(floating ? StudioStyle.Space.m : StudioStyle.Space.gutter)
+            .frame(width: floating ? RegionTool.composerSize.width : nil)
             .background {
                 if floating {
-                    RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.13).opacity(0.97))
-                        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                } else {
-                    StudioStyle.accent.opacity(0.06)
+                    StudioStyle.rounded(StudioStyle.Radius.large).fill(StudioStyle.raised)
+                        .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
                 }
             }
             .overlay {
-                if floating { RoundedRectangle(cornerRadius: 10).strokeBorder(StudioStyle.accent.opacity(0.35)) }
+                if floating { StudioStyle.rounded(StudioStyle.Radius.large).strokeBorder(StudioStyle.hairline) }
             }
             .onAppear { focused = true }
         }
-    }
-
-    private func header(_ d: CommentDraft) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: d.region == nil ? "text.bubble" : RegionMath.isPoint(d.region!) ? "mappin" : "rectangle.dashed")
-                .foregroundStyle(StudioStyle.accent)
-            Text("New comment").font(.system(size: 11.5, weight: .semibold))
-            Text(timecode(d)).font(StudioStyle.monoSmall).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Button { model.review.draft = nil } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .help("Cancel (Esc)")
-        }
-    }
-
-    private func timecode(_ d: CommentDraft) -> String {
-        let fps = model.info?.fps
-        let a = "\(StudioStyle.timecode(d.t)) \(ReviewStyle.frame(d.t, fps: fps))"
-        guard let e = d.end else { return a }
-        return "\(StudioStyle.timecode(d.t))–\(StudioStyle.timecode(e))"
     }
 
     private func post(ask: Bool) {
@@ -99,7 +81,7 @@ struct CommentComposer: View {
                     if ask { model.perform(.askAgent) }
                 }
             } catch {
-                model.ui.toast = "Couldn't post: \(error)"
+                model.ui.toast = "Couldn't post that. \(error)"
             }
             posting = false
         }

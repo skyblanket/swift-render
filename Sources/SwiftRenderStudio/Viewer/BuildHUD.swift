@@ -2,74 +2,111 @@ import AppKit
 import SwiftUI
 import SwiftRenderKit
 
-// MARK: - Build HUD
+// MARK: - Build status
 //
-// Toolbar pill (Built 1.3s · Building [12/40] · Waiting for another swift build ·
-// N errors · Host starting · Host crashed), a diagnostics popover whose rows open
-// the source in the editor, and the crash card shown over the viewer.
+// The toolbar's activity view ("Up to date", "Building… 30%", "Claude's on it · 0:42",
+// "Build Failed · 2 Errors"), the diagnostics popover it opens (rows open the source),
+// the build banner over the viewer, and the crash card. Build errors win over a stopped
+// preview: a failed build is the reason the preview stopped, so that is what we say.
 
-struct BuildPill: View {
+struct ActivityStatus: Equatable {
+    enum Tone: Equatable { case calm, busy, error }
+    var text: String
+    var tone: Tone
+    /// 0…1 when known (builds).
+    var fraction: Double?
+    var help: String
+    /// Claude's run start: the view appends a live elapsed time.
+    var since: Date?
+
+    @MainActor
+    static func make(_ model: ProjectModel) -> ActivityStatus {
+        let b = model.build, h = model.host, a = model.agent
+        if a.isRunning, let run = a.currentRun {
+            return ActivityStatus(text: a.isStopping ? "Stopping Claude…" : "Claude's on it", tone: .busy,
+                                  help: "Claude is working. Click for build details.", since: run.startedAt)
+        }
+        if case .failed(let diags, _) = b.phase {
+            let errs = diags.filter { $0.severity == .error }.count
+            if errs > 0 {
+                return ActivityStatus(text: "Build Failed · \(errs) Error\(errs == 1 ? "" : "s")", tone: .error,
+                                      help: "Click to see what went wrong")
+            }
+        }
+        if case .crashed = h.state { return ActivityStatus(text: "Preview crashed", tone: .error, help: "The film crashed. Studio is restarting it.") }
+        switch b.phase {
+        case .building:
+            let f = b.progress.flatMap { $0.total > 0 ? Double($0.done) / Double($0.total) : nil }
+            return ActivityStatus(text: f.map { "Building… \(Int(($0 * 100).rounded()))%" } ?? "Building…", tone: .busy,
+                                  fraction: f, help: "Building \(b.product)")
+        case .waitingForLock:
+            return ActivityStatus(text: "Waiting for another build…", tone: .busy,
+                                  help: "Another swift build is using this folder. Studio goes next.")
+        default: break
+        }
+        switch h.state {
+        case .swapping: return ActivityStatus(text: "Updating…", tone: .busy, help: "Switching to the new build")
+        case .failed: return ActivityStatus(text: "Preview stopped", tone: .error, help: "Click for details")
+        case .starting, .idle: return ActivityStatus(text: "Warming up…", tone: .busy, help: "Starting the preview")
+        default: break
+        }
+        if case .succeeded(let s, let at) = b.phase {
+            return ActivityStatus(text: "Up to date", tone: .calm,
+                                  help: "Built in \(StudioTime.compact(s)) at \(at.formatted(date: .omitted, time: .shortened))")
+        }
+        return ActivityStatus(text: "Up to date", tone: .calm, help: model.isFake ? "Running a stand-in preview" : "Ready")
+    }
+}
+
+/// Xcode-style status field in the toolbar's principal slot.
+struct ActivityView: View {
     @Bindable var model: ProjectModel
 
-    private enum Tone { case ok, busy, bad, neutral }
-
-    private var state: (tone: Tone, symbol: String, text: String) {
-        let b = model.build, h = model.host
-        if case .crashed = h.state { return (.bad, "xmark.octagon.fill", "Host crashed") }
-        if case .failed = h.state, !b.isBuilding { return (.bad, "xmark.octagon.fill", "Host stopped") }
-        switch b.phase {
-        case .waitingForLock: return (.busy, "hourglass", "Waiting for another swift build")
-        case .building:
-            if let p = b.progress { return (.busy, "hammer.fill", "Building… [\(p.done)/\(p.total)]") }
-            return (.busy, "hammer.fill", "Building…")
-        case .failed(let errs, _):
-            let muted = b.agentEditing ? " (agent editing)" : ""
-            return (.bad, "exclamationmark.triangle.fill", "\(errs.count) error\(errs.count == 1 ? "" : "s")\(muted)")
-        case .succeeded(let s, let at):
-            if case .swapping = h.state { return (.busy, "arrow.triangle.2.circlepath", "Swapping host…") }
-            return (.ok, "checkmark.circle.fill", String(format: "Built %.1fs · ", s) + at.formatted(date: .omitted, time: .shortened))
-        case .idle:
-            switch h.state {
-            case .starting: return (.neutral, "circle.dotted", "Host starting")
-            case .ready: return (.ok, "checkmark.circle.fill", model.isFake ? "Fake host ready" : "Ready")
-            case .swapping: return (.busy, "arrow.triangle.2.circlepath", "Swapping host…")
-            case .idle: return (.neutral, "circle.dotted", "Idle")
-            default: return (.neutral, "circle.dotted", "Starting")
-            }
-        }
-    }
-
-    private func color(_ t: Tone) -> Color {
-        switch t {
-        case .ok: return StudioStyle.ok
-        case .busy: return StudioStyle.warn
-        case .bad: return StudioStyle.bad
-        case .neutral: return .secondary
-        }
-    }
-
     var body: some View {
-        let s = state
-        Button {
-            model.ui.showBuildPopover.toggle()
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: s.symbol)
-                    .foregroundStyle(color(s.tone))
-                    .symbolEffect(.pulse, isActive: s.tone == .busy)
-                Text(s.text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 230, alignment: .leading)
-                Text("gen \(model.host.generation)")
-                    .foregroundStyle(.tertiary)
+        let s = ActivityStatus.make(model)
+        Button { model.ui.showBuildPopover.toggle() } label: {
+            HStack(spacing: StudioStyle.Space.s) {
+                glyph(s)
+                Group {
+                    if let since = s.since {
+                        SwiftUI.TimelineView(.periodic(from: since, by: 1)) { ctx in
+                            Text("\(s.text) · \(StudioTime.compact(ctx.date.timeIntervalSince(since)).replacingOccurrences(of: " s", with: "s"))")
+                        }
+                    } else {
+                        Text(s.text)
+                    }
+                }
+                .font(StudioStyle.Fonts.callout)
+                .monospacedDigit()
+                .foregroundStyle(s.tone == .error ? AnyShapeStyle(StudioStyle.error) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
             }
-            .font(.system(size: 11, weight: .medium))
-            .monospacedDigit()
+            .padding(.horizontal, StudioStyle.Space.m)
+            .frame(minWidth: 200, maxWidth: 320, minHeight: 24)
+            .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.medium))
+            .overlay(alignment: .bottom) {
+                if let f = s.fraction {
+                    GeometryReader { g in
+                        Capsule().fill(StudioStyle.accent).frame(width: g.size.width * f, height: 2)
+                    }
+                    .frame(height: 2)
+                    .padding(.horizontal, StudioStyle.Space.s)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .help("Build status — click for diagnostics (⌘B to build)")
+        .buttonStyle(.plain)
+        .help(s.help)
         .popover(isPresented: $model.ui.showBuildPopover, arrowEdge: .bottom) {
             BuildDiagnosticsPopover(model: model)
+        }
+    }
+
+    @ViewBuilder private func glyph(_ s: ActivityStatus) -> some View {
+        switch s.tone {
+        case .busy: ProgressView().controlSize(.mini)
+        case .error: Image(systemName: StudioStyle.Symbol.error).foregroundStyle(StudioStyle.error)
+        case .calm: Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
         }
     }
 }
@@ -81,102 +118,91 @@ struct BuildDiagnosticsPopover: View {
         let b = model.build
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(headline).font(.headline)
+                Text(headline).font(StudioStyle.Fonts.headline)
                 Spacer()
-                Button { model.perform(.build) } label: { Label("Build", systemImage: "hammer") }
+                Button("Rebuild Now") { model.perform(.build) }
                     .keyboardShortcut("b", modifiers: .command)
                     .disabled(b.isBuilding)
             }
-            .padding(12)
-            if let swapError = model.host.swapError {
-                Label(swapError, systemImage: "arrow.uturn.backward.circle")
-                    .font(.callout).foregroundStyle(StudioStyle.warn)
-                    .padding(.horizontal, 12).padding(.bottom, 8)
+            .padding(StudioStyle.Space.m)
+            if model.host.swapError != nil {
+                Label("The new build didn't start, so Studio kept the last one that worked.", systemImage: "arrow.uturn.backward.circle")
+                    .font(StudioStyle.Fonts.callout).foregroundStyle(.secondary)
+                    .help(model.host.swapError ?? "")
+                    .padding(.horizontal, StudioStyle.Space.m).padding(.bottom, StudioStyle.Space.s)
             }
             Divider()
             if b.diagnostics.isEmpty {
-                ContentUnavailableView("No diagnostics", systemImage: "checkmark.seal",
-                                       description: Text(b.isBuilding ? "Building…" : "The last build was clean."))
-                    .frame(height: 140)
+                StudioEmptyState(title: b.isBuilding ? "Building…" : "All clear", symbol: StudioStyle.Symbol.build,
+                                 message: b.isBuilding ? nil : "The last build had no errors or warnings.")
+                    .frame(height: 150)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(b.diagnostics, id: \.self) { d in
                             DiagnosticRow(diagnostic: d, root: model.project.root)
-                            Divider().opacity(0.4)
+                            Divider().opacity(0.5)
                         }
                     }
                 }
-                .frame(maxHeight: 260)
+                .frame(maxHeight: 280)
             }
             Divider()
             HStack {
-                Button("Copy log") {
+                Button("Copy Log") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(b.log, forType: .string)
                 }
                 Spacer()
-                Button {
+                Button("Ask Claude to Fix") {
                     model.ui.showBuildPopover = false
                     model.perform(.askAgent)
-                } label: { Label("Ask Claude to fix the build", systemImage: "sparkles") }
-                    .disabled(b.errors.isEmpty)
+                }
+                .disabled(b.errors.isEmpty)
             }
-            .padding(10)
+            .padding(StudioStyle.Space.m)
         }
-        .frame(width: 560)
+        .frame(width: 520)
     }
 
     private var headline: String {
         let b = model.build
         switch b.phase {
         case .failed(let errs, _):
-            let w = b.warnings.count
-            return "\(errs.count) error\(errs.count == 1 ? "" : "s") · \(w) warning\(w == 1 ? "" : "s") — showing gen \(model.host.generation)"
-        case .succeeded(let s, _): return String(format: "Build %d succeeded (%.1fs)", b.generation, s)
-        case .building(let line): return line
-        case .waitingForLock: return "Waiting for another swift build"
+            return "Build failed · " + BuildErrorBanner.counts(errors: errs.filter { $0.severity == .error }.count, warnings: b.warnings.count)
+        case .succeeded(let s, _): return "Up to date · built in \(StudioTime.compact(s))"
+        case .building: return "Building…"
+        case .waitingForLock: return "Waiting for another build…"
         case .idle: return "Build"
         }
     }
 }
 
+/// A compiler message: the message in callout, file:line under it in small monospace.
 struct DiagnosticRow: View {
     var diagnostic: CompilerDiagnostic
     var root: URL
-    /// One line (file:line:col first), for the viewer banner.
-    var compact = false
 
     var body: some View {
         let d = diagnostic
         Button {
             if !d.file.isEmpty { SourceOpener.open(d) }
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: d.severity == .error ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(d.severity == .error ? StudioStyle.bad : StudioStyle.warn)
-                    .frame(width: 14)
-                if compact {
-                    Text(d.file.isEmpty ? "build" : "\(URL(fileURLWithPath: d.file).lastPathComponent):\(d.line):\(d.column)")
-                        .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
-                        .frame(minWidth: 150, alignment: .leading)
-                    Text(d.message).font(.system(size: 11)).lineLimit(1).truncationMode(.tail)
-                } else {
+            HStack(alignment: .firstTextBaseline, spacing: StudioStyle.Space.s) {
+                Image(systemName: d.severity == .error ? StudioStyle.Symbol.error : StudioStyle.Symbol.warning)
+                    .foregroundStyle(d.severity == .error ? StudioStyle.error : StudioStyle.warning)
+                    .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(d.message).font(.callout).lineLimit(3).multilineTextAlignment(.leading)
+                    Text(d.message).font(StudioStyle.Fonts.callout).lineLimit(2).multilineTextAlignment(.leading)
                     if !d.file.isEmpty {
-                        Text("\(relative(d.file)):\(d.line):\(d.column)")
-                            .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
+                        Text("\(relative(d.file)):\(d.line)")
+                            .font(StudioStyle.Fonts.codeSmall).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                     }
                 }
-                }
-                Spacer(minLength: 8)
-                if !d.file.isEmpty {
-                    Image(systemName: "arrow.up.forward.square").foregroundStyle(.secondary)
-                }
+                Spacer(minLength: StudioStyle.Space.s)
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12).padding(.vertical, compact ? 3 : 7)
+            .padding(.horizontal, StudioStyle.Space.m).padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .help(d.file.isEmpty ? "" : "Open in \(SourceOpener.preferred.title)")
@@ -188,9 +214,9 @@ struct DiagnosticRow: View {
     }
 }
 
-/// Build errors above the viewer (§1.6): the first few diagnostics, each opening its
-/// source; the viewer below keeps showing the last good build. Muted while an agent
-/// is mid-edit (its intermediate states often don't compile).
+/// Build errors above the viewer, on chrome (no wash): only the glyphs are colored. The
+/// viewer below keeps showing the last good build. Quiet while Claude is mid-edit (its
+/// in-between states often don't compile).
 struct BuildErrorBanner: View {
     @Bindable var model: ProjectModel
     var errors: [CompilerDiagnostic]
@@ -201,82 +227,83 @@ struct BuildErrorBanner: View {
         let muted = b.agentEditing
         let rows = Array((errors + b.warnings).prefix(3))
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Circle().fill(muted ? Color.secondary : StudioStyle.bad).frame(width: 7, height: 7)
-                Text(summary).font(.system(size: 11, weight: .semibold))
-                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: 8)
-                Button { model.perform(.askAgent) } label: { Label("Ask Claude to Fix", systemImage: "sparkles") }
+            HStack(spacing: StudioStyle.Space.s) {
+                Image(systemName: StudioStyle.Symbol.error)
+                    .foregroundStyle(muted ? AnyShapeStyle(.secondary) : AnyShapeStyle(StudioStyle.error))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(muted ? "Claude's editing" : "Build failed · " + Self.counts(errors: errors.count, warnings: b.warnings.count))
+                        .font(StudioStyle.Fonts.calloutEmphasis)
+                    Text(detail).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: StudioStyle.Space.s)
+                Button("Ask Claude to Fix") { model.perform(.askAgent) }
                     .help("⌘⇧A")
-                Button { model.ui.showBuildPopover = true } label: { Text("All…") }
+                    .disabled(muted)
+                Button("Show All Errors") { model.ui.showBuildPopover = true }
                 Button { withAnimation(.snappy(duration: 0.2)) { expanded.toggle() } } label: {
                     Image(systemName: "chevron.down").rotationEffect(.degrees(expanded ? 0 : -90))
                 }
+                .buttonStyle(.borderless)
+                .help(expanded ? "Hide the errors" : "Show the errors")
             }
-            .buttonStyle(.borderless)
             .controlSize(.small)
-            .padding(.horizontal, 10)
-            .frame(height: 28)
+            .padding(.horizontal, StudioStyle.Space.m)
+            .padding(.vertical, StudioStyle.Space.s)
             if expanded {
-                ForEach(rows, id: \.self) { d in
-                    DiagnosticRow(diagnostic: d, root: model.project.root, compact: true)
-                }
-                .padding(.bottom, 2)
+                ForEach(rows, id: \.self) { d in DiagnosticRow(diagnostic: d, root: model.project.root) }
+                    .padding(.bottom, StudioStyle.Space.xs)
             }
         }
-        .background((muted ? Color.gray : StudioStyle.bad).opacity(0.10))
-        .overlay(alignment: .bottom) { Rectangle().fill(StudioStyle.hairline).frame(height: 1) }
-        .opacity(muted ? 0.75 : 1)
+        .background(StudioStyle.chrome)
+        .overlay(alignment: .bottom) { StudioStyle.hairline.frame(height: 1) }
+        .opacity(muted ? 0.7 : 1)
     }
 
-    private var summary: String {
-        let w = model.build.warnings.count
-        return "\(errors.count) error\(errors.count == 1 ? "" : "s")" + (w > 0 ? " · \(w) warning\(w == 1 ? "" : "s")" : "")
+    /// "2 errors, 1 warning".
+    static func counts(errors: Int, warnings: Int) -> String {
+        "\(errors) error\(errors == 1 ? "" : "s")" + (warnings > 0 ? ", \(warnings) warning\(warnings == 1 ? "" : "s")" : "")
     }
 
     private var detail: String {
-        let b = model.build
-        let secs = b.lastSeconds.map { String(format: " (%.1fs)", $0) } ?? ""
-        let showing = model.host.active == nil ? "no build to show yet" : "showing gen \(model.host.generation)"
-        return (b.agentEditing ? "agent editing — " : "") + "build failed\(secs) — \(showing)"
+        if model.build.agentEditing { return "Errors in between edits are normal. Studio rebuilds when Claude's done." }
+        return model.host.active == nil ? "Nothing to play until they're fixed." : "Showing the last version that worked."
     }
 }
 
-/// Shown over the viewer after a host crash (or hang).
+/// Shown over the viewer after the film crashes (or hangs) on a frame.
 struct CrashCard: View {
     @Bindable var model: ProjectModel
     var crash: HostCrash
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "bolt.trianglebadge.exclamationmark.fill").foregroundStyle(StudioStyle.bad)
-                Text(crash.t.map { "Scene crashed at \(StudioStyle.timecode($0)) (f\(frameIndex($0, fps: model.playback.fps)))" }
-                     ?? "Scene crashed")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+            HStack(spacing: StudioStyle.Space.s) {
+                Image(systemName: StudioStyle.Symbol.error).foregroundStyle(StudioStyle.error)
+                Text(crash.t.map { "The film crashed at \(StudioTime.short($0))" } ?? "The film crashed")
+                    .font(StudioStyle.Fonts.headline)
+                    .help(crash.t.map { StudioTime.frameHelp($0, fps: model.playback.fps) } ?? "")
                 Spacer()
-                Button { model.host.crash = nil } label: { Image(systemName: "xmark") }
+                Button { model.host.crash = nil } label: { Image(systemName: StudioStyle.Symbol.close) }
                     .buttonStyle(.borderless)
+                    .help("Dismiss")
             }
-            Text(crash.message).font(.system(.callout, design: .monospaced))
+            Text(crash.message).font(StudioStyle.Fonts.code).foregroundStyle(.secondary).lineLimit(4)
             if let loc = crash.location {
-                Button {
-                    SourceOpener.open(loc)
-                } label: {
-                    HStack {
-                        Text("\(URL(fileURLWithPath: loc.file).lastPathComponent):\(loc.line)")
-                            .font(StudioStyle.mono)
-                        if let s = crash.symbol { Text("in \(s)").foregroundStyle(.secondary).lineLimit(1) }
-                        Spacer()
-                        Text("Open").foregroundStyle(.tint)
+                Button { SourceOpener.open(loc) } label: {
+                    HStack(spacing: StudioStyle.Space.xs) {
+                        Text(URL(fileURLWithPath: loc.file).lastPathComponent)
+                        Image(systemName: StudioStyle.Symbol.reveal).imageScale(.small)
                     }
+                    .font(StudioStyle.Fonts.callout)
+                    .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Line \(loc.line)\(crash.symbol.map { " in \($0)" } ?? "")")
             }
-            Text(statusLine).font(.caption).foregroundStyle(.secondary)
+            Text(statusLine).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
             HStack {
-                Button { model.perform(.askAgent) } label: { Label("Ask Claude to fix", systemImage: "sparkles") }
-                Button("Copy backtrace") {
+                Button("Ask Claude to Fix") { model.perform(.askAgent) }
+                Button("Copy Crash Details") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(crash.report, forType: .string)
                 }
@@ -284,18 +311,16 @@ struct CrashCard: View {
             }
             .controlSize(.small)
         }
-        .padding(14)
-        .frame(width: 440)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(StudioStyle.bad.opacity(0.5)))
-        .shadow(radius: 18)
+        .padding(StudioStyle.Space.l)
+        .frame(width: 420)
+        .studioCard()
     }
 
     private var statusLine: String {
         switch model.host.state {
-        case .ready: return "Host restarted · this frame is skipped until the next build"
-        case .failed(let why): return why
-        default: return "Restarting host…"
+        case .ready: return "Studio skipped this frame. It'll try again after your next save."
+        case .failed: return "The preview stopped. Save a fix and it starts again."
+        default: return "Restarting the preview…"
         }
     }
 }

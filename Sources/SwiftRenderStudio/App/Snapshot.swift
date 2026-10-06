@@ -14,9 +14,11 @@ import SwiftRenderKit
 @MainActor
 enum SnapshotRunner {
     static func run(_ options: LaunchOptions, out: String) {
-        let app = NSApplication.shared
+        // An app that reports itself active (without activating, so it never takes focus):
+        // inactive apps draw prominent buttons, selected rows and segments gray.
+        let app = SnapshotApplication.shared
         app.setActivationPolicy(.accessory)
-        app.appearance = NSAppearance(named: .darkAqua)
+        app.appearance = StudioAppearance.current.nsAppearance
 
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         let root = options.projectPath.map { Project.discover(from: $0)?.root ?? $0 }
@@ -32,12 +34,16 @@ enum SnapshotRunner {
                                     backing: .buffered, defer: false)
         window.contentViewController = hosting
         window.toolbarStyle = .unified
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = StudioAppearance.current.nsAppearance
         window.isReleasedWhenClosed = false
         // Far off every screen: laid out and displayed, never seen, never key.
         window.setFrame(window.frameRect(forContentRect: NSRect(x: -30_000, y: -30_000, width: size.width,
                                                                 height: size.height)), display: false)
         window.orderFrontRegardless()
+        // SwiftUI tracks key/active state from these notifications, not from the overrides.
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: app)
+        NotificationCenter.default.post(name: NSWindow.didBecomeMainNotification, object: window)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
 
         Task { @MainActor in
             let code = await capture(model: model, window: window, options: options, out: out)
@@ -189,7 +195,7 @@ enum SnapshotRunner {
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: -8 * scale), blur: 30 * scale, color: CGColor(gray: 0, alpha: 0.6))
         let path = CGPath(roundedRect: r, cornerWidth: 10 * scale, cornerHeight: 10 * scale, transform: nil)
-        ctx.addPath(path); ctx.setFillColor(CGColor(gray: 0.16, alpha: 1)); ctx.fillPath()
+        ctx.addPath(path); ctx.setFillColor(window.effectiveAppearance.isDark ? CGColor(gray: 0.16, alpha: 1) : CGColor(gray: 0.97, alpha: 1)); ctx.fillPath()
         ctx.restoreGState()
         ctx.saveGState()
         ctx.addPath(path); ctx.clip()
@@ -247,7 +253,7 @@ enum SnapshotRunner {
 
         guard let base = context() else { return nil }
         base.saveGState()
-        base.setFillColor(CGColor(gray: 0.13, alpha: 1))
+        base.setFillColor(window.effectiveAppearance.isDark ? CGColor(gray: 0.13, alpha: 1) : CGColor(gray: 0.93, alpha: 1))
         base.fill(CGRect(origin: .zero, size: size))
         root.render(in: base)
         base.restoreGState()
@@ -368,6 +374,11 @@ enum SnapshotRunner {
 
 /// Same size on every machine: AppKit would otherwise clamp a titled window to the
 /// current screen, so snapshots taken on a laptop and a desktop would differ.
+/// The snapshot process's NSApplication: reports itself active, never activates.
+final class SnapshotApplication: NSApplication {
+    override var isActive: Bool { true }
+}
+
 /// It also reports itself key and main: an offscreen window never is, and an inactive
 /// window draws prominent buttons and selected rows gray, hiding every accent decision.
 private final class SnapshotWindow: NSWindow {
@@ -376,4 +387,14 @@ private final class SnapshotWindow: NSWindow {
     override var isMainWindow: Bool { true }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    // AppKit asks these (not isKeyWindow) when it picks active or inactive control art.
+    @objc func _hasActiveAppearance() -> Bool { true }
+    @objc func _hasActiveAppearanceIgnoringKeyFocus() -> Bool { true }
+    @objc func _hasKeyAppearance() -> Bool { true }
+    @objc func _hasMainAppearance() -> Bool { true }
+    @objc func _hasActiveControls() -> Bool { true }
+}
+
+extension NSAppearance {
+    var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 }

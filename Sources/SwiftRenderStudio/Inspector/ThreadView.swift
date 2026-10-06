@@ -1,230 +1,315 @@
+import AppKit
 import SwiftUI
 import SwiftRenderKit
 
 // MARK: - Thread
 //
-// Header (number, timecode, frame, status menu), where the note points (region in
-// scene points, clip source ↗, revision, canvas), BEFORE/AFTER thumbnails with
-// Compare, the conversation (agent replies in violet bubbles, their frames inline),
-// resolution and sign-off, then reply + actions. A resolved thread offers Accept /
-// Reopen; Reopen sends the reply text as the reason. `@claude` queues the thread.
+// Pushed full height over the list. "‹ Comments" goes back; the arrows step through
+// comments. Header (disc, who, when, status menu), the conversation (Claude's replies
+// look like anyone's, with its frames inline), Before/After and one Compare button,
+// then Details (collapsed). The reply field and its actions stay pinned at the bottom.
 
 struct ThreadView: View {
     @Bindable var model: ProjectModel
     var comment: ReviewComment
     var number: Int?
     @State private var reply = ""
+    @State private var showDetails = false
+    @FocusState private var replyFocused: Bool
 
     var body: some View {
         let c = comment
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                header(c)
-                facts(c)
-                attachments(c)
-                Divider().opacity(0.5)
-                message(c.author, c.body, c.createdAt, attachments: [])
-                ForEach(c.replies) { r in message(r.author, r.body, r.createdAt, attachments: r.attachments) }
-                outcome(c)
-                composer(c)
-                actions(c)
+        let state = CommentState(c)
+        VStack(spacing: 0) {
+            navigationBar
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: StudioStyle.Space.l) {
+                    header(c, state)
+                    if state == .claudeOnIt { working(c) }
+                    VStack(alignment: .leading, spacing: StudioStyle.Space.m) {
+                        message(c.author, c.body, c.createdAt, attachments: [])
+                        ForEach(c.replies) { r in
+                            if ReviewStyle.isStudioNote(r.author) { note(r.body) }
+                            else { message(r.author, r.body, r.createdAt, attachments: r.attachments) }
+                        }
+                    }
+                    outcome(c, state)
+                    if model.ui.compare == nil { frames(c) }
+                    details(c)
+                }
+                .padding(StudioStyle.Space.gutter)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
+            Divider()
+            composer(c, state)
         }
     }
 
     // MARK: Sections
 
-    private func header(_ c: ReviewComment) -> some View {
-        HStack(spacing: 7) {
-            CommentBadge(number: number, status: c.status, agent: c.author.kind == .agent, selected: true, size: 20)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(c.timecode).font(.system(size: 13, weight: .semibold, design: .monospaced))
-                HStack(spacing: 5) {
-                    Text(ReviewStyle.frame(c.t, fps: c.canvas?.fps ?? model.info?.fps))
-                    Text("·")
-                    Text(c.id).textSelection(.enabled)
+    private var navigationBar: some View {
+        HStack(spacing: StudioStyle.Space.xs) {
+            Button {
+                withAnimation(.smooth(duration: 0.2)) { model.review.threadOpen = false }
+            } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: StudioStyle.Symbol.back)
+                    Text("Comments")
                 }
-                .font(StudioStyle.monoSmall).foregroundStyle(.secondary)
+                .font(StudioStyle.Fonts.body)
             }
-            Spacer(minLength: 6)
-            StatusMenu(status: c.status) { s in act { try model.review.setStatus(c.id, s) } }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.leftArrow, modifiers: [.command])
+            .help("Back to all comments (⌘←)")
+            Spacer()
+            Button { model.perform(.selectComment(next: false)) } label: { Image(systemName: StudioStyle.Symbol.previous) }
+                .help("Previous comment ([)")
+            Button { model.perform(.selectComment(next: true)) } label: { Image(systemName: StudioStyle.Symbol.next) }
+                .help("Next comment (])")
         }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, StudioStyle.Space.m)
+        .frame(height: 36)
     }
 
-    @ViewBuilder
-    private func facts(_ c: ReviewComment) -> some View {
-        let size = CGSize(width: c.canvas?.width ?? model.info?.width ?? 1920,
-                          height: c.canvas?.height ?? model.info?.height ?? 1080)
-        VStack(alignment: .leading, spacing: 4) {
-            if let r = c.region {
-                let p = RegionMath.scenePoints(r, sceneSize: size)
-                if RegionMath.isPoint(r) {
-                    fact("mappin", "point \(Int(p.minX)),\(Int(p.minY)) pt", detail: String(format: "%.3f, %.3f", r.x, r.y))
-                } else {
-                    fact("rectangle.dashed", "\(Int(p.minX)),\(Int(p.minY)) · \(Int(p.width))×\(Int(p.height)) pt",
-                         detail: String(format: "%.2f %.2f %.2f %.2f", r.x, r.y, r.w, r.h))
-                }
+    /// Disc and time, the status menu, and the source file under them.
+    private func header(_ c: ReviewComment, _ state: CommentState) -> some View {
+        VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+            HStack(alignment: .center, spacing: 10) {
+                CommentDisc(number: number, state: state, size: 28)
+                Text(StudioTime.range(c.t, c.end))
+                    .font(StudioStyle.Fonts.title)
+                    .monospacedDigit()
+                    .fixedSize()
+                    .help(StudioTime.frameHelp(c.t, fps: c.canvas?.fps ?? model.info?.fps ?? 60))
+                Spacer(minLength: StudioStyle.Space.s)
+                StatusMenu(state: state) { choice in setStatus(c, choice) }
             }
             if let src = c.source {
                 Button { SourceOpener.open(src) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: 9)).frame(width: 12)
-                        Text(ReviewStyle.short(src)).lineLimit(1)
-                        Image(systemName: "arrow.up.forward").font(.system(size: 8, weight: .bold))
+                    HStack(spacing: StudioStyle.Space.xs) {
+                        Text(ReviewStyle.file(src)).lineLimit(1).truncationMode(.middle)
+                        Image(systemName: StudioStyle.Symbol.reveal).imageScale(.small)
                     }
+                    .font(StudioStyle.Fonts.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(StudioStyle.accent)
-                .help("Open \(src.file):\(src.line)")
-            }
-            HStack(spacing: 12) {
-                if let rev = c.revision { fact("arrow.triangle.branch", rev) }
-                if let cv = c.canvas { fact("aspectratio", "\(cv.width)×\(cv.height) @\(cv.fps)") }
+                .padding(.leading, 38)
+                .help("Open \(ReviewStyle.short(src))")
             }
         }
-        .font(.system(size: 10.5, design: .monospaced))
     }
 
-    private func fact(_ symbol: String, _ text: String, detail: String? = nil) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 9)).frame(width: 12)
-            Text(text).lineLimit(1).fixedSize()
-            if let detail { Text(detail).lineLimit(1).foregroundStyle(.tertiary).help("normalized x y w h") }
-        }
-        .foregroundStyle(.secondary)
-    }
-
+    /// "Claude's on it · 0:42" with Stop and Show Steps, while a live run holds this comment.
     @ViewBuilder
-    private func attachments(_ c: ReviewComment) -> some View {
-        let before = c.beforeAttachment
-        let after = c.latestAfter
-        if before != nil || after != nil {
-            HStack(alignment: .bottom, spacing: 8) {
-                if let before { AttachmentThumb(model: model, attachment: before, commentID: c.id, width: 116) }
-                if let after {
-                    AttachmentThumb(model: model, attachment: after, commentID: c.id, width: 116)
-                } else if before != nil {
-                    placeholderAfter(c)
+    private func working(_ c: ReviewComment) -> some View {
+        let agent = model.agent
+        let live = agent.isRunning && (agent.currentRun?.commentIDs.contains(c.id) ?? false)
+        HStack(spacing: StudioStyle.Space.s) {
+            AuthorAvatar(author: AgentController.agentAuthor, size: 22)
+            ProgressView().controlSize(.small)
+            if live, let run = agent.currentRun {
+                SwiftUI.TimelineView(.periodic(from: run.startedAt, by: 1)) { ctx in
+                    Text("Claude's on it · \(AgentController.duration(ctx.date.timeIntervalSince(run.startedAt)))")
+                        .monospacedDigit()
                 }
+            } else {
+                Text("Claude's on it")
             }
-            if before != nil {
-                Button {
-                    model.review.compareID = c.id
-                    model.ui.compare = model.ui.compare ?? .split
-                } label: {
-                    Label(after == nil ? "Compare with Live" : "Compare Before / After", systemImage: "rectangle.split.2x1")
-                }
-                .controlSize(.small)
-                .help("A/B compare in the viewer (\\)")
+            Spacer(minLength: StudioStyle.Space.xs)
+            if live {
+                Button("Stop") { model.perform(.stop) }
+                Button("Show Steps") { model.ui.showAgentPanel = true; model.ui.agentPanelClosed = false }
             }
         }
-    }
-
-    private func placeholderAfter(_ c: ReviewComment) -> some View {
-        VStack(spacing: 3) {
-            Image(systemName: "bolt.fill").font(.system(size: 11))
-            Text("AFTER = LIVE").font(.system(size: 8.5, weight: .bold, design: .rounded))
-            Text("gen \(model.host.generation)").font(.system(size: 8.5, design: .monospaced))
-        }
-        .foregroundStyle(.tertiary)
-        .frame(width: 116, height: 116 * 9 / 16)
-        .background(RoundedRectangle(cornerRadius: 5).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            .foregroundStyle(.white.opacity(0.15)))
+        .font(StudioStyle.Fonts.callout)
+        .foregroundStyle(.secondary)
+        .controlSize(.small)
+        .padding(StudioStyle.Space.s)
+        .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.medium))
     }
 
     private func message(_ a: ReviewAuthor, _ body: String, _ date: Date, attachments: [ReviewAttachment]) -> some View {
-        let agent = a.kind == .agent
-        return HStack(alignment: .top, spacing: 8) {
-            AuthorAvatar(author: a, size: 20)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(a.name).font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(agent ? ReviewStyle.agent : .primary)
-                    if agent { StudioBadge(text: "AGENT", color: ReviewStyle.agent) }
-                    Text(ReviewStyle.age(date)).font(.system(size: 10)).foregroundStyle(.tertiary)
-                        .help(date.formatted(date: .abbreviated, time: .standard))
+        HStack(alignment: .top, spacing: StudioStyle.Space.s) {
+            AuthorAvatar(author: a, size: 24)
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                HStack(spacing: 6) {
+                    Text(ReviewStyle.displayName(a)).font(StudioStyle.Fonts.subheadline.weight(.semibold))
+                    Text(ReviewStyle.age(date)).font(StudioStyle.Fonts.footnote).foregroundStyle(.tertiary)
+                        .help(date.formatted(date: .abbreviated, time: .shortened))
                 }
-                Text(body).font(.system(size: 12)).textSelection(.enabled)
+                Text(body)
+                    .font(StudioStyle.Fonts.callout)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(StudioStyle.raised, in: StudioStyle.rounded(StudioStyle.Radius.large))
                 ForEach(attachments, id: \.path) { att in
-                    AttachmentThumb(model: model, attachment: att, commentID: comment.id, width: 150)
-                        .padding(.top, 2)
+                    AttachmentThumb(model: model, attachment: att, commentID: comment.id, width: 168)
                 }
             }
-            .padding(agent ? 8 : 0)
-            .background(agent ? ReviewStyle.agentFill : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(agent ? RoundedRectangle(cornerRadius: 8).strokeBorder(ReviewStyle.agent.opacity(0.25)) : nil)
             Spacer(minLength: 0)
         }
     }
 
+    /// Studio's own notes ("back on your list"): a quiet line, not a message.
+    private func note(_ body: String) -> some View {
+        Text(body)
+            .font(StudioStyle.Fonts.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, StudioStyle.Space.s)
+    }
+
     @ViewBuilder
-    private func outcome(_ c: ReviewComment) -> some View {
-        if let res = c.resolution, !res.isEmpty {
-            Label(res, systemImage: c.status == .wontFix ? "minus.circle" : "checkmark.seal")
-                .font(.system(size: 11)).foregroundStyle(c.status == .wontFix ? .secondary : StudioStyle.ok)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        if let by = c.acceptedBy {
-            Label("Accepted by \(by.name)", systemImage: "checkmark.seal.fill")
-                .font(.system(size: 11, weight: .semibold)).foregroundStyle(StudioStyle.ok)
-        } else if c.status == .inProgress, let who = c.assignee {
-            Label("\(who.name) is working on this", systemImage: who.kind == .agent ? "sparkles" : "hammer")
-                .font(.system(size: 11)).foregroundStyle(who.kind == .agent ? ReviewStyle.agent : .secondary)
+    private func outcome(_ c: ReviewComment, _ state: CommentState) -> some View {
+        switch state {
+        case .readyForReview:
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                Label("Ready for review", systemImage: "checkmark.circle")
+                    .font(StudioStyle.Fonts.calloutEmphasis).foregroundStyle(StudioStyle.accent)
+                Text(c.resolution.map { "Claude says: \($0). Have a look, then tell Claude if it's right." }
+                     ?? "Have a look, then tell Claude if it's right.")
+                    .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .done:
+            if let by = c.acceptedBy {
+                Label("\(by.name) signed off", systemImage: "checkmark.circle.fill")
+                    .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+            }
+            if let res = c.resolution, !res.isEmpty {
+                Text(res).font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+            }
+        case .wontFix:
+            if let res = c.resolution, !res.isEmpty {
+                Label(res, systemImage: "minus.circle").font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+            }
+        case .inProgress:
+            if let who = c.assignee {
+                Label("\(who.name) is working on this", systemImage: "circle.lefthalf.filled")
+                    .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
+            }
+        default:
+            EmptyView()
         }
     }
 
-    private func composer(_ c: ReviewComment) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            TextField(c.status == .resolved ? "Reply, or say why to reopen…" : "Reply…", text: $reply, axis: .vertical)
+    @ViewBuilder
+    private func frames(_ c: ReviewComment) -> some View {
+        let before = c.beforeAttachment
+        let after = c.latestAfter
+        if let before {
+            VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+                HStack(alignment: .top, spacing: StudioStyle.Space.s) {
+                    AttachmentThumb(model: model, attachment: before, commentID: c.id, width: 112)
+                    if let after {
+                        AttachmentThumb(model: model, attachment: after, commentID: c.id, width: 112)
+                    } else {
+                        VStack(spacing: 2) {
+                            Text("After").font(StudioStyle.Fonts.footnoteEmphasis)
+                            Text("Current build").font(StudioStyle.Fonts.footnote)
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(width: 112, height: 63)
+                        .background(StudioStyle.well, in: StudioStyle.rounded(StudioStyle.Radius.small))
+                    }
+                }
+                Button("Compare") {
+                    model.review.compareID = c.id
+                    model.ui.compare = model.ui.compare ?? .split
+                }
+                .help("Compare before and after in the viewer (\\)")
+            }
+        }
+    }
+
+    private func details(_ c: ReviewComment) -> some View {
+        DisclosureGroup("Details", isExpanded: $showDetails) {
+            let size = CGSize(width: c.canvas?.width ?? model.info?.width ?? 1920, height: c.canvas?.height ?? model.info?.height ?? 1080)
+            VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {
+                if let r = c.region {
+                    let p = RegionMath.scenePoints(r, sceneSize: size)
+                    fact("Spot", RegionMath.isPoint(r) ? "Point at \(Int(p.minX)), \(Int(p.minY))"
+                                                       : "\(Int(p.width)) × \(Int(p.height)) at \(Int(p.minX)), \(Int(p.minY))")
+                }
+                fact("Time", StudioTime.frameHelp(c.t, fps: c.canvas?.fps ?? model.info?.fps ?? 60))
+                if let src = c.source { fact("Source", ReviewStyle.short(src)) }
+                if let rev = c.revision { fact("Revision", rev) }
+                if let cv = c.canvas { fact("Canvas", "\(cv.width) × \(cv.height), \(cv.fps) fps") }
+                fact("ID", c.id)
+            }
+            .padding(.top, StudioStyle.Space.xs)
+        }
+        .font(StudioStyle.Fonts.subheadline)
+        .foregroundStyle(.secondary)
+    }
+
+    private func fact(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(k).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+            Text(v).foregroundStyle(.primary).textSelection(.enabled).monospacedDigit()
+        }
+        .font(StudioStyle.Fonts.subheadline)
+    }
+
+    private func composer(_ c: ReviewComment, _ state: CommentState) -> some View {
+        VStack(alignment: .leading, spacing: StudioStyle.Space.s) {
+            TextField(state == .readyForReview || state.isSettled ? "Reply, or say what's still off…" : "Reply…",
+                      text: $reply, axis: .vertical)
                 .lineLimit(1...5)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .padding(7)
-                .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.1)))
+                .font(StudioStyle.Fonts.callout)
+                .focused($replyFocused)
+                .studioField(focused: replyFocused)
                 .onSubmit(send)
             if ReviewController.mentionsAgent(reply) {
-                Label("@claude queues this thread for the next run", systemImage: "sparkles")
-                    .font(.system(size: 10)).foregroundStyle(ReviewStyle.agent)
+                Text("Claude will pick this up next time you ask.")
+                    .font(StudioStyle.Fonts.footnote).foregroundStyle(.secondary)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func actions(_ c: ReviewComment) -> some View {
-        HStack(spacing: 6) {
-            switch c.status {
-            case .resolved:
-                if c.acceptedBy == nil {
-                    Button { act { try model.review.accept(c.id) } } label: { Label("Accept", systemImage: "checkmark") }
-                        .buttonStyle(.borderedProminent).tint(StudioStyle.ok)
-                }
-                Button("Reopen") { reopen(c) }
-            case .wontFix:
-                Button("Reopen") { reopen(c) }
-            case .open, .inProgress:
-                Button("Resolve") { act { try model.review.setStatus(c.id, .resolved, resolution: trimmed.isEmpty ? nil : trimmed) }; reply = "" }
-                Button("Won't Fix") { act { try model.review.setStatus(c.id, .wontFix, resolution: trimmed.isEmpty ? nil : trimmed) }; reply = "" }
-            }
-            Spacer(minLength: 4)
-            if c.status.isActive {
-                Button {
-                    model.review.selection = c.id
-                    model.perform(.askAgent)
-                } label: { Label("Ask Claude", systemImage: "sparkles") }
-                    .tint(ReviewStyle.agent)
+            HStack(spacing: StudioStyle.Space.s) {
+                switch state {
+                case .readyForReview:
+                    Button("Not Quite") { reopen(c) }
+                    Spacer(minLength: 0)
+                    Button("Looks Good") { act { try model.review.accept(c.id) } }
+                        .buttonStyle(.borderedProminent)
+                case .done, .wontFix:
+                    Button("Reopen") { reopen(c) }
+                    Spacer(minLength: 0)
+                case .open, .inProgress, .claudeOnIt:
+                    Button("Mark Done") { act { try model.review.markDone(c.id, resolution: trimmed.isEmpty ? nil : trimmed) }; reply = "" }
+                    Button("Won't Fix") { act { try model.review.setStatus(c.id, .wontFix, resolution: trimmed.isEmpty ? nil : trimmed) }; reply = "" }
+                    Spacer(minLength: 0)
+                    Button("Ask Claude") {
+                        if !trimmed.isEmpty { send() }
+                        model.review.selection = c.id
+                        model.perform(.askAgent)
+                    }
                     .keyboardShortcut(model.review.draft == nil ? KeyboardShortcut(.return, modifiers: [.command, .shift]) : nil)
-                    .help("Ask Claude about this thread (⌘⇧↩)")
+                    .help("Ask Claude about this comment (⌘⇧↩)")
+                }
             }
+            .controlSize(.regular)
         }
-        .controlSize(.small)
+        .padding(StudioStyle.Space.gutter)
     }
 
     // MARK: Actions
 
     private var trimmed: String { reply.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func setStatus(_ c: ReviewComment, _ choice: StatusChoice) {
+        act {
+            switch choice {
+            case .open: try model.review.reopen(c.id, note: nil)
+            case .inProgress: try model.review.setStatus(c.id, .inProgress)
+            case .done: try model.review.markDone(c.id, resolution: nil)
+            case .wontFix: try model.review.setStatus(c.id, .wontFix)
+            }
+        }
+    }
 
     private func send() {
         guard !trimmed.isEmpty else { return }
@@ -238,6 +323,6 @@ struct ThreadView: View {
     }
 
     private func act(_ f: () throws -> Void) {
-        do { try f() } catch { model.ui.toast = "\(error)" }
+        do { try f() } catch { model.ui.toast = "That didn't work. \(error)" }
     }
 }

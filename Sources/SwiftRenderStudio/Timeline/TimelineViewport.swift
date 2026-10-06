@@ -128,20 +128,20 @@ struct TimelineViewport: Equatable, Sendable {
         return (major, max(minor, frame))
     }
 
-    /// "00:12.40"-style label at a precision suited to `major`.
+    /// "0:12" or "0:12.40", at a precision suited to `major`.
     static func label(_ t: Double, major: Double) -> String {
         let m = Int(t) / 60
         let s = t - Double(m * 60)
-        if major >= 1 { return String(format: "%02d:%02d", m, Int(s.rounded())) }
-        return String(format: "%02d:%05.2f", m, s)
+        if major >= 1 { return String(format: "%d:%02d", m, Int(s.rounded())) }
+        return String(format: "%d:%05.2f", m, s)
     }
 
-    /// Like `label(_:major:)`, but frame-level majors read "00:12:24" (mm:ss:ff).
+    /// Like `label(_:major:)`, but frame-level majors read "0:12:24" (m:ss:ff).
     static func label(_ t: Double, major: Double, fps: Int) -> String {
         let f = max(1, fps)
         guard major < 0.25 - 1e-9 else { return label(t, major: major) }
         let frames = Int((t * Double(f)).rounded())
-        return String(format: "%02d:%02d:%02d", frames / f / 60, (frames / f) % 60, frames % f)
+        return String(format: "%d:%02d:%02d", frames / f / 60, (frames / f) % 60, frames % f)
     }
 
     /// Compact span for the header: "1:33", "12.5s", "40f".

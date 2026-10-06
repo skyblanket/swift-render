@@ -35,7 +35,9 @@ extension LaneRenderer {
 
 enum LaneDraw {
     static let maxLabels = 60
-    static let labelFont = Font.system(size: 9.5, weight: .medium)
+    static let labelFont = StudioStyle.Fonts.footnote.weight(.medium)
+    /// Labels only on blocks at least this wide.
+    static let minLabelWidth: CGFloat = 44
 
     /// Block rect for [a, b] seconds, clipped to the viewport (nil when off-screen).
     static func rect(viewport v: TimelineViewport, from a: Double, to b: Double, y: CGFloat, height: CGFloat) -> CGRect? {
@@ -54,22 +56,20 @@ enum LaneDraw {
             ctx.fill(Path(r), with: .color(color.opacity(min(1, fill + 0.3))))
             return
         }
-        let path = Path(roundedRect: r, cornerRadius: min(3, height / 3))
+        let path = Path(roundedRect: r, cornerRadius: min(StudioStyle.Radius.small, height / 3), style: .continuous)
         ctx.fill(path, with: .color(color.opacity(fill)))
-        if r.height > 8 {
-            // Top sheen: reads as a raised clip, not a flat rectangle.
-            ctx.fill(Path(roundedRect: CGRect(x: r.minX + 1, y: r.minY + 1, width: max(0, r.width - 2), height: 1),
-                          cornerRadius: 0.5), with: .color(.white.opacity(0.10)))
+        // Flat blocks: an outline only to mark a selection or a warning.
+        if stroke != nil || dashed {
+            ctx.stroke(path, with: .color(stroke ?? color.opacity(0.8)),
+                       style: StrokeStyle(lineWidth: 1.5, dash: dashed ? [3, 2] : []))
         }
-        ctx.stroke(path, with: .color(stroke ?? color.opacity(0.75)),
-                   style: StrokeStyle(lineWidth: stroke == nil ? 1 : 1.5, dash: dashed ? [3, 2] : []))
         if let label { self.label(&ctx, label, in: r, labels: &labels, trailing: trailing) }
     }
 
     /// Leading label clipped to `r`, plus an optional dimmer trailing note when it fits.
     static func label(_ ctx: inout GraphicsContext, _ label: String, in r: CGRect, labels: inout Int,
-                      trailing: String? = nil, color: Color = .white.opacity(0.92), font: Font = labelFont) {
-        guard r.width > 40, labels < maxLabels, !label.isEmpty else { return }
+                      trailing: String? = nil, color: Color = .primary, font: Font = labelFont) {
+        guard r.width >= minLabelWidth, labels < maxLabels, !label.isEmpty else { return }
         labels += 1
         var c = ctx
         c.clip(to: Path(r.insetBy(dx: 3, dy: 0)))
@@ -80,8 +80,7 @@ enum LaneDraw {
         c.draw(text, at: CGPoint(x: x, y: r.midY), anchor: .leading)
         if let trailing, labels < maxLabels, r.maxX - (x + w) > 46 {
             labels += 1
-            c.draw(Text(trailing).font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45)),
+            c.draw(Text(trailing).font(labelFont).monospacedDigit().foregroundStyle(.secondary),
                    at: CGPoint(x: r.maxX - 5, y: r.midY), anchor: .trailing)
         }
     }
@@ -102,7 +101,7 @@ enum LaneDraw {
 
     /// Centered placeholder text for an empty lane.
     static func empty(_ ctx: inout GraphicsContext, _ text: String, size: CGSize) {
-        ctx.draw(Text(text).font(.system(size: 10)).foregroundStyle(.white.opacity(0.32)),
+        ctx.draw(Text(text).font(StudioStyle.Fonts.footnote).foregroundStyle(.tertiary),
                  at: CGPoint(x: 10, y: size.height / 2), anchor: .leading)
     }
 
@@ -116,13 +115,13 @@ enum LaneDraw {
         return items[a..<z]
     }
 
-    /// "2.40 s" / "12 s" for hover cards and block trailers.
+    /// "2.40 s" / "12 s" for hover cards.
     static func seconds(_ d: Double) -> String {
         d >= 10 ? String(format: "%.0f s", d) : String(format: "%.2f s", d)
     }
 
-    /// "00:02.20–00:04.60".
+    /// "0:02.20–0:04.60".
     static func range(_ a: Double, _ b: Double) -> String {
-        abs(b - a) < 1e-6 ? StudioStyle.timecode(a) : "\(StudioStyle.timecode(a))–\(StudioStyle.timecode(b))"
+        abs(b - a) < 1e-6 ? StudioTime.precise(a) : "\(StudioTime.precise(a))–\(StudioTime.precise(b))"
     }
 }

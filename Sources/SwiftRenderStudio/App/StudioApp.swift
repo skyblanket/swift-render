@@ -6,7 +6,7 @@ import SwiftRenderKit
 //
 //   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host | --fake-process-host]
 //                       [--fake-crash-at t] [--fake-build-fail] [--tab comments|knobs|props|info]
-//                       [--snapshot out.png [--play-for seconds]]
+//                       [--appearance light|dark|system] [--snapshot out.png [--play-for seconds]]
 //   swift-render-studio --fake-serve        (a fake render host on stdio; see FakeServe)
 //
 // `--snapshot` lays out a project window offscreen (no activation, no Dock icon),
@@ -21,6 +21,7 @@ enum StudioMain {
         MainActor.assumeIsolated {
             StudioLaunch.options = options
             if let out = options.snapshot {
+                StudioStyle.isSnapshot = true
                 SnapshotRunner.run(options, out: out)
             } else {
                 // AppKit would turn the positional project path into an "open documents"
@@ -49,6 +50,9 @@ struct StudioApp: App {
         }
         .defaultSize(width: 1600, height: 1000)
         .commands { StudioCommands() }
+
+        Window("Keyboard Shortcuts", id: "shortcuts") { ShortcutsView() }
+            .windowResizability(.contentSize)
 
         Settings { SettingsView() }
     }

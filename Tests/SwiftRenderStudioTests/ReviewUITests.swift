@@ -71,7 +71,11 @@ final class ReviewUITests: XCTestCase {
         XCTAssertEqual(RegionTool.composerOrigin(anchor: CGRect(x: 600, y: 200, width: 300, height: 100), size: size, container: box),
                        CGPoint(x: 258, y: 200), "flips left when the right side is short")
         XCTAssertEqual(RegionTool.composerOrigin(anchor: CGRect(x: 0, y: 650, width: 1000, height: 40), size: size, container: box),
-                       CGPoint(x: 335, y: 542), "full-width rect near the bottom: centered, pulled up inside")
+                       CGPoint(x: 335, y: 488), "full-width rect near the bottom: above it, never over it")
+        XCTAssertEqual(RegionTool.composerOrigin(anchor: CGRect(x: 0, y: 100, width: 1000, height: 400), size: size, container: box),
+                       CGPoint(x: 335, y: 512), "below a wide rect")
+        XCTAssertNil(RegionTool.composerOrigin(anchor: CGRect(x: 0, y: 0, width: 1000, height: 700), size: size, container: box),
+                     "no room beside the rect: the composer docks in the inspector")
     }
 
     // MARK: Filters
@@ -88,45 +92,70 @@ final class ReviewUITests: XCTestCase {
         return [a, b, c, d]
     }
 
-    func testQueryFiltersByStatusAuthorKindAndText() {
+    func testQueryFiltersBySegmentAuthorKindAndText() {
         let all = sample()
         var q = ReviewQuery()
-        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001", "c00000002"], "default = active")
-        q.statuses = Set(ReviewStatus.allCases)
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001", "c00000002"], "default = the Open segment")
+        q.segment = .review
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000003"], "Claude resolved it, nobody signed off")
+        q.segment = .done
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000004"])
+        q.segment = .open
         q.author = .agent
-        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000002", "c00000003"], "written, claimed or answered by an agent")
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000002"], "written, claimed or answered by Claude")
         q.author = .people
-        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001", "c00000002", "c00000004"])
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001", "c00000002"])
         q.author = .mine
-        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001", "c00000004"])
+        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001"])
         q.author = .anyone
         q.text = "+20"
         XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000001"], "reply text matches")
         q.text = "c0000000"
-        XCTAssertEqual(q.apply(all, me: "Sky").count, 4, "id prefix matches")
-        q.statuses = [.wontFix]
-        XCTAssertEqual(q.apply(all, me: "Sky").map(\.id), ["c00000004"])
+        XCTAssertEqual(q.apply(all, me: "Sky").count, 4, "search covers every segment")
     }
 
-    func testPresetsMapOntoTheQuery() {
+    func testDisplayStatesMapStatusesOntoSegments() {
+        let sky = ReviewAuthor(name: "Sky")
+        let s = sample()
+        XCTAssertEqual(s.map(CommentState.init), [.open, .claudeOnIt, .readyForReview, .wontFix])
+        XCTAssertEqual(s.map { CommentState($0).segment }, [.open, .open, .review, .done])
+        var signed = s[2]
+        signed.acceptedBy = sky
+        XCTAssertEqual(CommentState(signed), .done, "signed off")
+        var byPerson = s[0]
+        byPerson.status = .resolved
+        XCTAssertEqual(CommentState(byPerson), .done, "a person resolving goes straight to Done")
+        var answered = s[2]
+        answered.replies.append(ReviewReply(author: sky, body: "fine by me"))
+        XCTAssertEqual(CommentState(answered), .done, "a person had the last word")
+        var noted = s[2]
+        noted.replies.append(ReviewReply(author: ReviewAuthor(name: "Studio", kind: .agent), body: "back on your list"))
+        XCTAssertEqual(CommentState(noted), .readyForReview, "Studio's own notes don't count")
+    }
+
+    func testMarkDoneResolvesAndSignsOff() async throws {
         let r = controller()
-        XCTAssertEqual(r.filter, .open)
-        r.filter = .agent
-        XCTAssertEqual(r.query.author, .agent)
-        XCTAssertEqual(r.query.statuses, Set(ReviewStatus.allCases))
-        XCTAssertEqual(r.filter, .agent)
-        r.filter = .open
-        XCTAssertEqual(r.query, ReviewQuery())
-        r.toggleStatus(.resolved)
-        XCTAssertEqual(r.query.statuses, [.open, .inProgress, .resolved])
-        XCTAssertEqual(r.filter, .all, "a custom status set reads as All")
+        let c = try await r.add(t: 1, end: nil, region: nil, body: "tidy the logo")
+        try r.markDone(c.id, resolution: "nudged it")
+        let done = try XCTUnwrap(r.comments.first)
+        XCTAssertEqual(done.status, .resolved)
+        XCTAssertEqual(done.acceptedBy?.name, "Sky")
+        XCTAssertEqual(done.resolution, "nudged it")
+        XCTAssertEqual(CommentState(done), .done)
+        r.open(c.id)
+        XCTAssertTrue(r.threadOpen)
+        XCTAssertEqual(r.query.segment, .done, "opening a thread shows its segment")
     }
 
-    func testNumberingFollowsSceneOrder() {
-        let n = ReviewController.numbering(sample())
-        XCTAssertEqual(n["c00000004"], 1)
-        XCTAssertEqual(n["c00000001"], 2)
-        XCTAssertEqual(n["c00000003"], 4)
+    func testNumberingFollowsCreationOrder() {
+        var all = sample()
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        for i in all.indices { all[i].createdAt = t0.addingTimeInterval(Double(i)) }
+        let n = ReviewController.numbering(all)
+        XCTAssertEqual(n["c00000001"], 1)
+        XCTAssertEqual(n["c00000004"], 4, "posted last: number 4, though it's earliest in the scene")
+        all[0].t = 9
+        XCTAssertEqual(ReviewController.numbering(all)["c00000001"], 1, "retiming keeps the number")
     }
 
     // MARK: Comment context
@@ -329,9 +358,9 @@ final class ReviewUITests: XCTestCase {
         XCTAssertEqual(CompareMath.changedFraction(a, b), 0.25, accuracy: 0.02)
         XCTAssertEqual(CompareMath.changedFraction(a, solid(1280, 720, split: 0.5)), 0.5, accuracy: 0.02,
                        "different sizes compare on the same grid")
-        XCTAssertEqual(CompareMath.label(0), "Δ 0%")
-        XCTAssertEqual(CompareMath.label(0.0004), "Δ <0.1%")
-        XCTAssertEqual(CompareMath.label(0.031), "Δ 3.1%")
+        XCTAssertEqual(CompareMath.label(0), "No visible change in this frame")
+        XCTAssertEqual(CompareMath.label(0.0004), "Less than 1% of the frame changed")
+        XCTAssertEqual(CompareMath.label(0.123), "12% of the frame changed")
 
         let d = try XCTUnwrap(CompareMath.difference(a, b))
         XCTAssertEqual(d.width, 640)

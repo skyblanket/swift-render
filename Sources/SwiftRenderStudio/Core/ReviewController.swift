@@ -12,47 +12,50 @@ import SwiftRenderKit
 // what an agent needs to reproduce the frame: the `.before` still from the host,
 // canvas, innermost clip source, git revision and knob/props context.
 
-/// Preset filters (sidebar rows, chips). They set `query`; the query is the truth.
-enum ReviewFilter: String, CaseIterable, Identifiable, Sendable {
-    case open, mine, agent, all
+/// The comments list's three segments. Each display state belongs to exactly one.
+enum ReviewSegment: String, CaseIterable, Identifiable, Sendable {
+    /// Open, In Progress, Claude's on it.
+    case open
+    /// Ready for Review: Claude resolved it and nobody has signed off yet.
+    case review
+    /// Done and Won't Fix.
+    case done
     var id: String { rawValue }
     var title: String {
         switch self {
         case .open: return "Open"
-        case .mine: return "Mine"
-        case .agent: return "Agent"
-        case .all: return "All"
+        case .review: return "Review"
+        case .done: return "Done"
         }
     }
 }
 
 /// Who wrote (or is working on) a comment.
 enum AuthorFilter: String, CaseIterable, Identifiable, Sendable {
-    case anyone, people, agent, mine
+    case anyone, mine, people, agent
     var id: String { rawValue }
     var title: String {
         switch self {
         case .anyone: return "Everyone"
+        case .mine: return "Me"
         case .people: return "People"
         case .agent: return "Claude"
-        case .mine: return "Mine"
         }
     }
 }
 
-/// What the comments list shows: a status set, an author kind and free text.
+/// What the comments list shows: one segment, an author kind and free text. Text
+/// searches every segment.
 struct ReviewQuery: Equatable, Sendable {
-    var statuses: Set<ReviewStatus> = [.open, .inProgress]
+    var segment: ReviewSegment = .open
     var author: AuthorFilter = .anyone
     var text = ""
-
-    static let active: Set<ReviewStatus> = [.open, .inProgress]
 
     /// Comments that pass, in scene order.
     func apply(_ comments: [ReviewComment], me: String) -> [ReviewComment] {
         let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
         return comments.filter { c in
-            guard statuses.contains(c.status) else { return false }
+            if needle.isEmpty, CommentState(c).segment != segment { return false }
             switch author {
             case .anyone: break
             case .people: if c.author.kind != .human { return false }
@@ -97,8 +100,13 @@ final class ReviewController {
     private(set) var comments: [ReviewComment] = []
     var query = ReviewQuery()
     var selection: String?
+    /// The selected comment's thread fills the Comments tab (pushed over the list).
+    var threadOpen = false
     /// Non-nil while the composer is open.
-    var draft: CommentDraft?
+    var draft: CommentDraft? { didSet { if draft?.region == nil { draftDocked = false } } }
+    /// A region draft with no room beside its spot in the viewer: the composer docks in
+    /// the Comments tab.
+    var draftDocked = false
     /// The comment A/B compare shows (its `.before` against the latest after / live).
     var compareID: String?
     /// Threads a reply mentioned `@claude` in: the next Ask Claude pre-selects them.
@@ -128,50 +136,29 @@ final class ReviewController {
 
     // MARK: Filters
 
-    /// Preset view of `query` (sidebar rows and the chip row set it).
-    var filter: ReviewFilter {
-        get {
-            switch (query.statuses, query.author) {
-            case (ReviewQuery.active, .anyone): return .open
-            case (_, .mine): return .mine
-            case (_, .agent): return .agent
-            default: return .all
-            }
-        }
-        set {
-            switch newValue {
-            case .open: query.statuses = ReviewQuery.active; query.author = .anyone
-            case .mine: query.statuses = Set(ReviewStatus.allCases); query.author = .mine
-            case .agent: query.statuses = Set(ReviewStatus.allCases); query.author = .agent
-            case .all: query.statuses = Set(ReviewStatus.allCases); query.author = .anyone
-            }
-        }
-    }
-
     var filtered: [ReviewComment] { query.apply(comments, me: authorName) }
 
-    func toggleStatus(_ s: ReviewStatus) {
-        if query.statuses.contains(s) { query.statuses.remove(s) } else { query.statuses.insert(s) }
-    }
-
     func count(_ s: ReviewStatus) -> Int { comments.filter { $0.status == s }.count }
+    func count(segment: ReviewSegment) -> Int { comments.filter { CommentState($0).segment == segment }.count }
+    var readyForReviewCount: Int { count(segment: .review) }
     var openCount: Int { count(.open) }
     var inProgressCount: Int { count(.inProgress) }
     var selected: ReviewComment? { comments.first { $0.id == selection } }
     var compared: ReviewComment? { comments.first { $0.id == compareID } }
 
-    /// 1-based position in scene order: the number on pins, lane markers and rows.
+    /// 1-based position in creation order: the number on pins, lane markers, rows and in
+    /// Claude's transcript. Creation order keeps a comment's number when it is retimed.
     func number(of id: String) -> Int? { Self.numbering(comments)[id] }
 
     nonisolated static func numbering(_ comments: [ReviewComment]) -> [String: Int] {
-        let ordered = comments.sorted { ($0.t, $0.createdAt) < ($1.t, $1.createdAt) }
+        let ordered = comments.sorted { ($0.createdAt, $0.t, $0.id) < ($1.createdAt, $1.t, $1.id) }
         return Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.id, $0 + 1) })
     }
 
     // MARK: Loading
 
     func load(scene: String?) {
-        if scene != self.scene { selection = nil; compareID = nil; draft = nil }
+        if scene != self.scene { selection = nil; threadOpen = false; compareID = nil; draft = nil }
         self.scene = scene
         reload()
     }
@@ -179,7 +166,7 @@ final class ReviewController {
     /// Re-read from disk (watcher: `.swift-render/reviews/*.json` changed).
     func reload() {
         var counts: [String: Int] = [:]
-        for (s, _) in store.all(status: ReviewQuery.active) { counts[s, default: 0] += 1 }
+        for (s, _) in store.all(status: [.open, .inProgress]) { counts[s, default: 0] += 1 }
         if counts != openCounts { openCounts = counts }
         guard let scene else {
             if !comments.isEmpty { comments = [] }
@@ -193,7 +180,7 @@ final class ReviewController {
         } catch {
             lastError = "\(error)"
         }
-        if let s = selection, !comments.contains(where: { $0.id == s }) { selection = nil }
+        if let s = selection, !comments.contains(where: { $0.id == s }) { selection = nil; threadOpen = false }
         if let c = compareID, !comments.contains(where: { $0.id == c }) { compareID = nil }
         onChange?(comments)
     }
@@ -236,10 +223,11 @@ final class ReviewController {
                 try await capture(c.t, url)
                 c.attachments = [ReviewAttachment(kind: .before, path: rel, t: c.t)]
             } catch {
-                stillError = "Posted without a BEFORE frame: \(error)"
+                stillError = "Posted, but Studio couldn't save the Before frame (\(error))"
             }
         }
         try store.add(scene: scene, c)
+        if query.text.isEmpty { query.segment = .open }
         reload()
         if let stillError { lastError = stillError }
         selection = c.id
@@ -297,6 +285,27 @@ final class ReviewController {
         guard let scene else { return }
         try store.setStatus(scene: scene, id: id, s, by: ReviewAuthor(name: authorName), resolution: resolution)
         if !s.isActive { agentQueue.remove(id) }
+        reload()
+    }
+
+    /// Select a comment and show its thread, switching to the segment it lives in.
+    func open(_ id: String) {
+        guard let c = comments.first(where: { $0.id == id }) else { return }
+        selection = id
+        threadOpen = true
+        if query.text.isEmpty { query.segment = CommentState(c).segment }
+    }
+
+    /// A person marks it done: resolved and signed off in one step (no "Looks Good" round).
+    func markDone(_ id: String, resolution: String?) throws {
+        guard let scene else { return }
+        let me = ReviewAuthor(name: authorName)
+        let note = resolution?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try store.update(scene: scene, id: id) { c in
+            c.status = .resolved; c.assignee = nil; c.acceptedBy = me
+            if let note, !note.isEmpty { c.resolution = note }
+        }
+        agentQueue.remove(id)
         reload()
     }
 
@@ -363,7 +372,7 @@ final class ReviewController {
     func delete(_ id: String) throws {
         guard let scene else { return }
         try store.remove(scene: scene, id: id)
-        if selection == id { selection = nil }
+        if selection == id { selection = nil; threadOpen = false }
         agentQueue.remove(id)
         reload()
     }
@@ -419,7 +428,9 @@ extension ProjectModel {
         let o = options
         let r = review
         if let pick = o.commentSelection {
-            let ordered = r.comments.sorted { $0.t < $1.t }
+            // N is the comment's number (creation order), as on its disc.
+            let numbers = ReviewController.numbering(r.comments)
+            let ordered = r.comments.sorted { (numbers[$0.id] ?? 0) < (numbers[$1.id] ?? 0) }
             let c: ReviewComment?
             switch pick {
             case "first": c = ordered.first
@@ -429,8 +440,7 @@ extension ProjectModel {
                 else { c = ordered.first { $0.id.hasPrefix(pick) } }
             }
             if let c {
-                r.selection = c.id
-                if !r.query.statuses.contains(c.status) { r.filter = .all }
+                r.open(c.id)
                 ui.inspectorTab = .comments
                 if o.at == nil { playback.seek(c.t, precise: true) }
             }

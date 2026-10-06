@@ -48,8 +48,8 @@ final class TimelineViewportTests: XCTestCase {
         let (major, minor) = v.tickSpacing()
         XCTAssertEqual(major * 60, (major * 60).rounded(), accuracy: 1e-9, "major is a whole number of frames")
         XCTAssertEqual(minor, 1.0 / 60, accuracy: 1e-12)
-        XCTAssertEqual(TimelineViewport.label(12 + 24.0 / 60, major: major, fps: 60), "00:12:24")
-        XCTAssertEqual(TimelineViewport.label(72.4, major: 5, fps: 60), "01:12")
+        XCTAssertEqual(TimelineViewport.label(12 + 24.0 / 60, major: major, fps: 60), "0:12:24")
+        XCTAssertEqual(TimelineViewport.label(72.4, major: 5, fps: 60), "1:12")
         XCTAssertEqual(TimelineViewport.spanLabel(93, fps: 60), "1:33")
         XCTAssertEqual(TimelineViewport.spanLabel(6.8, fps: 60), "6.8s")
         XCTAssertEqual(TimelineViewport.spanLabel(0.5, fps: 60), "30f")
@@ -85,13 +85,13 @@ final class TimelineLayoutTests: XCTestCase {
 
     func testSlotsStackInDisplayOrder() {
         let l = TimelineLayout(info: info())
-        XCTAssertEqual(l.slots.map(\.key), [.clips, .captions, .score("VOICE"), .score("DRUMS · MARKS"), .audio, .notes])
+        XCTAssertEqual(l.slots.map(\.key), [.clips, .captions, .score("Voice"), .score("Drums & Hits"), .audio, .notes])
         var y: CGFloat = 0
         for s in l.slots { XCTAssertEqual(s.y, y); y += s.height }
         XCTAssertEqual(l.contentHeight, y)
-        // Three clip rows: main, nest 1, pinned.
+        // Three clip rows: main, nested, overlay.
         XCTAssertEqual(l.slot(.clips)?.height, 3 * ClipsLane.rowHeight + 2 * ClipsLane.inset)
-        XCTAssertEqual(ClipsLane(clips: info().clips).rowLabels, ["main", "nest 1", "pinned"])
+        XCTAssertEqual(ClipsLane(clips: info().clips).rowLabels, ["", "Nested", "Overlay"])
     }
 
     func testZonesAccountForRulerAndVerticalScroll() {
@@ -122,7 +122,7 @@ final class TimelineLayoutTests: XCTestCase {
         XCTAssertNil(lane.hit(CGPoint(x: v.x(15), y: row0), viewport: v))
         // At the 5 s boundary the later clip (drawn on top) wins.
         XCTAssertEqual(lane.hit(CGPoint(x: v.x(5), y: row0), viewport: v)?.id, "0:5.000:11")
-        XCTAssertTrue(lane.hit(CGPoint(x: v.x(7), y: row0), viewport: v)?.detail?.contains("fade in 0.50 s") ?? false)
+        XCTAssertTrue(lane.hit(CGPoint(x: v.x(7), y: row0), viewport: v)?.detail?.contains("Fade in over 0.50 s") ?? false)
     }
 
     func testRulerFlagsHitBeforeScrub() {
@@ -152,7 +152,7 @@ final class ScoreLaneTests: XCTestCase {
 
     func testChordsMergeIntoOneBlock() {
         let pad = { (n: String) in ScoreEventInfo(lane: "melodic", kind: "pad", detail: n, time: 4, duration: 2, amp: 0.5) }
-        let lane = ScoreLane(title: "MUSIC", lanes: ["melodic"], style: .blocks(maxRows: 4),
+        let lane = ScoreLane(title: "Music", lanes: ["melodic"], style: .blocks(maxRows: 4),
                              events: [pad("C4"), pad("E4"), pad("G4"),
                                       ScoreEventInfo(lane: "melodic", kind: "bell", detail: "E5", time: 4, duration: 1.6, amp: 1)])
         XCTAssertEqual(lane.events.count, 2)
@@ -164,18 +164,18 @@ final class ScoreLaneTests: XCTestCase {
         let events = [ScoreEventInfo(lane: "fx", kind: "whoosh", detail: "rising", time: 1, duration: 0.7, amp: 1),
                       ScoreEventInfo(lane: "fx", kind: "laser", detail: nil, time: 3, duration: 0.2, amp: 1),
                       ScoreEventInfo(lane: "sample", kind: "sample", detail: "assets/sfx/key_3.wav", time: 2, duration: 1, amp: 1)]
-        let fx = ScoreLanes.renderer(title: "FX", events: events)
+        let fx = ScoreLanes.renderer(title: "Effects", events: events)
         XCTAssertEqual(fx.warnings, 1)
         XCTAssertEqual(fx.label(fx.events[0]), "⚠ whoosh rising")
         let v = TimelineViewport(start: 0, pxPerSecond: 100, width: 1000, duration: 10, fps: 30)
         let h = fx.hit(CGPoint(x: v.x(1.3), y: 10), viewport: v)
         XCTAssertTrue(h?.detail?.contains("House rule") ?? false)
-        let samples = ScoreLanes.renderer(title: "SAMPLES", events: events)
+        let samples = ScoreLanes.renderer(title: "Samples", events: events)
         XCTAssertEqual(samples.label(samples.events[0]), "key_3")
     }
 
     func testDrumHitsByProximity() {
-        let lane = ScoreLanes.renderer(title: "DRUMS · MARKS", events: [
+        let lane = ScoreLanes.renderer(title: "Drums & Hits", events: [
             ScoreEventInfo(lane: "drums", kind: "kick", detail: nil, time: 1, duration: 0.4, amp: 1),
             ScoreEventInfo(lane: "mark", kind: "tick", detail: nil, time: 1.2, duration: 0.07, amp: 1),
         ])
@@ -386,8 +386,8 @@ final class LaneDrawCostTests: XCTestCase {
                                          detail: "C4", time: t, duration: i % 3 == 0 ? 0.05 : 0.9, amp: 0.7))
         }
         let v = TimelineViewport(start: 0, pxPerSecond: 1200.0 / 42, width: 1200, duration: 42, fps: 60)
-        let lanes: [any LaneRenderer] = [ScoreLanes.renderer(title: "MUSIC", events: events),
-                                         ScoreLanes.renderer(title: "DRUMS · MARKS", events: events)]
+        let lanes: [any LaneRenderer] = [ScoreLanes.renderer(title: "Music", events: events),
+                                         ScoreLanes.renderer(title: "Drums & Hits", events: events)]
         for lane in lanes {
             var times: [Double] = []
             for _ in 0..<10 {

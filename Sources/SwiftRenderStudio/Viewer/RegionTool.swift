@@ -33,7 +33,6 @@ struct RegionTool: View {
                             if case .active(let p) = phase { hover = p } else { hover = nil }
                         }
                         .onHover { inside in setCursor(inside) }
-                    if dragStart == nil, let p = hover, canvas.contains(p) { crosshairReadout(p) }
                 }
                 if let a = dragStart, let b = dragNow { rubberBand(a, b) }
                 if let d = model.review.draft, let region = d.region {
@@ -50,35 +49,37 @@ struct RegionTool: View {
 
     // MARK: Drawing
 
+    /// The marquee: a 1.5 pt accent line over a dark underlay, so it reads on any frame.
+    private func marquee(_ r: CGRect) -> some View {
+        Rectangle()
+            .strokeBorder(StudioStyle.pictureScrim, lineWidth: 3.5)
+            .overlay(Rectangle().strokeBorder(StudioStyle.accent, lineWidth: 1.5))
+            .background(StudioStyle.accent.opacity(0.08))
+            .frame(width: max(1, r.width), height: max(1, r.height))
+            .offset(x: r.minX, y: r.minY)
+    }
+
     private func rubberBand(_ a: CGPoint, _ b: CGPoint) -> some View {
         let r = Self.dragRect(a, b).intersection(canvas)
         let region = RegionMath.normalize(Self.dragRect(a, b), in: canvas)
         return ZStack(alignment: .topLeading) {
-            Rectangle()
-                .strokeBorder(StudioStyle.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                .background(StudioStyle.accent.opacity(0.12))
-                .frame(width: max(1, r.width), height: max(1, r.height))
-                .offset(x: r.minX, y: r.minY)
-            readout(RegionMath.describe(region, sceneSize: sceneSize))
-                .offset(x: r.minX, y: r.minY > canvas.minY + 26 ? r.minY - 24 : r.maxY + 6)
+            marquee(r)
+            // Size in scene points only while ⌥ is held.
+            if optionHeld {
+                readout(RegionMath.sizeLabel(region, sceneSize: sceneSize))
+                    .offset(x: r.minX, y: r.minY > canvas.minY + 26 ? r.minY - 24 : r.maxY + 6)
+            }
         }
         .allowsHitTesting(false)
     }
 
-    private func crosshairReadout(_ p: CGPoint) -> some View {
-        let n = RegionMath.point(p, in: canvas)
-        let s = RegionMath.scenePoints(n, sceneSize: sceneSize)
-        return readout("\(Int(s.minX)), \(Int(s.minY)) pt")
-            .offset(x: min(p.x + 14, canvas.maxX - 110), y: min(p.y + 14, canvas.maxY - 22))
-            .allowsHitTesting(false)
-    }
-
     private func readout(_ text: String) -> some View {
         Text(text)
-            .font(StudioStyle.monoSmall)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5).padding(.vertical, 3)
-            .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 4))
+            .font(StudioStyle.Fonts.footnote.weight(.medium))
+            .monospacedDigit()
+            .foregroundStyle(StudioStyle.onPicture)
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(StudioStyle.pictureScrim, in: StudioStyle.rounded(StudioStyle.Radius.small))
             .fixedSize()
     }
 
@@ -90,29 +91,36 @@ struct RegionTool: View {
             Circle()
                 .fill(StudioStyle.accent)
                 .frame(width: 12, height: 12)
-                .overlay(Circle().strokeBorder(.black.opacity(0.6), lineWidth: 1))
+                .overlay(Circle().strokeBorder(StudioStyle.onPicture, lineWidth: 2))
+                .shadow(color: .black.opacity(0.4), radius: 2)
                 .offset(x: r.minX - 6, y: r.minY - 6)
                 .allowsHitTesting(false)
         } else {
-            ZStack(alignment: .topLeading) {
-                Rectangle()
-                    .strokeBorder(StudioStyle.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 3]))
-                    .background(StudioStyle.accent.opacity(0.10))
-                    .frame(width: r.width, height: r.height)
-                    .offset(x: r.minX, y: r.minY)
-                readout(RegionMath.describe(region, sceneSize: sceneSize))
-                    .offset(x: r.minX, y: r.minY > canvas.minY + 26 ? r.minY - 24 : r.maxY + 6)
-            }
-            .allowsHitTesting(false)
+            marquee(r).allowsHitTesting(false)
         }
     }
 
+    @ViewBuilder
     private func composer(_ region: ReviewRegion, container: CGSize) -> some View {
         let r = RegionMath.rect(region, in: canvas)
-        let origin = Self.composerOrigin(anchor: r, size: CGSize(width: 330, height: 150), container: container)
-        return CommentComposer(model: model, floating: true)
-            .offset(x: origin.x, y: origin.y)
+        let origin = Self.composerOrigin(anchor: r, size: Self.composerSize, container: container)
+        Group {
+            if let origin {
+                CommentComposer(model: model, floating: true)
+                    .offset(x: origin.x, y: origin.y)
+            }
+        }
+        // No room beside the spot: the composer docks in the Comments tab instead.
+        .onAppear { setDocked(origin == nil) }
+        .onChange(of: origin == nil) { _, docked in setDocked(docked) }
     }
+
+    private func setDocked(_ docked: Bool) {
+        if model.review.draftDocked != docked { model.review.draftDocked = docked }
+        if docked { model.ui.inspectorTab = .comments; model.ui.showInspector = true }
+    }
+
+    static let composerSize = CGSize(width: 320, height: 156)
 
     // MARK: Geometry (pure, tested)
 
@@ -120,15 +128,17 @@ struct RegionTool: View {
         CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
     }
 
-    /// Right of the rect if it fits, else left, else below; always inside the container.
-    static func composerOrigin(anchor r: CGRect, size: CGSize, container: CGSize, gap: CGFloat = 12) -> CGPoint {
-        var x: CGFloat
-        if r.maxX + gap + size.width <= container.width - 8 { x = r.maxX + gap }
-        else if r.minX - gap - size.width >= 8 { x = r.minX - gap - size.width }
-        else { x = r.midX - size.width / 2 }
-        x = min(max(8, x), max(8, container.width - size.width - 8))
-        let y = min(max(8, r.minY), max(8, container.height - size.height - 8))
-        return CGPoint(x: x, y: y)
+    /// Beside the rect, never over it: right, then left, then below, then above. nil when
+    /// none fits (the composer docks in the inspector).
+    static func composerOrigin(anchor r: CGRect, size: CGSize, container: CGSize, gap: CGFloat = 12, margin: CGFloat = 8) -> CGPoint? {
+        let maxX = container.width - margin, maxY = container.height - margin
+        func clampY(_ y: CGFloat) -> CGFloat { min(max(margin, y), max(margin, maxY - size.height)) }
+        func clampX(_ x: CGFloat) -> CGFloat { min(max(margin, x), max(margin, maxX - size.width)) }
+        if r.maxX + gap + size.width <= maxX { return CGPoint(x: r.maxX + gap, y: clampY(r.minY)) }
+        if r.minX - gap - size.width >= margin { return CGPoint(x: r.minX - gap - size.width, y: clampY(r.minY)) }
+        if r.maxY + gap + size.height <= maxY, size.width <= maxX - margin { return CGPoint(x: clampX(r.midX - size.width / 2), y: r.maxY + gap) }
+        if r.minY - gap - size.height >= margin, size.width <= maxX - margin { return CGPoint(x: clampX(r.midX - size.width / 2), y: r.minY - gap - size.height) }
+        return nil
     }
 
     // MARK: Input

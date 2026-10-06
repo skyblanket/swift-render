@@ -4,143 +4,155 @@ import SwiftRenderKit
 
 // MARK: - Comments tab
 //
-// Search + author menu, status chips (open / working / resolved / won't fix, with
-// counts), the time-only composer, the list (numbered like the pins, agent threads
-// striped violet), then the selected thread. Selecting a row seeks to it.
+// Segments (Open · Review · Done) and a Filter menu, search once there are more than
+// five, the inline composer, then a native list numbered like the pins. Clicking a row
+// (or Return, or a pin, or a lane marker) pushes its thread over the list; "‹ Comments"
+// comes back. Selecting a row seeks to it.
 
 struct CommentsTab: View {
     @Bindable var model: ProjectModel
 
     var body: some View {
         let review = model.review
+        if review.threadOpen, let c = review.selected {
+            ThreadView(model: model, comment: c, number: review.number(of: c.id))
+                .id(c.id)
+                .transition(.move(edge: .trailing))
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
+        let review = model.review
         let rows = review.filtered
         let numbers = ReviewController.numbering(review.comments)
-        VStack(spacing: 0) {
-            filterBar
-            Divider()
-            if let d = review.draft, !d.anchoredInViewer {
-                CommentComposer(model: model)
+        return VStack(spacing: 0) {
+            header
+            if let d = review.draft, d.region == nil || review.draftDocked {
                 Divider()
+                CommentComposer(model: model)
             }
+            Divider()
             if rows.isEmpty {
-                StudioEmptyState(title: review.comments.isEmpty ? "No Comments Yet" : "No Matching Comments",
-                                 symbol: "text.bubble",
-                                 message: review.comments.isEmpty
-                                    ? "Press C to comment at the playhead, or R to mark a region on the frame."
-                                    : "\(review.comments.count) comment\(review.comments.count == 1 ? "" : "s") hidden by the filters.")
+                emptyState
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 2) {
-                            ForEach(rows) { c in
-                                let selected = review.selection == c.id
-                                CommentRow(comment: c, number: numbers[c.id], fps: model.info?.fps,
-                                           queued: review.agentQueue.contains(c.id))
-                                    .padding(.horizontal, 8).padding(.vertical, 4)
-                                    .background(rowBackground(c, selected: selected))
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        review.selection = c.id
-                                        model.playback.seek(c.t, precise: true)
-                                    }
-                                    .contextMenu { menu(c) }
-                                    .id(c.id)
-                            }
-                        }
-                        .padding(.horizontal, 6).padding(.vertical, 6)
-                    }
-                    .onChange(of: review.selection) { _, id in
-                        if let id { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } }
+                List(selection: Binding(get: { review.selection }, set: { pick($0) })) {
+                    ForEach(rows) { c in
+                        CommentRow(comment: c, number: numbers[c.id], queued: review.agentQueue.contains(c.id))
+                            .tag(c.id)
                     }
                 }
-                // Capped while a thread is open so the thread gets the rest of the column.
-                .frame(height: review.selected == nil ? nil : min(214, CGFloat(rows.count) * 80 + 12))
-                .frame(maxHeight: review.selected == nil ? .infinity : nil)
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .contextMenu(forSelectionType: String.self) { ids in
+                    if let id = ids.first, let c = review.comments.first(where: { $0.id == id }) { menu(c) }
+                } primaryAction: { ids in
+                    if let id = ids.first { review.open(id) }
+                }
                 .onDeleteCommand { if let id = review.selection { try? review.delete(id) } }
             }
-            if let c = review.selected {
-                Divider()
-                ThreadView(model: model, comment: c, number: numbers[c.id])
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
             if let err = review.lastError {
-                Label(err, systemImage: "exclamationmark.triangle")
-                    .font(.caption2).foregroundStyle(StudioStyle.warn).lineLimit(2)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
+                Label(err, systemImage: StudioStyle.Symbol.warning)
+                    .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                    .padding(.horizontal, StudioStyle.Space.gutter).padding(.vertical, StudioStyle.Space.xs)
             }
         }
     }
 
-    private var filterBar: some View {
+    /// A click opens the thread; arrow keys only move the selection (and the playhead).
+    private func pick(_ id: String?) {
         let review = model.review
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(.tertiary)
-                    TextField("Search comments", text: Binding(get: { review.query.text }, set: { review.query.text = $0 }))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11.5))
-                    if !review.query.text.isEmpty {
-                        Button { review.query.text = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.borderless).foregroundStyle(.tertiary)
+        review.selection = id
+        guard let id, let c = review.comments.first(where: { $0.id == id }) else { return }
+        model.playback.seek(c.t, precise: true)
+        if let type = NSApp.currentEvent?.type, type == .leftMouseDown || type == .leftMouseUp {
+            withAnimation(.smooth(duration: 0.2)) { review.open(id) }
+        }
+    }
+
+    private var header: some View {
+        let review = model.review
+        return VStack(spacing: StudioStyle.Space.s) {
+            HStack(spacing: StudioStyle.Space.s) {
+                Picker("Show", selection: Binding(get: { review.query.segment }, set: { review.query.segment = $0 })) {
+                    ForEach(ReviewSegment.allCases) { s in
+                        let n = review.count(segment: s)
+                        Text(s != .done && n > 0 ? "\(s.title) \(n)" : s.title).tag(s)
                     }
                 }
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
                 Menu {
-                    Picker("Author", selection: Binding(get: { review.query.author }, set: { review.query.author = $0 })) {
-                        ForEach(AuthorFilter.allCases) { a in
-                            Label(a.title, systemImage: symbol(a)).tag(a)
-                        }
+                    Picker("From", selection: Binding(get: { review.query.author }, set: { review.query.author = $0 })) {
+                        ForEach(AuthorFilter.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.inline)
                 } label: {
-                    Label(review.query.author.title, systemImage: symbol(review.query.author))
-                        .font(.system(size: 10.5))
+                    Image(systemName: review.query.author == .anyone ? StudioStyle.Symbol.filter : StudioStyle.Symbol.filterOn)
+                        .foregroundStyle(review.query.author == .anyone ? AnyShapeStyle(.secondary) : AnyShapeStyle(StudioStyle.accent))
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .foregroundStyle(review.query.author == .agent ? ReviewStyle.agent : .secondary)
-                .help("Filter by author")
-                Button { model.perform(.newComment) } label: { Image(systemName: "plus.bubble") }
-                    .buttonStyle(.borderless)
-                    .help("New comment at the playhead (C)")
+                .help(review.query.author == .anyone ? "Filter by who wrote it" : "Showing comments from \(review.query.author.title)")
             }
-            HStack(spacing: 4) {
-                ForEach(ReviewStatus.allCases, id: \.self) { s in
-                    StatusChip(status: s, count: review.count(s), on: review.query.statuses.contains(s)) {
-                        review.toggleStatus(s)
-                    }
-                }
-                Spacer(minLength: 0)
+            if review.comments.count > 5 {
+                SearchField(text: Binding(get: { review.query.text }, set: { review.query.text = $0 }), prompt: "Search comments")
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
+        .padding(.horizontal, StudioStyle.Space.gutter)
+        .padding(.vertical, StudioStyle.Space.m)
     }
 
-    private func symbol(_ a: AuthorFilter) -> String {
-        switch a {
-        case .anyone: return "person.2"
-        case .people: return "person"
-        case .agent: return "sparkles"
-        case .mine: return "person.crop.circle"
+    @ViewBuilder private var emptyState: some View {
+        let review = model.review
+        if review.comments.isEmpty {
+            StudioEmptyState(title: "No comments yet", symbol: StudioStyle.Symbol.comments,
+                             message: "Press C to comment at the playhead, or R to mark a spot on the frame.",
+                             actionTitle: "Add a Comment") { model.perform(.newComment) }
+                .inspectorFill()
+        } else if review.query.author != .anyone || !review.query.text.isEmpty {
+            let hidden = ReviewQuery(segment: review.query.segment).apply(review.comments, me: review.authorName).count
+            StudioEmptyState(title: "Nothing matches", symbol: StudioStyle.Symbol.filter,
+                             message: hidden > 0 ? "\(hidden) comment\(hidden == 1 ? " is" : "s are") hidden by filters." : nil,
+                             actionTitle: "Show All") {
+                review.query.author = .anyone
+                review.query.text = ""
+            }
+            .inspectorFill()
+        } else {
+            switch review.query.segment {
+            case .open:
+                StudioEmptyState(title: "You're all caught up", symbol: "checkmark.circle",
+                                 message: "Nothing open here. Press C to add a comment.").inspectorFill()
+            case .review:
+                StudioEmptyState(title: "Nothing to review", symbol: "checkmark.circle",
+                                 message: "When Claude finishes a comment, it waits here for your OK.").inspectorFill()
+            case .done:
+                StudioEmptyState(title: "Nothing done yet", symbol: "checkmark.circle",
+                                 message: "Comments you mark done, or sign off, land here.").inspectorFill()
+            }
         }
     }
 
     @ViewBuilder
     private func menu(_ c: ReviewComment) -> some View {
         let r = model.review
-        Button("Go to \(StudioStyle.timecode(c.t))") { r.selection = c.id; model.playback.seek(c.t, precise: true) }
+        Button("Open Thread") { r.open(c.id) }
+        Button("Go to \(StudioTime.short(c.t))") { r.selection = c.id; model.playback.seek(c.t, precise: true) }
         if c.beforeAttachment != nil {
-            Button("Compare Before / After") { r.selection = c.id; r.compareID = c.id; model.ui.compare = .split }
+            Button("Compare") { r.selection = c.id; r.compareID = c.id; model.ui.compare = .split }
         }
         Divider()
-        ForEach(ReviewStatus.allCases.filter { $0 != c.status }, id: \.self) { s in
-            Button("Mark \(ReviewStyle.title(s))") { try? r.setStatus(c.id, s) }
-        }
-        if c.status == .resolved, c.acceptedBy == nil { Button("Accept Resolution") { try? r.accept(c.id) } }
+        let state = CommentState(c)
+        if state == .readyForReview { Button("Looks Good") { try? r.accept(c.id) } }
+        if state.isActive { Button("Mark Done") { try? r.markDone(c.id, resolution: nil) } }
+        if state.isActive { Button("Won't Fix") { try? r.setStatus(c.id, .wontFix) } }
+        if !state.isActive { Button("Reopen") { try? r.reopen(c.id, note: nil) } }
         Divider()
-        if let src = c.source { Button("Open \(ReviewStyle.short(src))") { SourceOpener.open(src) } }
+        if let src = c.source { Button("Open \(ReviewStyle.file(src))") { SourceOpener.open(src) } }
         Button("Copy ID") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(c.id, forType: .string)
@@ -150,86 +162,76 @@ struct CommentsTab: View {
     }
 }
 
-/// Violet edge + wash behind rows an agent wrote, claimed or answered.
-private struct AgentStripe: View {
-    var body: some View {
-        HStack(spacing: 0) {
-            ReviewStyle.agent.frame(width: 2.5)
-            ReviewStyle.agentFill
-        }
-    }
-}
-
-extension CommentsTab {
-    @ViewBuilder
-    fileprivate func rowBackground(_ c: ReviewComment, selected: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 7)
-        ZStack {
-            if ReviewQuery.involvesAgent(c) { AgentStripe().clipShape(shape) }
-            if selected {
-                shape.fill(Color.white.opacity(0.10))
-                shape.strokeBorder(Color.white.opacity(0.14))
-            }
-        }
-    }
-}
-
+/// One comment in the list: its disc, who and when, the note, and its state.
 struct CommentRow: View {
     var comment: ReviewComment
     var number: Int?
-    var fps: Int?
     var queued = false
 
     var body: some View {
         let c = comment
-        let agent = ReviewQuery.involvesAgent(c)
-        HStack(alignment: .top, spacing: 8) {
-            CommentBadge(number: number, status: c.status, agent: c.author.kind == .agent, size: 18)
-                .padding(.top, 1)
+        let state = CommentState(c)
+        HStack(alignment: .top, spacing: 10) {
+            CommentDisc(number: number, state: state, size: 22)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(c.timecode).font(StudioStyle.mono)
+                HStack(spacing: 6) {
+                    Text(ReviewStyle.displayName(c.author)).font(StudioStyle.Fonts.subheadline.weight(.semibold))
+                    Text(StudioTime.range(c.t, c.end))
+                        .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary).monospacedDigit()
                     if let r = c.region {
-                        Image(systemName: RegionMath.isPoint(r) ? "mappin" : "rectangle.dashed")
-                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                        Image(systemName: RegionMath.isPoint(r) ? "mappin" : "viewfinder")
+                            .font(StudioStyle.Fonts.footnote).foregroundStyle(.tertiary)
+                            .help("Marks a spot on the frame")
                     }
-                    Spacer(minLength: 4)
-                    if c.assignee?.kind == .agent, c.status == .inProgress {
-                        Label("Claude working", systemImage: "sparkles")
-                            .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(ReviewStyle.agent)
-                    } else if c.author.kind == .agent {
-                        Label(c.author.name, systemImage: "sparkles")
-                            .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(ReviewStyle.agent)
-                    } else {
-                        Text(c.author.name).font(.system(size: 9.5)).foregroundStyle(.secondary)
-                    }
+                    Spacer(minLength: StudioStyle.Space.xs)
+                    if state == .claudeOnIt { AuthorAvatar(author: AgentController.agentAuthor, size: 16) }
+                    StatusLabel(state: state, font: StudioStyle.Fonts.footnote)
                 }
-                Text(c.body).font(.system(size: 12)).lineLimit(2).foregroundStyle(c.status.isActive ? .primary : .secondary)
-                HStack(spacing: 8) {
-                    Text(c.id).font(StudioStyle.monoSmall).foregroundStyle(.tertiary)
-                    if !c.replies.isEmpty {
-                        Label("\(c.replies.count)", systemImage: "arrowshape.turn.up.left")
-                            .foregroundStyle(agent ? ReviewStyle.agent.opacity(0.85) : .secondary)
+                Text(c.body)
+                    .font(StudioStyle.Fonts.callout)
+                    .lineLimit(2)
+                    .foregroundStyle(state.isSettled ? .secondary : .primary)
+                let replies = c.replies.filter { !ReviewStyle.isStudioNote($0.author) }.count
+                if replies > 0 || queued {
+                    HStack(spacing: StudioStyle.Space.s) {
+                        if replies > 0 { Text(ReviewStyle.replies(replies)) }
+                        if queued { Text("Claude's up next") }
                     }
-                    if !ReviewController.attachments(of: c).isEmpty {
-                        Label("\(ReviewController.attachments(of: c).count)", systemImage: "photo")
-                    }
-                    if c.acceptedBy != nil { Label("Accepted", systemImage: "checkmark.seal.fill").foregroundStyle(StudioStyle.ok) }
-                    if queued { Label("@claude", systemImage: "sparkles").foregroundStyle(ReviewStyle.agent) }
+                    .font(StudioStyle.Fonts.footnote)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 9.5))
-                .foregroundStyle(.tertiary)
-                .labelStyle(CompactLabel())
             }
         }
-        .padding(.vertical, 3)
-        .opacity(c.status == .wontFix ? 0.7 : 1)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 }
 
-/// Icon and text with a tight gap.
-struct CompactLabel: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 2) { configuration.icon; configuration.title }
+/// A native search field (`NSSearchField`) bound to a string.
+struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    var prompt: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let f = NSSearchField()
+        f.placeholderString = prompt
+        f.controlSize = .regular
+        f.sendsSearchStringImmediately = true
+        f.delegate = context.coordinator
+        return f
+    }
+
+    func updateNSView(_ f: NSSearchField, context: Context) {
+        if f.stringValue != text { f.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ n: Notification) {
+            if let f = n.object as? NSSearchField { text.wrappedValue = f.stringValue }
+        }
     }
 }

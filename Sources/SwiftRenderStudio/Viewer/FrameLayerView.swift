@@ -38,7 +38,7 @@ final class FrameLayerView: NSView {
 
     /// Canvas rect in view coordinates (y down) for the current zoom.
     var canvasRect: CGRect {
-        ViewerGeometry.canvasRect(container: bounds.size, content: sceneSize, zoom: zoom, inset: zoom == .fit ? 12 : 0)
+        ViewerGeometry.canvasRect(container: bounds.size, content: sceneSize, zoom: zoom, inset: zoom == .fit ? ViewerGeometry.fitInset : 0)
     }
 
     override func layout() {
