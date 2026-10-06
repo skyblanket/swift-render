@@ -43,7 +43,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "SwiftRenderStudio",
-            dependencies: ["SwiftRenderKit"]
+            dependencies: ["SwiftRenderKit"],
+            // SR_STUDIO_PLIST=1 embeds Support/Studio/Info.plist so a bare binary has a bundle id.
+            // Opt-in: unsafeFlags must never reach targets that downstream packages build.
+            linkerSettings: Context.environment["SR_STUDIO_PLIST"] == "1"
+                ? [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+                                 "-Xlinker", "__info_plist", "-Xlinker", "Support/Studio/Info.plist"])]
+                : []
         ),
         .executableTarget(
             name: "SwiftRenderMCP",
@@ -60,6 +66,10 @@ let package = Package(
         .testTarget(
             name: "SwiftRenderTests",
             dependencies: ["SwiftRender", "SwiftRenderKit", "SwiftRenderTool"]
+        ),
+        .testTarget(
+            name: "SwiftRenderStudioTests",
+            dependencies: ["SwiftRenderStudio", "SwiftRenderKit"]
         ),
     ]
 )
