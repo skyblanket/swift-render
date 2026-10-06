@@ -1,0 +1,61 @@
+---
+name: swift-render-review
+description: Work with swift-render review comments — timecoded, optionally region-boxed notes on a scene, stored in .swift-render/reviews/<Scene>.json and left from swift-render Studio, the `swift-render review` CLI or an agent. Use when asked to leave, list, read, address, reply to or resolve notes/feedback/comments on a swift-render scene or launch film, or to "do the review", "fix the notes", "address the feedback at 0:12".
+---
+
+# swift-render review comments
+
+A review comment is a note on a scene at a time `t` (optionally a range `t…end`) and optionally a
+region — a box on the frame, normalized 0–1 with the origin top-left. Comments have a thread of
+replies and a status: `open` → `inProgress` (claimed, with an assignee) → `resolved` (with a
+resolution and an after-frame) or `wontFix`. They live in `.swift-render/reviews/<Scene>.json`
+(commit them), with frames in `.swift-render/attachments/`. Never edit those files by hand:
+every writer (Studio, CLI, MCP) takes a file lock.
+
+## Addressing comments (the usual job)
+
+Delegate to the **swift-render-director** agent — it runs the whole loop: list → look at the
+frame, region and clip source → claim → edit the scene Swift → build → re-render and look →
+resolve with a summary, or reply with a question and leave it open.
+
+Doing it yourself, with the `swift-render` MCP tools:
+
+| step | tool |
+|---|---|
+| what's open | `list_comments {scene?, status?}` — default open + inProgress |
+| read + see it | `get_comment {id}` — thread, frame with the region boxed, active clips with `file:line` |
+| start | `claim_comment {id}` — inProgress, assigned to you, before-frame captured |
+| verify | `build {}`, `render_frames {scene, times, width?}`, `contact_sheet {scene}`, `check_scene {scene}` |
+| ask | `reply_comment {id, body, attach_frame?, reopen?}` — the comment keeps its status unless `reopen` |
+| finish | `resolve_comment {id, summary}` — renders + attaches the after-frame, marks resolved |
+| tune | `set_knobs {scene, values}` — for values a scene exposes with `Knob.*` |
+
+Rules that matter: scenes stay pure functions of `t` (no `@State`, `Timer`, `Date()`); no
+whoosh/riser/swish sounds (use tick/rim/thump/blip/swell and harmony); change only what the note
+asks; run `check_scene` on every scene you edited before finishing.
+
+## From the terminal (no MCP)
+
+The project's CLI renders in-process, so frames match the code on disk:
+
+```sh
+swift run swift-render review list [--scene S] [--status open,inProgress|active|all] [--json]
+swift run swift-render review show <id> [--json]
+swift run swift-render review add <Scene> --at 12.4 [--end 13] [--region 0.1,0.2,0.3,0.25] "logo feels small"
+swift run swift-render review reply <id> "Scaled the logo 1.0 → 1.2 (LaunchFilm.swift:88)" --agent --attach-frame
+swift run swift-render review status <id> resolved --resolution "logo +20%" --agent
+swift run swift-render review frame <id> --out /tmp/c.png     # frame at t with the region boxed
+```
+
+Ids accept a unique prefix of 4+ characters. In a user's `Launch/` package the CLI product is
+named in `swift-render.json` (`"product"`), e.g. `swift run launch review list`.
+
+## Headless (what Studio runs)
+
+```sh
+claude -p "Address the open swift-render review comments on TimelineDemo." \
+  --agent swift-render-director --mcp-config .mcp.json --allowedTools "mcp__swift-render" \
+  --permission-mode acceptEdits --output-format stream-json --verbose --max-budget-usd 2
+```
+
+See `docs/review-loop.md` for the event stream and the full flow.

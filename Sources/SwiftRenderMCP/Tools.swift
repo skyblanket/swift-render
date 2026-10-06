@@ -100,10 +100,12 @@ final class ToolBox {
                  + "Claim right before you start editing for it.",
                  ["id": id], required: ["id"]),
             tool("reply_comment", "Reply to review comment",
-                 "Add a reply to a comment's thread (e.g. a clarifying question; the comment stays as it is). "
-                 + "attach_frame renders the current frame at the comment's time and attaches it.",
+                 "Add a reply to a comment's thread (e.g. a clarifying question; the status is unchanged unless "
+                 + "reopen). attach_frame renders the current frame at the comment's time and attaches it.",
                  ["id": id, "body": ["type": "string", "description": "Reply text."] as JSONObject,
-                  "attach_frame": ["type": "boolean", "description": "Attach the current frame (default false)."] as JSONObject],
+                  "attach_frame": ["type": "boolean", "description": "Attach the current frame (default false)."] as JSONObject,
+                  "reopen": ["type": "boolean",
+                             "description": "Give a claimed comment back: inProgress → open (default false)."] as JSONObject],
                  required: ["id", "body"]),
             tool("resolve_comment", "Resolve review comment",
                  "Render the after-frame at the comment's time, attach it on a reply carrying your summary, and mark "
@@ -390,9 +392,11 @@ final class ToolBox {
             reply.attachments = [ReviewAttachment(kind: .after, path: rel, t: e.comment.t)]
             image = try ReviewImage.prepare(url, region: e.comment.region, maxWidth: 960)
         }
-        let updated = try store.reply(scene: e.scene, id: e.comment.id, reply)
+        var updated = try store.reply(scene: e.scene, id: e.comment.id, reply)
+        let reopen = (a.bool("reopen") ?? false) && updated.status == .inProgress
+        if reopen { updated = try store.setStatus(scene: e.scene, id: e.comment.id, .open) }
         var out = ToolResult()
-        out.text("replied \(reply.id) on \(updated.id) (status stays \(updated.status.rawValue))"
+        out.text("replied \(reply.id) on \(updated.id) (status \(reopen ? "back to" : "stays") \(updated.status.rawValue))"
                  + (reply.attachments.first.map { "; frame → \($0.path)" } ?? ""))
         if let image { out.png(image) }
         return out

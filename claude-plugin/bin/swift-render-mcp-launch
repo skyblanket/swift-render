@@ -1,0 +1,26 @@
+#!/bin/sh
+# Starts swift-render-mcp for the project in the current directory (the Claude Code
+# session's project). stdout belongs to the MCP protocol; everything else goes to stderr.
+#
+#   1. $SWIFT_RENDER_MCP — an explicit binary
+#   2. the project's own build of the server: works in the swift-render repo and in any
+#      package that depends on swift-render — here, or in ./Launch (what `swift-render init`
+#      creates inside an app's repo)
+#   3. swift-render-mcp on PATH
+if [ -n "$SWIFT_RENDER_MCP" ]; then
+  exec "$SWIFT_RENDER_MCP" "$@"
+fi
+for dir in . Launch; do
+  [ -f "$dir/Package.swift" ] || continue
+  if (cd "$dir" && swift build -q --product swift-render-mcp) 1>&2; then
+    # The server finds its project by walking up from the cwd; point it down into Launch/.
+    [ "$dir" = . ] || export SWIFT_RENDER_ROOT="${SWIFT_RENDER_ROOT:-$(cd "$dir" && pwd)}"
+    exec "$(cd "$dir" && swift build --show-bin-path)/swift-render-mcp" "$@"
+  fi
+done
+if command -v swift-render-mcp >/dev/null 2>&1; then
+  exec swift-render-mcp "$@"
+fi
+echo "swift-render plugin: no swift-render-mcp for $(pwd). Run Claude Code in a swift-render" \
+     "project (a package that depends on swift-render), or set SWIFT_RENDER_MCP to the binary." >&2
+exit 1

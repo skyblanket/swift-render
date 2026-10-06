@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "swift-render": {
+      "command": "sh",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/swift-render-mcp-launch"]
+    }
+  }
+}
