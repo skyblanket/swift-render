@@ -1,3 +1,4 @@
+import AVFoundation
 import Accelerate
 import SwiftUI
 import XCTest
@@ -110,5 +111,67 @@ final class VideoClipTests: XCTestCase {
         let late = rgb(MediaLibrary.frame(url.path, at: 0.8))
         XCTAssertGreaterThan(early.0, early.1 + 100, "t=0.2 is red")
         XCTAssertGreaterThan(late.1, late.0 + 100, "t=0.8 is blue")
+    }
+}
+
+@MainActor
+final class AssemblerTests: XCTestCase {
+    /// Two range renders stitched by MP4Assembler must equal one render: same frame
+    /// count, same duration, first frame of chunk 2 at exactly its start time.
+    func testRangeChunksStitchFrameExact() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-asm-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rec = Recorder(config: .init(fps: 30, size: CGSize(width: 64, height: 36), postFX: false))
+        let a = dir.appendingPathComponent("a.mp4"), b = dir.appendingPathComponent("b.mp4")
+        let out = dir.appendingPathComponent("out.mp4")
+        let view: @MainActor (Double) -> Color = { t in Color(white: t / 1.0) }
+        try await rec.render(to: a, duration: 0.5, startTime: 0, sceneDuration: 1.0, content: view)
+        try await rec.render(to: b, duration: 1.0, startTime: 0.5, sceneDuration: 1.0, content: view)
+        try await MP4Assembler.assemble(video: [a, b], audio: nil, to: out)
+
+        let asset = AVURLAsset(url: out)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let duration = try await asset.load(.duration)
+        XCTAssertEqual(duration.seconds, 1.0, accuracy: 1e-6)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        reader.add(output)
+        reader.startReading()
+        var pts: [Double] = []
+        while let sb = output.copyNextSampleBuffer() {
+            if CMSampleBufferGetNumSamples(sb) > 0 { pts.append(CMSampleBufferGetPresentationTimeStamp(sb).seconds) }
+        }
+        XCTAssertEqual(pts.count, 30)
+        XCTAssertEqual(pts.sorted()[15], 0.5, accuracy: 1e-6, "chunk 2 starts exactly at 0.5 s")
+        XCTAssertEqual(pts.sorted().first ?? -1, 0, accuracy: 1e-6)
+    }
+}
+
+final class VisionTrackTests: XCTestCase {
+    func testJointLookupInterpolatesAndRespectsConfidence() {
+        let frames = [
+            VisionFrame(time: 0, body: ["leftWrist": VisionPoint(x: 0.0, y: 0.5, confidence: 0.9)]),
+            VisionFrame(time: 0.1, body: ["leftWrist": VisionPoint(x: 1.0, y: 0.5, confidence: 0.9)]),
+            VisionFrame(time: 0.2, body: ["leftWrist": VisionPoint(x: 1.0, y: 0.5, confidence: 0.05)]),
+        ]
+        let track = VisionTrack(fps: 10, frames: frames)
+        XCTAssertEqual(track.joint("leftWrist", at: 0.05)?.x ?? -1, 0.5, accuracy: 1e-9)
+        XCTAssertNil(track.joint("leftWrist", at: 0.2), "low-confidence joints are dropped")
+        XCTAssertNil(track.joint("nose", at: 0.05))
+        XCTAssertEqual(track.frame(at: 99)?.time, 0.2, "clamps past the end")
+        XCTAssertTrue(track.frames[0].hasPerson)
+    }
+
+    func testOrientationFromTransform() {
+        XCTAssertEqual(VisionTrack.orientation(.identity), .up)
+        XCTAssertEqual(VisionTrack.orientation(CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 0, ty: 0)), .right)
+    }
+
+    func testDemoClipAnalyzesWithoutAPerson() {
+        let track = VisionTrack.load("demo/clip.mp4", fps: 10, masks: false)
+        XCTAssertGreaterThan(track.frames.count, 30)
+        XCTAssertFalse(track.frames.contains { $0.hasPerson }, "the demo clip is typography only")
     }
 }

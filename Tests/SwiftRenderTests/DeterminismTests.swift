@@ -1,6 +1,7 @@
 import SwiftUI
 import XCTest
 @testable import SwiftRender
+@testable import SwiftRenderScenes
 
 /// The framework's core promise: same t in, same pixels out — every run.
 @MainActor

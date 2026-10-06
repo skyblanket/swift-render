@@ -7,7 +7,7 @@ hill-climbing machine, a frontier ecosystem) on a dark editorial canvas, with
 an accent of `#C7FF1A`, a synthesized ambient score, and TTS narration mixed on
 top.
 
-It is one Swift file — [`Sources/SwiftRender/Scenes/FutureOfTheFirm.swift`](../Sources/SwiftRender/Scenes/FutureOfTheFirm.swift) —
+It is one Swift file — [`Sources/SwiftRenderScenes/FutureOfTheFirm.swift`](../Sources/SwiftRenderScenes/FutureOfTheFirm.swift) —
 a pure function of time like every other scene, plus a one-command pipeline for
 the voiceover.
 

@@ -54,21 +54,22 @@ public final class Recorder {
     /// Render a SwiftUI view that's a pure function of time `t` (in seconds)
     /// to an MP4 at `outputURL`. Optionally muxes in `audioURL`.
     ///
-    /// `duration` is the scene's full length (what `RenderContext` and the scene
-    /// see); `startTime`/`endTime` select the span to encode, so a `--range`
-    /// render is frame-identical to the same span of a full render.
-    /// `progress(frame, total)` is called after each encoded frame.
+    /// Frames `startTime…duration` are rendered (`duration` is the END time). Pass
+    /// `sceneDuration` when that is a sub-range of a longer scene so the render
+    /// context reports the scene's real length. Frame times are computed from the
+    /// absolute frame index, so a range render is pixel-identical to the same
+    /// frames of a full render — chunks from `--jobs` concatenate seamlessly.
+    /// `progress(frame, total)` is called after each encoded frame (export UIs).
     public func render<V: View>(
         to outputURL: URL,
         duration: Double,
         startTime: Double = 0,
-        endTime: Double? = nil,
+        sceneDuration: Double? = nil,
         audioURL: URL? = nil,
         postFX: Bool = true,
         progress: (@MainActor (Int, Int) -> Void)? = nil,
         @ViewBuilder content: @escaping @MainActor (Double) -> V
     ) async throws {
-        let endTime = min(duration, endTime ?? duration)
         let applyFX = config.postFX && postFX
         // Make sure parent dir exists, remove stale file
         try FileManager.default.createDirectory(
@@ -86,6 +87,9 @@ public final class Recorder {
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: config.defaultBitrate,
                 AVVideoMaxKeyFrameIntervalKey: config.fps * 2,
+                // No B-frames: presentation == decode order and frame 0 sits at t=0,
+                // so chunks (and the audio mux) line up to the frame without edit lists.
+                AVVideoAllowFrameReorderingKey: false,
             ],
         ]
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -109,7 +113,9 @@ public final class Recorder {
         }
         writer.startSession(atSourceTime: .zero)
 
-        let totalFrames = max(1, Int(((endTime - startTime) * Double(config.fps)).rounded()))
+        let firstFrame = Int((startTime * Double(config.fps)).rounded())
+        let totalFrames = max(1, Int((duration * Double(config.fps)).rounded()) - firstFrame)
+        let contextDuration = sceneDuration ?? duration
         let timescale: CMTimeScale = CMTimeScale(config.fps)
         let frameDuration = CMTime(value: 1, timescale: timescale)
 
@@ -117,7 +123,7 @@ public final class Recorder {
         let scaleCG = config.scale
 
         for frameIdx in 0..<totalFrames {
-            let t = startTime + Double(frameIdx) / Double(config.fps)
+            let t = Double(firstFrame + frameIdx) / Double(config.fps)
 
             // Drain each frame's autoreleased image memory (NSImage, CGImage,
             // CIContext intermediates) inside an explicit pool — without it,
@@ -125,7 +131,7 @@ public final class Recorder {
             // The owned CVPixelBuffer (a Create-rule object) safely outlives the pool.
             let pixelBuffer: CVPixelBuffer? = autoreleasepool {
                 // Build a fresh view for this frame; apply PostFX wrapper at the top.
-                let rootView = RenderFrame(size: config.size, fps: config.fps, duration: duration,
+                let rootView = RenderFrame(size: config.size, fps: config.fps, duration: contextDuration,
                                            t: t, postFX: applyFX) { content(t) }
 
                 let renderer = ImageRenderer(content: rootView)
@@ -159,7 +165,7 @@ public final class Recorder {
         // Audio mux: if an audio file is provided, take the just-finished video
         // and mux in the audio track via AVMutableComposition.
         if let audioURL = audioURL, FileManager.default.fileExists(atPath: audioURL.path) {
-            try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: endTime - startTime)
+            try await muxAudio(into: outputURL, audioURL: audioURL, videoDuration: duration)
         }
     }
 
@@ -197,51 +203,11 @@ public final class Recorder {
     }
 
     /// Replace the file at `outputURL` with one that has both video and audio tracks.
+    /// Mux `audioURL` into the finished video — video samples are copied, not re-encoded.
     private func muxAudio(into outputURL: URL, audioURL: URL, videoDuration: Double) async throws {
-        let videoAsset = AVURLAsset(url: outputURL)
-        let audioAsset = AVURLAsset(url: audioURL)
-
-        let composition = AVMutableComposition()
-        guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-              let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-        else { return }
-
-        let vTime = CMTime(seconds: videoDuration, preferredTimescale: CMTimeScale(config.fps))
-
-        let vAssetTracks = try await videoAsset.loadTracks(withMediaType: .video)
-        if let v = vAssetTracks.first {
-            try videoTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: vTime),
-                of: v,
-                at: .zero
-            )
-        }
-
-        let aAssetTracks = try await audioAsset.loadTracks(withMediaType: .audio)
-        if let a = aAssetTracks.first {
-            let aDuration = try await audioAsset.load(.duration)
-            let useDuration = min(aDuration, vTime)
-            try audioTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: useDuration),
-                of: a,
-                at: .zero
-            )
-        }
-
-        let tempURL = outputURL.deletingLastPathComponent()
-            .appendingPathComponent("__mux_\(UUID().uuidString).mp4")
-        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else { return }
-        exporter.outputURL = tempURL
-        exporter.outputFileType = .mp4
-        await exporter.export()
-
-        if exporter.status == .completed {
-            try? FileManager.default.removeItem(at: outputURL)
-            try FileManager.default.moveItem(at: tempURL, to: outputURL)
-        } else {
-            try? FileManager.default.removeItem(at: tempURL)
-        }
+        try await MP4Assembler.assemble(video: [outputURL], audio: audioURL, to: outputURL)
     }
+
 
     private func makePixelBuffer(from cgImage: CGImage, size: CGSize, ciContext: CIContext) -> CVPixelBuffer? {
         let attrs = [

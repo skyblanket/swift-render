@@ -1,14 +1,37 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-10-06
 
 ### Added
-- `NeverHeard` — a 93 s first-person short narrated with local TTS (Kokoro, `say` fallback),
-  captions from the same Score, and `Dither` dissolves; a worked example of `speak` + `CaptionView`.
+- **`render --jobs n|auto`** — parallel rendering across processes, stitched by the new
+  `MP4Assembler` without re-encoding; frame-exact against a single-process render
+  (StyleLab 41 s 1080p60: 65 s → 19 s at 5 jobs).
+- **`VisionTrack`** — Apple Vision body pose, hand pose and person masks per frame, analyzed
+  once and cached; `PoseOverlay`; `Rotoscope` demo scene (PropsScene: clip + Stylize look).
+- **`swift-render smoke`** — one frame of every scene plus a no-swish check; runs in CI.
+- **`check` voice vs music** — dB the voiceover sits above the ducked music while speaking,
+  with buried time spans.
+- `Bundle.swiftRender`, `ShaderLibrary.swiftRender`, public `PostFX.init`.
+- `NeverHeard` — a 93 s first-person short narrated with local TTS (Kokoro, `say` fallback).
+- `SlipDueLaunch` — 28 s vertical launch spot.
+
+### Changed
+- Demo scenes moved to a separate **`SwiftRenderScenes`** target/product — the library no
+  longer compiles them. The registry plugin scans both targets.
+- Voiceover has its own mixer bus; kicks/booms/samples now duck ~4.5 dB under speech.
+- The recorder's audio mux copies the video stream (was a full re-encode); encoder writes no
+  B-frames so frame 0 sits at t=0.
+- `whoosh` / `riser` are deprecated and removed from every scene. Rebalanced voice levels in
+  SlipDueLaunch (voice was 5.8 dB under the music), MediaDemo and NeverHeard.
+
+### Removed
+- JETRAY scenes and their assets (`assets/seeker`, `assets/plate`, `data/`) — 64 MB.
 
 ### Fixed
+- `--range` passed the range end as the scene's duration (wrong fades/timing) and gave
+  audio-reactive scenes silence; frame times now come from absolute frame indices.
 - Shader count corrected to 22 everywhere (README said 12, Sizzle and the quickstart said 23).
-- README install snippet points at 0.8.1.
+
 
 ## 0.8.1 — 2026-10-02
 

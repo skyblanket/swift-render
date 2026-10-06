@@ -1,5 +1,7 @@
 # swift-render roadmap
 
+*Shipped so far: 0.9 added the `SwiftRenderScenes` demo target (consumers no longer compile the demo films), `render --jobs`, frame-exact `--range`, `smoke` CI, and VisionTrack + Rotoscope.*
+
 **Goal:** make swift-render the default way Swift teams produce launch films, App Store previews and release videos.
 The film is written in SwiftUI and reviewed in a native editor. A specialized agent applies the review notes.
 
@@ -25,7 +27,7 @@ The rule for where the line falls: anything one person can do offline on their o
 
 ---
 
-## 0.9: Studio preview *(in progress)*
+## 0.10: Studio preview *(in progress)*
 
 The foundation for the editor and the agent loop.
 
@@ -65,13 +67,12 @@ The foundation for the editor and the agent loop.
   - `swift-render launch <repo>` scans `Package.swift`, `.xcodeproj`, `AppIcon`, README, CHANGELOG and git, then renders a film.
   - `swift-render init` scaffolds a `Launch/` package you own.
 
-## 0.10: Launch everywhere
+## 0.11: Launch everywhere
 
 - **App Store Preview Kit.**
   - Every required device size, per locale.
   - Enforces the spec: 15–30 s, ≤30 fps, ≤500 MB, H.264 or ProRes 422 HQ.
   - Localized variants through `--props`.
-- **Lighter consumers.** Move the demo scenes and their assets into a `SwiftRenderDemos` target. External `Launch/` packages then stop compiling 45 demo films (clean build drops from about 23 s to about 8 s) and drop the 22 MB resource bundle.
 - **Masters.** ProRes 4444 and HEVC with alpha, 10-bit, transparent overlays.
 - **LaunchKit styles:** Keynote (default), WWDC "What's new", Changelog / release notes, PR film, and an App Store 30 s cut.
 - **Your own SwiftUI in the film.** A documented path to render your app's real SwiftUI views inside `DeviceFrame`: factor them into a package and import it into `Launch/`. A linter flags AppKit- or UIKit-backed views that `ImageRenderer` can't capture.

@@ -15,5 +15,7 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
+      - name: Smoke-render every scene (one frame each; fails on errors or swish sounds)
+        run: swift run swift-render smoke
       - name: Type-check budget (report-only)
         run: scripts/typecheck-budget.sh 300 900

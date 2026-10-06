@@ -5,7 +5,7 @@ import SwiftRender
 import SwiftRenderKit
 import SwiftUI
 
-public let swiftRenderVersion = "0.9.0"
+public let swiftRenderVersion = "0.10.0-dev"
 
 // MARK: - Scene registry
 //
@@ -51,6 +51,7 @@ struct CLIArgs {
     var audio: String? = nil
     var at: [Double] = [0]      // `frame` subcommand: one or more timestamps
     var preview = false
+    var jobs = 1
     var open = false
     var kind = "render"         // `new`: render | audio
     var rangeStart: Double? = nil
@@ -71,7 +72,7 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
     let sub = argv[1]
     var args = CLIArgs(subcommand: sub)
 
-    if sub == "list" || sub == "--help" || sub == "-h" || sub == "--version" {
+    if sub == "list" || sub == "smoke" || sub == "--help" || sub == "-h" || sub == "--version" {
         return args
     }
 
@@ -106,6 +107,7 @@ func parseArgs(_ argv: [String]) -> CLIArgs {
             let ts = v.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
             args.at = ts.isEmpty ? [0] : ts; i += 2
         case "--preview":  args.preview = true; i += 1
+        case "--jobs":     args.jobs = resolveJobs(v); i += 2
         case "--open":     args.open = true; i += 1
         case "--kind":     args.kind = v; i += 2
         case "--props":    args.props = v; i += 2
@@ -131,7 +133,7 @@ func printUsage() {
     swift-render — programmatic motion graphics in Swift
 
     USAGE:
-      swift-render new <Scene> [--kind audio]  Scaffold Sources/SwiftRender/Scenes/<Scene>.swift
+      swift-render new <Scene> [--kind audio]  Scaffold a scene (Sources/SwiftRenderScenes, or swift-render.json scenesDir)
       swift-render check <Scene>            Contact sheet + blank-frame scan + audio report
       swift-render preview <Scene>          Live window: scrub, play/pause, frame-step, audio
       swift-render render <Scene> [opts]    Render a scene to MP4
@@ -140,6 +142,7 @@ func printUsage() {
       swift-render contact <Scene>           Render a grid contact sheet to PNG
       swift-render audio <Scene> --out x.wav Export a scene's Score as WAV
       swift-render captions <Scene> --out x.srt  Export voiceover captions (.srt or .vtt)
+      swift-render smoke                    Render one frame of every scene; fail on errors or swishes (CI)
       swift-render list                     List available scenes
       swift-render info <Scene> [--json]    Clips, knobs, score events, captions (agent/editor metadata)
 
@@ -162,11 +165,12 @@ func printUsage() {
       --scale <n>              Display scale (default 1.0)
       --out <path>             Output mp4 path (default out/render.mp4)
       --audio <path>           Optional audio file to mux into the output
-      --range <a:b>            Render only seconds a..b (audio mux skipped)
+      --range <a:b>            Render only seconds a..b (picture only; timing matches the full render)
       --at <t>                 Frame timestamp for the `frame` subcommand
       --props <file.json>      JSON props for parameterized scenes
       --cols/--rows <n>        Contact sheet grid (default 5×3)
       --no-postfx              Disable the global grain+vignette pass
+      --jobs <n|auto>          Render in n parallel processes and stitch (auto = half the cores)
       --preview                Half resolution, 30 fps — fast look at motion
       --open                   Open the result when done
       --snapshot <png>         `preview` only: save the window to PNG and exit (CI/agents)
@@ -223,6 +227,10 @@ func run(_ argv: [String]) async throws {
         return
     case "--version":
         print(swiftRenderVersion)
+        return
+    case "smoke":
+        warnIfShadersStale()
+        if !runSmoke(scale: 0.2) { exit(1) }
         return
     case "new":
         do {
@@ -398,7 +406,7 @@ func run(_ argv: [String]) async throws {
 
     let outURL = URL(fileURLWithPath: args.out)
     if args.rangeStart != nil && args.audio != nil {
-        fputs("[swift-render] note: --range renders skip the audio mux (partial-clip sync); render the full scene to mux audio\n", stderr)
+        fputs("[swift-render] note: --range renders are picture-only; render the full scene to mux audio\n", stderr)
     }
     let startTime = args.rangeStart ?? 0
     let endTime = args.rangeEnd ?? duration
@@ -411,8 +419,14 @@ func run(_ argv: [String]) async throws {
     }
 
     let start = Date()
-    try await runner.render(recorder, outURL, RenderSpan(duration: duration, start: startTime, end: endTime),
-                            args.rangeStart == nil ? audioSource : .none, propsURL)
+    if args.jobs > 1 && args.rangeStart == nil {
+        try await renderParallel(jobs: args.jobs, scene: args.sceneName, duration: duration, fps: config.fps,
+                                 audio: audioSource, out: outURL)
+    } else {
+        try await runner.render(recorder, outURL,
+                                RenderSpan(duration: duration, start: startTime, end: endTime, mux: args.rangeStart == nil),
+                                audioSource, propsURL)
+    }
     let elapsed = Date().timeIntervalSince(start)
     print(String(format: "[swift-render] done in %.1fs → %@", elapsed, args.out))
     if args.open { NSWorkspace.shared.open(outURL) }

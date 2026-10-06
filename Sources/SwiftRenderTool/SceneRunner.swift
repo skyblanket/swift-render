@@ -49,11 +49,13 @@ struct AudioPlan {
 }
 
 /// What part of a scene to encode. `duration` is the full scene length the
-/// scene body sees; `start`/`end` pick the encoded span (`--range`).
+/// scene body sees; `start`/`end` pick the encoded span (`--range`, `--jobs` chunks).
+/// `mux: false` renders picture only but still feeds audio-reactive scenes.
 struct RenderSpan {
     var duration: Double
     var start: Double = 0
     var end: Double? = nil
+    var mux: Bool = true
     var progress: (@MainActor (Int, Int) -> Void)? = nil
 }
 
@@ -87,10 +89,10 @@ public struct SceneRunner {
         durationFor = { _ in S.defaultDuration }
         render = { recorder, out, span, source, _ in
             let dur = span.duration
-            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: span.mux)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
-                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
+            try await recorder.render(to: out, duration: span.end ?? dur, startTime: span.start, sceneDuration: dur,
+                                      audioURL: plan.muxURL, postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur)
             }
         }
@@ -111,10 +113,10 @@ public struct SceneRunner {
         durationFor = { _ in S.defaultDuration }
         render = { recorder, out, span, source, _ in
             let dur = span.duration
-            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: span.mux)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
-                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
+            try await recorder.render(to: out, duration: span.end ?? dur, startTime: span.start, sceneDuration: dur,
+                                      audioURL: plan.muxURL, postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, audio: plan.track)
             }
         }
@@ -146,10 +148,10 @@ public struct SceneRunner {
         render = { recorder, out, span, source, propsURL in
             let dur = span.duration
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: true)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: false, needsMux: span.mux)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
-                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
+            try await recorder.render(to: out, duration: span.end ?? dur, startTime: span.start, sceneDuration: dur,
+                                      audioURL: plan.muxURL, postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, props: props)
             }
         }
@@ -181,10 +183,10 @@ public struct SceneRunner {
         render = { recorder, out, span, source, propsURL in
             let dur = span.duration
             let props = try Self.loadProps(S.Props.self, defaults: S.defaultProps, from: propsURL)
-            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: true)
+            let plan = try AudioPlan.make(source, fps: recorder.config.fps, needsTrack: true, needsMux: span.mux)
             defer { plan.cleanup() }
-            try await recorder.render(to: out, duration: dur, startTime: span.start, endTime: span.end, audioURL: plan.muxURL,
-                                      postFX: !S.ownsPostFX, progress: span.progress) { t in
+            try await recorder.render(to: out, duration: span.end ?? dur, startTime: span.start, sceneDuration: dur,
+                                      audioURL: plan.muxURL, postFX: !S.ownsPostFX, progress: span.progress) { t in
                 S.body(at: t, duration: dur, props: props, audio: plan.track)
             }
         }

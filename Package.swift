@@ -5,8 +5,10 @@ let package = Package(
     name: "SwiftRender",
     platforms: [.macOS(.v14)],
     products: [
-        // The engine: scenes, Timeline, Score, Recorder, LaunchKit.
+        // The engine: scene protocols, Timeline, Score, Recorder, LaunchKit.
         .library(name: "SwiftRender", targets: ["SwiftRender"]),
+        // The demo films (LaunchFilm, NeverHeard, StyleLab, …) — not needed by your own packages.
+        .library(name: "SwiftRenderScenes", targets: ["SwiftRenderScenes"]),
         // The full CLI (render/check/preview/serve/launch/…) as a library, so any
         // package can ship its own `swift-render`-style executable for its scenes.
         .library(name: "SwiftRenderTool", targets: ["SwiftRenderTool"]),
@@ -33,12 +35,16 @@ let package = Package(
             plugins: ["MetalCompilerPlugin"]
         ),
         .target(
+            name: "SwiftRenderScenes",
+            dependencies: ["SwiftRender"]
+        ),
+        .target(
             name: "SwiftRenderTool",
             dependencies: ["SwiftRender", "SwiftRenderKit"]
         ),
         .executableTarget(
             name: "SwiftRenderCLI",
-            dependencies: ["SwiftRender", "SwiftRenderTool"],
+            dependencies: ["SwiftRender", "SwiftRenderScenes", "SwiftRenderTool"],
             plugins: ["SceneRegistryPlugin"]
         ),
         .executableTarget(
@@ -59,7 +65,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftRenderTests",
-            dependencies: ["SwiftRender", "SwiftRenderKit", "SwiftRenderTool"]
+            dependencies: ["SwiftRender", "SwiftRenderScenes", "SwiftRenderKit", "SwiftRenderTool"]
         ),
     ]
 )
