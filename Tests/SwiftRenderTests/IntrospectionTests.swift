@@ -318,6 +318,43 @@ final class IntrospectionTests: XCTestCase {
         XCTAssertEqual(store.endRecording().map(\.key), ["inner", "outer"])
     }
 
+    /// Hand-edited and agent-written knob files hold `2026` for a text knob, `"0.8"` for
+    /// a number, `1` for a bool. Those apply; anything else keeps the literal, and the
+    /// declared value always shows what the scene actually used.
+    func testMistypedKnobOverridesAreCoercedOrVisiblyIgnored() throws {
+        let store = KnobStore.shared
+        let saved = store.values
+        defer { store.set(saved) }
+        store.set(["headline": .number(2026), "title.delay": .string(" 0.8 "), "debug.safe": .number(1),
+                   "title.scale": .number(1.5), "flag.off": .string("False"), "frac": .number(0.25),
+                   "word": .bool(true), "bad.number": .string("abc"), "bad.bool": .number(2),
+                   "inf.number": .string("inf")])
+        XCTAssertEqual(Knob.text("headline", "x"), "2026", "a whole number reads as written, not 2026.0")
+        XCTAssertEqual(Knob.text("frac", "x"), "0.25")
+        XCTAssertEqual(Knob.text("word", "x"), "true")
+        XCTAssertEqual(Knob.double("title.delay", 0.3), 0.8)
+        XCTAssertEqual(Knob.bool("debug.safe", false), true)
+        XCTAssertEqual(Knob.bool("flag.off", true), false)
+        XCTAssertEqual(Knob.double("bad.number", 0.3), 0.3)
+        XCTAssertEqual(Knob.double("inf.number", 0.3), 0.3, "non-finite strings are not numbers")
+        XCTAssertEqual(Knob.bool("bad.bool", true), true)
+
+        // End to end: the KnobLab repro from the review, through the probe.
+        let d = KnobLab.defaultDuration
+        let s = probe(d) { AnyView(KnobLab.body(at: $0, duration: d, props: KnobLab.defaultProps)) }
+        let values = Dictionary(uniqueKeysWithValues: s.knobs.map { ($0.key, $0.value) })
+        XCTAssertEqual(values["headline"], .string("2026"))
+        XCTAssertEqual(values["title.delay"], .number(0.8))
+        XCTAssertEqual(values["debug.safe"], .bool(true))
+        XCTAssertEqual(values["title.scale"], .number(1.5))
+        XCTAssertNotNil(values["debug.opacity"], "debug.safe = 1 switched the overlay on")
+
+        store.set(["title.delay": .string("soon")])
+        let ignored = probe(d) { AnyView(KnobLab.body(at: $0, duration: d, props: KnobLab.defaultProps)) }
+        XCTAssertEqual(ignored.knobs.first { $0.key == "title.delay" }?.value, .number(0.3),
+                       "an unusable override shows the default actually in use")
+    }
+
     // MARK: probe reach and retiming
 
     /// The structural tier must only ask a clip for frames the render can reach:

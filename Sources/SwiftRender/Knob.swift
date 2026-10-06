@@ -13,37 +13,44 @@ import SwiftRenderKit
 // Read knobs inside `body` or `soundtrack` (not in a `static let`), or the first
 // value sticks for the life of the process.
 
+/// Live-tunable constants (see above).
+///
+/// Overrides are read leniently, because knob files are also written by hand and by
+/// agents (MCP `set_knobs`): a number for a text knob (`2026`), a numeric string for a
+/// number (`"0.8"`), and 0/1 or "true"/"false" for a bool all apply. Anything else
+/// falls back to the literal, and the declared `KnobInfo.value` shows the value
+/// actually used, so a rejected override is visible in `info` and Studio.
 public enum Knob {
     /// A number. `range` is the slider's range in Studio, not a clamp.
     public static func double(_ key: String, _ value: Double, in range: ClosedRange<Double>? = nil,
                               file: String = #filePath, line: Int = #line) -> Double {
         let o = KnobStore.shared.read(key) { o in
             KnobInfo(key: key, kind: .double, defaultValue: .number(value),
-                     value: o?.doubleValue.map { .number($0) } ?? .number(value),
+                     value: o?.knobDouble.map { .number($0) } ?? .number(value),
                      min: range?.lowerBound, max: range?.upperBound,
                      source: SourceLocation(file: file, line: line))
         }
-        return o?.doubleValue ?? value
+        return o?.knobDouble ?? value
     }
 
     public static func bool(_ key: String, _ value: Bool,
                             file: String = #filePath, line: Int = #line) -> Bool {
         let o = KnobStore.shared.read(key) { o in
             KnobInfo(key: key, kind: .bool, defaultValue: .bool(value),
-                     value: o?.boolValue.map { .bool($0) } ?? .bool(value),
+                     value: o?.knobBool.map { .bool($0) } ?? .bool(value),
                      source: SourceLocation(file: file, line: line))
         }
-        return o?.boolValue ?? value
+        return o?.knobBool ?? value
     }
 
     public static func text(_ key: String, _ value: String,
                             file: String = #filePath, line: Int = #line) -> String {
         let o = KnobStore.shared.read(key) { o in
             KnobInfo(key: key, kind: .text, defaultValue: .string(value),
-                     value: o?.stringValue.map { .string($0) } ?? .string(value),
+                     value: o?.knobText.map { .string($0) } ?? .string(value),
                      source: SourceLocation(file: file, line: line))
         }
-        return o?.stringValue ?? value
+        return o?.knobText ?? value
     }
 
     /// Colors are stored as "#RRGGBB" / "#RRGGBBAA". A malformed override falls back to `hex`.
@@ -55,6 +62,43 @@ public enum Knob {
                             source: SourceLocation(file: file, line: line))
         }
         return o?.stringValue.flatMap { Color(rgbHex: $0) } ?? Color(rgbHex: hex) ?? .white
+    }
+}
+
+extension KnobValue {
+    /// As a number knob reads it: a number, or a string holding a finite number.
+    var knobDouble: Double? {
+        switch self {
+        case .number(let d): return d
+        case .string(let s):
+            guard let d = Double(s.trimmingCharacters(in: .whitespaces)), d.isFinite else { return nil }
+            return d
+        case .bool: return nil
+        }
+    }
+
+    /// As a bool knob reads it: a bool, 0 or 1, or "true"/"false"/"1"/"0" (any case).
+    var knobBool: Bool? {
+        switch self {
+        case .bool(let b): return b
+        case .number(let d): return d == 0 ? false : d == 1 ? true : nil
+        case .string(let s):
+            switch s.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: return nil
+            }
+        }
+    }
+
+    /// As a text knob reads it: a string, a number as written (`2026`, not `2026.0`), or a bool.
+    var knobText: String? {
+        switch self {
+        case .string(let s): return s
+        case .number(let d):
+            return d == d.rounded() && abs(d) < 1e15 ? String(Int64(d)) : String(d)
+        case .bool(let b): return b ? "true" : "false"
+        }
     }
 }
 
