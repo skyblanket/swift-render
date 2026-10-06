@@ -17,7 +17,10 @@ public enum MP4Assembler {
     }
 
     /// Write `segments` (in order) plus optional `audio` (trimmed to the video) to `output`.
-    public static func assemble(video segments: [URL], audio: URL?, to output: URL) async throws {
+    /// `audioOffset` is the audio time that lines up with the first video frame — the
+    /// range start when the video is a sub-range of a scene whose score starts at 0.
+    public static func assemble(video segments: [URL], audio: URL?, audioOffset: Double = 0,
+                                to output: URL) async throws {
         precondition(!segments.isEmpty)
         // Video readers, one per segment, with each segment's start offset.
         var parts: [(AVAssetReader, AVAssetReaderTrackOutput, CMTime)] = []
@@ -48,6 +51,10 @@ public enum MP4Assembler {
                     AVLinearPCMIsNonInterleaved: false,
                 ])
                 reader.add(out)
+                if audioOffset > 0 {
+                    reader.timeRange = CMTimeRange(start: CMTime(seconds: audioOffset, preferredTimescale: 48_000),
+                                                   duration: .positiveInfinity)
+                }
                 audioReader = reader; audioOut = out
             }
         }
@@ -95,6 +102,20 @@ public enum MP4Assembler {
             return nil
         }
 
+        // Audio is shifted so `audioOffset` lands on the first frame; a buffer that still
+        // starts before it (decoder granularity) is skipped rather than played early.
+        let audioShift = audioOffset > 0 ? CMTime(seconds: -audioOffset, preferredTimescale: 48_000) : .zero
+        func nextAudio() -> CMSampleBuffer? {
+            while let sb = audioOut?.copyNextSampleBuffer() {
+                if audioShift == .zero { return sb }
+                if CMSampleBufferGetNumSamples(sb) == 0 { continue }
+                let moved = retimed(sb, by: audioShift)
+                if CMSampleBufferGetPresentationTimeStamp(moved) < .zero { continue }
+                return moved
+            }
+            return nil
+        }
+
         // Interleave: append whichever input is ready, so neither starves the other.
         while !(videoDone && audioDone) {
             var progressed = false
@@ -103,7 +124,7 @@ public enum MP4Assembler {
                 progressed = true
             }
             if !audioDone, let aIn, aIn.isReadyForMoreMediaData {
-                if let sb = audioOut?.copyNextSampleBuffer(), CMSampleBufferGetPresentationTimeStamp(sb) < total {
+                if let sb = nextAudio(), CMSampleBufferGetPresentationTimeStamp(sb) < total {
                     aIn.append(sb)
                 } else { aIn.markAsFinished(); audioDone = true }
                 progressed = true

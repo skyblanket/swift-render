@@ -22,31 +22,44 @@ public enum SceneProbe {
     static let maxRenders = 64
     /// Nesting deeper than this is almost certainly recursion.
     static let maxDepth = 8
+    /// Most clip-content evaluations the structural tier makes per call. `maxDepth`
+    /// bounds depth, this bounds breadth: a scene whose clips each nest several
+    /// more clips would otherwise cost branching^depth. Breadth-first, so the
+    /// shallow levels (what editors show) are always complete first.
+    static let maxEvaluations = 4_096
 
     /// Discover the clips and knobs of the scene `make` builds (`make(t)` is the
     /// scene body at absolute time `t`).
     ///
     /// Two tiers, both pixel-free for real renders:
-    /// - structural: call `make(t)` on a coarse grid and walk every clip's content
-    ///   closure, which finds Timelines built in closures and helper functions;
+    /// - structural: call `make(t)` on a coarse grid, then walk each clip's content
+    ///   closure level by level, which finds Timelines built in closures and helper
+    ///   functions. A clip's content is only ever evaluated at times the scene can
+    ///   show it (inside its parent's span and the scene, at local times in
+    ///   `0 ..< duration`), so the probe never asks for a frame a render wouldn't;
     /// - render: tiny `ImageRenderer` passes at clip starts and midpoints
     ///   (breadth-first, capped at `maxRenders`), which finds Timelines built
     ///   inside custom `View` bodies.
     ///
-    /// Nested Timelines report at their parent clip's offset with depth + 1; times
-    /// assume a nested Timeline runs at 1× (`Timeline(local)` or `Timeline(local - k)`).
+    /// Clip times are fitted, not assumed: every Timeline call site is seen at
+    /// several scene times, and its local time is mapped onto the scene clock
+    /// piecewise-linearly through those sightings. So `Timeline(t * speed)`,
+    /// `Timeline(max(0, t - 1))` (whose first clip holds its first frame until 1 s)
+    /// and nested `Timeline(local - k)` all report where their clips are actually on
+    /// screen. A Timeline seen only once is assumed to run at 1×.
+    /// A Timeline that is built but never drawn (`outro(0).duration`) is dropped
+    /// when the render tier draws that call site elsewhere but never there.
     /// Knobs read anywhere during the probe, on any thread, are declared. Knobs read
     /// only by `soundtrack(duration:)` are declared if the caller evaluates it between
     /// `KnobStore.shared.beginRecording()` and `endRecording()`.
     public static func probe(duration: Double, size: CGSize, fps: Int,
                              make: @escaping @MainActor (Double) -> AnyView) -> SceneStructure {
+        // A non-finite length has no frames to probe (and NaN would never end the grid).
+        guard duration.isFinite else { return SceneStructure() }
         let probe = ProbeCollector()
         KnobStore.shared.beginRecording()
         ProbeCollector.$current.withValue(probe) {
-            let step = max(0.5, duration / 120)
-            for t in stride(from: 0.0, to: max(duration, 1e-9), by: step) {
-                probe.structural(at: t, make: make)
-            }
+            probe.structural(duration: duration, make: make)
 
             var times: [Double] = [], seen = Set<Int>(), next = 0, scheduled = 0
             func enqueue(_ t: Double) {
@@ -66,6 +79,7 @@ public enum SceneProbe {
                 probe.render(at: times[next], size: size, fps: fps, duration: duration, make: make)
                 next += 1
             }
+            probe.dropPhantomLanes(duration: duration)
         }
         let knobs = KnobStore.shared.endRecording()
         return SceneStructure(clips: probe.clipInfos(duration: duration), knobs: knobs)
@@ -110,20 +124,34 @@ struct ProbeReporter: View {
 final class ProbeCollector: @unchecked Sendable {
     @TaskLocal static var current: ProbeCollector?
 
+    /// A Timeline seen at scene time `abs` with its own clock at `local`. Render-tier
+    /// sightings are ground truth; structural ones come from walking a clip's first
+    /// closure, which may have captured stale values, so a render at the same time wins.
+    struct Sighting {
+        var abs: Double
+        var local: Double
+        var rendered: Bool
+    }
+
+    /// One Timeline call site under one parent clip.
     struct Lane {
         let parent: String?
         let depth: Int
         let label: String?
         let source: SourceLocation
+        var sightings: [Sighting] = []
     }
 
+    /// One placed clip, in its lane's local time.
     struct Record {
-        let lane: Lane
+        let lane: String
         let start: Double, end: Double
         let label: String?
         let source: SourceLocation
         let pinned: Bool
         let transition: Transition
+        /// From the first sighting; the structural tier walks it.
+        let content: (Double) -> AnyView
     }
 
     /// Structural tier: the clip whose content is being evaluated right now.
@@ -131,14 +159,21 @@ final class ProbeCollector: @unchecked Sendable {
 
     private(set) var isRendering = false
     private var renderTime = 0.0
+    private var sceneDuration = 0.0
     private var context = Context(parent: nil, depth: 0, absNow: 0)
     private var built: [(timeline: Timeline, context: Context)] = []
-    private var descended = Set<String>()
+    /// Structural tier: clips recorded since the last level was walked.
+    private var frontier: [String] = []
     private var lanes: [String: Lane] = [:]
     private var laneOrder: [String] = []
     private(set) var records: [String: Record] = [:]
     /// Record keys in discovery order; a parent always precedes its children.
     private(set) var order: [String] = []
+    private var renderTimes: [Double] = []
+    private var renderedLanes = Set<String>()
+    private var phantomLanes = Set<String>()
+    private var maps: [String: LaneMap] = [:]
+    private var spans: [String: (start: Double, end: Double)?] = [:]
 
     // MARK: keys
     // Internal keys survive retiming: lane = parent clip + Timeline source;
@@ -159,25 +194,52 @@ final class ProbeCollector: @unchecked Sendable {
         }
     }
 
-    /// Record every clip `tl` places, given that its local time `tl.t` is absolute `absNow`.
-    /// First sighting wins, so results don't depend on which probe time saw a clip last.
-    private func record(_ tl: Timeline, parent: String?, depth: Int, absNow: Double) -> [String] {
+    /// Note that `tl`'s local time `tl.t` was scene time `absNow`, and record the clips
+    /// it places (first sighting wins for a clip's local start, length and closure).
+    private func record(_ tl: Timeline, parent: String?, depth: Int, absNow: Double, rendered: Bool,
+                        sighted: Bool = true) -> [String] {
         let laneKey = Self.laneKey(parent: parent, tl)
         if lanes[laneKey] == nil {
             lanes[laneKey] = Lane(parent: parent, depth: depth, label: tl.label,
                                   source: SourceLocation(file: tl.file, line: tl.line))
             laneOrder.append(laneKey)
         }
-        let lane = lanes[laneKey]!
+        if rendered { renderedLanes.insert(laneKey) }
+        if sighted { addSighting(Sighting(abs: absNow, local: tl.t, rendered: rendered), to: laneKey) }
         let keys = Self.clipKeys(lane: laneKey, tl)
-        let offset = absNow - tl.t
         for (i, p) in tl.placed.enumerated() where records[keys[i]] == nil {
-            records[keys[i]] = Record(lane: lane, start: offset + p.start, end: offset + p.start + p.clip.duration,
+            records[keys[i]] = Record(lane: laneKey, start: p.start, end: p.start + p.clip.duration,
                                       label: p.clip.label, source: SourceLocation(file: p.clip.file, line: p.clip.line),
-                                      pinned: p.clip.pinnedStart != nil, transition: p.clip.transition)
+                                      pinned: p.clip.pinnedStart != nil, transition: p.clip.transition,
+                                      content: p.clip.content)
             order.append(keys[i])
+            if !rendered { frontier.append(keys[i]) }
         }
         return keys
+    }
+
+    /// One sighting per scene time per lane: a render beats a structural walk, then
+    /// the later local time wins. Two instances of one call site drawn at once
+    /// (`HStack { card(t); card(t - 1) }`) share a lane, and SwiftUI evaluates bodies in
+    /// no promised order, so the tie-break must not depend on which was met first.
+    private func addSighting(_ s: Sighting, to laneKey: String) {
+        guard s.abs.isFinite, s.local.isFinite else { return }
+        if let i = lanes[laneKey]!.sightings.firstIndex(where: { abs($0.abs - s.abs) < 1e-9 }) {
+            let old = lanes[laneKey]!.sightings[i]
+            guard (s.rendered && !old.rendered) || (s.rendered == old.rendered && s.local > old.local) else { return }
+            lanes[laneKey]!.sightings[i] = s
+        } else {
+            lanes[laneKey]!.sightings.append(s)
+        }
+        maps[laneKey] = nil
+        spans.removeAll(keepingCapacity: true)
+    }
+
+    private func map(_ laneKey: String) -> LaneMap {
+        if let m = maps[laneKey] { return m }
+        let m = LaneMap(lanes[laneKey]?.sightings ?? [])
+        maps[laneKey] = m
+        return m
     }
 
     // MARK: structural tier
@@ -188,24 +250,51 @@ final class ProbeCollector: @unchecked Sendable {
         built.append((tl, context))
     }
 
+    private func drainBuilt() {
+        var i = 0
+        while i < built.count {
+            let (tl, ctx) = built[i]; i += 1
+            _ = record(tl, parent: ctx.parent, depth: ctx.depth, absNow: ctx.absNow, rendered: false)
+        }
+        built.removeAll(keepingCapacity: true)
+    }
+
+    /// Evaluate the scene on a coarse grid, then walk clip content level by level.
+    /// Each level's lanes have all their structural sightings (they come from walking
+    /// the level above) before any of their clips is walked, so the times a clip is
+    /// walked at come from its lane's fitted clock, and lie where the clip is on screen.
     @MainActor
-    func structural(at t: Double, make: @MainActor (Double) -> AnyView) {
-        context = Context(parent: nil, depth: 0, absNow: t)
-        _ = make(t)
-        // Breadth-first: walking a clip's content may build more Timelines, which append to `built`.
-        while !built.isEmpty {
-            let (tl, ctx) = built.removeFirst()
-            let keys = record(tl, parent: ctx.parent, depth: ctx.depth, absNow: ctx.absNow)
-            guard ctx.depth < SceneProbe.maxDepth else { continue }
-            for (i, p) in tl.placed.enumerated() where descended.insert(keys[i]).inserted {
-                let start = ctx.absNow - tl.t + p.start
-                let d = p.clip.duration
-                for local in Set([min(1e-3, d / 2), d / 2, max(0, d - 1e-3)]).sorted() {
-                    context = Context(parent: keys[i], depth: ctx.depth + 1, absNow: start + local)
-                    _ = p.clip.content(local)
+    func structural(duration: Double, make: @MainActor (Double) -> AnyView) {
+        sceneDuration = duration
+        let step = max(0.5, duration / 120)
+        for t in stride(from: 0.0, to: max(duration, 1e-9), by: step) {    // t = 0 at least, for knobs
+            context = Context(parent: nil, depth: 0, absNow: t)
+            _ = make(t)
+            drainBuilt()
+        }
+        var budget = SceneProbe.maxEvaluations
+        while !frontier.isEmpty, budget > 0 {
+            let level = frontier
+            frontier = []
+            for key in level {
+                guard budget > 0 else { break }
+                guard let r = records[key], let lane = lanes[r.lane], lane.depth < SceneProbe.maxDepth,
+                      let span = span(key, duration: duration) else { continue }
+                let clock = map(r.lane)
+                let length = r.end - r.start
+                let edge = min(1e-3, (span.end - span.start) / 2)
+                for a in Set([span.start + edge, (span.start + span.end) / 2, span.end - edge]).sorted() {
+                    let local = clock.local(at: a) - r.start
+                    // The render only ever asks for 0 ..< length; neither does the probe.
+                    guard local.isFinite, local >= 0, local < length, budget > 0 else { continue }
+                    budget -= 1
+                    context = Context(parent: key, depth: lane.depth + 1, absNow: a)
+                    _ = r.content(local)
+                    drainBuilt()
                 }
             }
         }
+        frontier = []
     }
 
     // MARK: render tier
@@ -214,6 +303,7 @@ final class ProbeCollector: @unchecked Sendable {
     func render(at t: Double, size: CGSize, fps: Int, duration: Double, make: @escaping @MainActor (Double) -> AnyView) {
         isRendering = true; renderTime = t
         defer { isRendering = false }
+        renderTimes.append(t)
         let renderer = ImageRenderer(content: RenderFrame(size: size, fps: fps, duration: duration,
                                                           t: t, postFX: false) { make(t) })
         renderer.scale = 16 / max(1, size.width)
@@ -227,58 +317,168 @@ final class ProbeCollector: @unchecked Sendable {
         // Timeline inside one arrives unscoped; reuse the lane the structural tier
         // already placed for the same source rather than inventing a root lane.
         let source = SourceLocation(file: tl.file, line: tl.line)
+        var sighted = true
         if scope == nil, lanes[Self.laneKey(parent: nil, tl)] == nil,
            let known = laneOrder.lazy.compactMap({ self.lanes[$0] }).first(where: { $0.depth > 0 && $0.source == source }) {
             parent = known.parent; depth = known.depth
+            // That guess may be another instance of the same helper; only let it move the
+            // lane's clock while the guessed parent is actually on screen.
+            sighted = known.parent.flatMap { span($0, duration: sceneDuration) }
+                .map { $0.start <= renderTime && renderTime < $0.end } ?? true
         }
-        let keys = record(tl, parent: parent, depth: depth, absNow: renderTime)
+        let keys = record(tl, parent: parent, depth: depth, absNow: renderTime, rendered: true, sighted: sighted)
         return keys.map { ProbeScope(parent: $0, depth: depth + 1) }
+    }
+
+    /// A Timeline built but never drawn — typically one made only to read its
+    /// `.duration` (`let n = outro(0).duration`) — is still met by the structural
+    /// tier. Drop its lane when the evidence is unambiguous: the render tier drew the
+    /// same call site elsewhere (so it can see it), rendered while this lane's clips
+    /// would be on screen, and never met it there.
+    func dropPhantomLanes(duration: Double) {
+        var bySource: [SourceLocation: [String]] = [:]
+        for key in laneOrder { bySource[lanes[key]!.source, default: []].append(key) }
+        var laneClips: [String: [String]] = [:]
+        for key in order { laneClips[records[key]!.lane, default: []].append(key) }
+        var phantoms = Set<String>()
+        for key in laneOrder where !renderedLanes.contains(key) {
+            let lane = lanes[key]!
+            guard bySource[lane.source]!.contains(where: { $0 != key && renderedLanes.contains($0) }) else { continue }
+            let shown = (laneClips[key] ?? []).compactMap { span($0, duration: duration) }
+            if renderTimes.contains(where: { t in shown.contains { $0.start <= t && t < $0.end } }) {
+                phantoms.insert(key)
+            }
+        }
+        phantomLanes = phantoms
+        spans.removeAll()
     }
 
     // MARK: output
 
-    /// Absolute span of a record, clipped to its parent's span and to the scene.
+    /// Absolute span of a record: where its lane's fitted clock puts its local range,
+    /// clipped to its parent's span and to the scene. nil when it is never on screen.
     func span(_ key: String, duration: Double) -> (start: Double, end: Double)? {
-        guard let r = records[key] else { return nil }
-        var lo = max(0, r.start), hi = min(duration, r.end)
-        if let parent = r.lane.parent {
-            guard let p = span(parent, duration: duration) else { return nil }
-            lo = max(lo, p.start); hi = min(hi, p.end)
+        if let cached = spans[key] { return cached }
+        var result: (start: Double, end: Double)? = nil
+        if let r = records[key], let lane = lanes[r.lane], !phantomLanes.contains(r.lane) {
+            var lo = 0.0, hi = duration
+            var parentShown = true
+            if let parent = lane.parent {
+                if let p = span(parent, duration: duration) { lo = p.start; hi = p.end } else { parentShown = false }
+            }
+            if parentShown { result = map(r.lane).visible(r.start, r.end, within: lo, hi) }
         }
-        return hi - lo > 1e-6 ? (lo, hi) : nil
+        spans[key] = .some(result)
+        return result
     }
 
     /// Clips in tree order — each parent followed by its nested clips — siblings by start.
     func clipInfos(duration: Double) -> [ClipInfo] {
         func round6(_ x: Double) -> Double { (x * 1e6).rounded() / 1e6 + 0 }   // + 0 turns -0 into 0
         let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
-        var spans: [String: (start: Double, end: Double)] = [:]
+        var shown: [String: (start: Double, end: Double)] = [:]
         var children: [String: [String]] = [:]
         for key in order {
             guard let s = span(key, duration: duration) else { continue }
-            spans[key] = (round6(s.start), round6(s.end))
-            children[records[key]!.lane.parent ?? "", default: []].append(key)
+            shown[key] = (round6(s.start), round6(s.end))
+            children[lanes[records[key]!.lane]!.parent ?? "", default: []].append(key)
         }
         var out: [ClipInfo] = [], ids: [String: String] = [:], used: [String: Int] = [:]
         func emit(_ parent: String) {
-            let keys = (children[parent] ?? []).sorted { (spans[$0]!.start, rank[$0]!) < (spans[$1]!.start, rank[$1]!) }
+            let keys = (children[parent] ?? []).sorted { (shown[$0]!.start, rank[$0]!) < (shown[$1]!.start, rank[$1]!) }
             for key in keys {
-                let r = records[key]!, s = spans[key]!
-                let base = ClipInfo.id(depth: r.lane.depth, start: s.start, line: r.source.line)
+                let r = records[key]!, s = shown[key]!, lane = lanes[r.lane]!
+                let base = ClipInfo.id(depth: lane.depth, start: s.start, line: r.source.line)
                 let n = used[base, default: 0]
                 used[base] = n + 1
                 let id = n == 0 ? base : "\(base)~\(n)"
                 ids[key] = id
-                out.append(ClipInfo(id: id, label: r.label, start: s.start, end: s.end, depth: r.lane.depth,
+                out.append(ClipInfo(id: id, label: r.label, start: s.start, end: s.end, depth: lane.depth,
                                     pinned: r.pinned, transitionIn: r.transition.name,
                                     transitionDuration: r.transition.duration, source: r.source,
-                                    parentID: r.lane.parent.flatMap { ids[$0] },
-                                    timelineLabel: r.lane.label, timelineSource: r.lane.source))
+                                    parentID: lane.parent.flatMap { ids[$0] },
+                                    timelineLabel: lane.label, timelineSource: lane.source))
                 emit(key)
             }
         }
         emit("")
         return out
+    }
+}
+
+// MARK: - Lane clock
+
+/// How a Timeline's local time follows the scene clock, fitted from its sightings:
+/// piecewise linear through them, extended past the first and last with the end
+/// slopes. Where a clamp or freeze meets a moving stretch between two sightings
+/// (`max(0, t - 1.2)` seen at 1.0 and 1.5), the kink is placed where the
+/// neighbouring stretches' lines cross rather than smeared across the gap.
+/// One sighting can't show a rate, so it assumes 1×.
+struct LaneMap {
+    private(set) var points: [(a: Double, l: Double)] = []
+    private var leftSlope = 1.0, rightSlope = 1.0
+
+    init(_ sightings: [ProbeCollector.Sighting]) {
+        let pts = sightings.map { (a: $0.abs, l: $0.local) }.sorted { $0.a < $1.a }
+        guard pts.count >= 2 else { points = pts; return }
+        func slope(_ i: Int) -> Double { (pts[i + 1].l - pts[i].l) / (pts[i + 1].a - pts[i].a) }
+        func same(_ x: Double, _ y: Double) -> Bool { abs(x - y) <= 1e-9 * max(1, abs(x), abs(y)) }
+        var out = [pts[0]]
+        for i in 0..<(pts.count - 1) {
+            if i > 0, i + 2 < pts.count {
+                let mL = slope(i - 1), m = slope(i), mR = slope(i + 1)
+                if !same(mL, mR), !same(m, mL), !same(m, mR) {
+                    // Left stretch's line through pts[i] meets right stretch's line through pts[i+1].
+                    let ak = (pts[i + 1].l - pts[i].l - mR * pts[i + 1].a + mL * pts[i].a) / (mL - mR)
+                    if ak > pts[i].a, ak < pts[i + 1].a {
+                        out.append((ak, pts[i].l + mL * (ak - pts[i].a)))
+                    }
+                }
+            }
+            out.append(pts[i + 1])
+        }
+        points = out
+        leftSlope = (out[1].l - out[0].l) / (out[1].a - out[0].a)
+        let n = out.count
+        rightSlope = (out[n - 1].l - out[n - 2].l) / (out[n - 1].a - out[n - 2].a)
+    }
+
+    /// The lane's local time at scene time `a` (NaN with no sightings).
+    func local(at a: Double) -> Double {
+        guard let first = points.first, let last = points.last else { return .nan }
+        if a <= first.a { return first.l + leftSlope * (a - first.a) }
+        if a >= last.a { return last.l + rightSlope * (a - last.a) }
+        var lo = 0, hi = points.count - 1           // points[lo].a < a < points[hi].a
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if points[mid].a <= a { lo = mid } else { hi = mid }
+        }
+        let p = points[lo], q = points[hi]
+        return p.l + (q.l - p.l) * (a - p.a) / (q.a - p.a)
+    }
+
+    /// Scene times within `lo ..< hi` at which local time is in `s ..< e`, as one
+    /// span (the hull, if the clock runs backwards and shows a clip twice).
+    func visible(_ s: Double, _ e: Double, within lo: Double, _ hi: Double) -> (start: Double, end: Double)? {
+        guard !points.isEmpty, !s.isNaN, !e.isNaN, s < e, lo.isFinite, hi.isFinite, lo < hi else { return nil }
+        var knots = [(a: lo, l: local(at: lo))]
+        for p in points where p.a > lo && p.a < hi { knots.append(p) }
+        knots.append((hi, local(at: hi)))
+        var start = Double.infinity, end = -Double.infinity
+        for i in 0..<(knots.count - 1) {
+            let (a1, l1) = knots[i], (a2, l2) = knots[i + 1]
+            guard a2 > a1 else { continue }
+            var x1 = a1, x2 = a2
+            if l1 == l2 {
+                guard s <= l1, l1 < e else { continue }
+            } else {
+                let m = (l2 - l1) / (a2 - a1)
+                let atS = a1 + (s - l1) / m, atE = a1 + (e - l1) / m
+                if m > 0 { x1 = max(a1, atS); x2 = min(a2, atE) } else { x1 = max(a1, atE); x2 = min(a2, atS) }
+            }
+            if x2 > x1 { start = min(start, x1); end = max(end, x2) }
+        }
+        return end - start > 1e-6 ? (start, end) : nil
     }
 }
 
