@@ -46,6 +46,8 @@ struct AskAgentSheet: View {
         }
         .frame(width: 600)
         .onAppear(perform: prefill)
+        // A build that fails (or recovers) while the sheet is open.
+        .onChange(of: buildErrors.isEmpty) { _, clean in fixBuild = !clean }
         .task { claude = .some(await ToolPaths.resolve("claude")) }
     }
 

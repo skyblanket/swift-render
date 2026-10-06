@@ -151,6 +151,7 @@ struct AgentPanel: View {
                 }
                 .padding(.vertical, 6)
             }
+            .defaultScrollAnchor(.bottom)
             .onChange(of: agent.transcript.count) {
                 if let last = agent.transcript.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
