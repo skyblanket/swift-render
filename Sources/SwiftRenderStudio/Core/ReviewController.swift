@@ -227,6 +227,7 @@ final class ReviewController {
         let revision = await Task.detached { lookup(store) }.value
         var c = Self.makeComment(t: t, end: end, region: region, body: body,
                                  author: ReviewAuthor(name: authorName), context: ctx, revision: revision)
+        var stillError: String?
         if let capture = captureStill {
             let rel = ReviewAttachmentPaths.before(c.id)
             let url = store.url(forAttachment: rel)
@@ -235,11 +236,12 @@ final class ReviewController {
                 try await capture(c.t, url)
                 c.attachments = [ReviewAttachment(kind: .before, path: rel, t: c.t)]
             } catch {
-                lastError = "before still failed: \(error)"
+                stillError = "Posted without a BEFORE frame: \(error)"
             }
         }
         try store.add(scene: scene, c)
         reload()
+        if let stillError { lastError = stillError }
         selection = c.id
         return c
     }
@@ -342,7 +344,10 @@ final class ReviewController {
     /// Pin edit (drag the rect): a new normalized region, clamped to the frame.
     func moveRegion(_ id: String, to region: ReviewRegion) throws {
         guard let scene else { return }
-        try store.update(scene: scene, id: id) { $0.region = region.clamped }
+        let c = region.clamped
+        func r4(_ v: Double) -> Double { (v * 10_000).rounded() / 10_000 }
+        let tidy = ReviewRegion(x: r4(c.x), y: r4(c.y), w: r4(c.w), h: r4(c.h))
+        try store.update(scene: scene, id: id) { $0.region = tidy }
         reload()
     }
 
