@@ -44,7 +44,7 @@ public struct FeatureCard: View {
     private func symbol(_ size: CGFloat) -> some View {
         Image(systemName: LaunchAssets.symbol(feature.symbol))
             .font(.system(size: size, weight: .medium))
-            .symbolRenderingMode(.hierarchical)
+            .symbolRenderingMode(.monochrome)
             .foregroundStyle(theme.accent)
     }
 
@@ -148,7 +148,7 @@ public struct FeatureList: View {
                     HStack(alignment: .firstTextBaseline, spacing: 30 * u) {
                         Image(systemName: LaunchAssets.symbol(f.symbol))
                             .font(.system(size: 40 * u, weight: .medium))
-                            .symbolRenderingMode(.hierarchical)
+                            .symbolRenderingMode(.monochrome)
                             .foregroundStyle(theme.accent)
                             .frame(width: 60 * u)
                         VStack(alignment: .leading, spacing: 8 * u) {

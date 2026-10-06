@@ -170,10 +170,36 @@ private struct State {
         }
     }
 
-    func dumpPackage() -> [String: Any]? {
-        guard let r = try? ProcessRunner.run("/usr/bin/env", ["swift", "package", "dump-package"], cwd: root),
-              r.status == 0, let data = r.stdout.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    /// `swift package dump-package` in a private scratch dir: under `swift run` the
+    /// package's own `.build` is locked, and dump-package would wait on it forever.
+    /// Killed after 60 s (the regex reading takes over).
+    mutating func dumpPackage() -> [String: Any]? {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("sr-scan-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["swift", "package", "--scratch-path", scratch.path, "dump-package"]
+        p.currentDirectoryURL = root
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        let box = ScanOutput()
+        let reader = DispatchGroup()
+        reader.enter()
+        let handle = out.fileHandleForReading
+        DispatchQueue.global().async { box.data = handle.readDataToEndOfFile(); reader.leave() }
+        guard (try? p.run()) != nil else { return nil }
+        let deadline = Date().addingTimeInterval(60)
+        while p.isRunning && Date() < deadline { usleep(20_000) }
+        if p.isRunning {
+            p.terminate()
+            report.warnings.append("swift package dump-package timed out; read Package.swift with regexes")
+        }
+        p.waitUntilExit()
+        reader.wait()
+        guard p.terminationStatus == 0,
+              let obj = try? JSONSerialization.jsonObject(with: box.data) as? [String: Any] else { return nil }
         return obj
     }
 
@@ -885,3 +911,5 @@ private struct State {
         }
     }
 }
+
+private final class ScanOutput: @unchecked Sendable { var data = Data() }

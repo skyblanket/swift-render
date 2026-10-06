@@ -324,6 +324,9 @@ private func packageManifest(dependency: String, packageRef: String) -> String {
     let package = Package(
         name: "Launch",
         platforms: [.macOS(.v14)],
+        products: [
+            .executable(name: "launch", targets: ["LaunchCLI"]),
+        ],
         dependencies: [
             \(dependency),
         ],
@@ -335,13 +338,16 @@ private func packageManifest(dependency: String, packageRef: String) -> String {
                     .product(name: "SwiftRenderKit", package: "\(packageRef)"),
                 ]
             ),
+            // The module isn't called `launch`: that name is taken by a Darwin SDK module
+            // Foundation depends on, and shadowing it breaks every other build in the package.
             .executableTarget(
-                name: "launch",
+                name: "LaunchCLI",
                 dependencies: [
                     "LaunchScenes",
                     .product(name: "SwiftRender", package: "\(packageRef)"),
                     .product(name: "SwiftRenderTool", package: "\(packageRef)"),
                 ],
+                path: "Sources/launch",
                 plugins: [.plugin(name: "SceneRegistryPlugin", package: "\(packageRef)")]
             ),
         ]
