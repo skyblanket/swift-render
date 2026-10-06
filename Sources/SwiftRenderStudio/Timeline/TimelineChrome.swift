@@ -228,7 +228,10 @@ struct TimelineHoverOverlay: View {
                     c.stroke(Path(roundedRect: r, cornerRadius: 3.5), with: .color(.white.opacity(0.5)), lineWidth: 1)
                 }
                 // Time chip in the ruler.
-                let label = ctx.resolve(Text(TimelineViewport.label(v.snap(v.t(x)), major: 0.01))
+                let major = v.tickSpacing().major
+                let at = v.snap(v.t(x))
+                let text = major < 0.25 ? TimelineViewport.label(at, major: major, fps: v.fps) : TimelineViewport.label(at, major: 0.01)
+                let label = ctx.resolve(Text(text)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.black))
                 let w = label.measure(in: CGSize(width: 200, height: 20)).width + 8
                 let chip = CGRect(x: min(max(0, x - w / 2), size.width - w), y: 1, width: w, height: 13)

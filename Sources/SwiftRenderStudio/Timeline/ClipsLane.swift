@@ -69,13 +69,17 @@ struct ClipsLane: LaneRenderer {
             let h = Self.rowHeight - 3
             let selected = c.id == selectedID
             let color = Self.color(c, index: i)
+            if let under = LaneDraw.rect(viewport: v, from: c.start, to: c.end, y: y, height: h) {
+                // Opaque base: an overlapping (crossfading) clip covers the one before it.
+                ctx.fill(Path(roundedRect: under, cornerRadius: 3), with: .color(StudioStyle.laneBackground))
+            }
             LaneDraw.block(&ctx, viewport: v, from: c.start, to: c.end, y: y, height: h, color: color,
                            label: nil, labels: &labels, stroke: selected ? .white : nil, fill: selected ? 0.58 : 0.34)
             guard let rect = LaneDraw.rect(viewport: v, from: c.start, to: c.end, y: y, height: h) else { continue }
             if c.transitionDuration > 0, c.transitionIn != "cut" {
                 let x1 = min(rect.maxX, v.x(c.start + c.transitionDuration))
                 let tr = CGRect(x: rect.minX, y: rect.minY, width: max(0, x1 - rect.minX), height: rect.height)
-                LaneDraw.hatch(&ctx, tr, color: .white.opacity(0.30), spacing: 3.5)
+                LaneDraw.hatch(&ctx, tr, color: .white.opacity(0.22), spacing: 3.5)
                 var edge = Path()
                 edge.move(to: CGPoint(x: tr.minX, y: tr.maxY)); edge.addLine(to: CGPoint(x: tr.maxX, y: tr.minY))
                 ctx.stroke(edge, with: .color(.white.opacity(0.75)), lineWidth: 1)
