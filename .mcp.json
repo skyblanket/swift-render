@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "swift-render": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "swift build -q --product swift-render-mcp 1>&2 && exec \"$(swift build --show-bin-path)/swift-render-mcp\""
+      ]
+    }
+  }
+}

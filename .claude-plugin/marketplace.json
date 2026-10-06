@@ -1,0 +1,19 @@
+{
+  "name": "swift-render",
+  "description": "Claude Code plugins for swift-render — Apple-style launch films from Swift codebases, rendered from SwiftUI.",
+  "owner": {
+    "name": "swift-render contributors",
+    "url": "https://github.com/skyblanket/swift-render"
+  },
+  "plugins": [
+    {
+      "name": "swift-render",
+      "source": "./claude-plugin",
+      "description": "The swift-render-director agent, the swift-render-review skill and the swift-render MCP server: address timecoded, region-boxed review comments by editing scene Swift, re-rendering and resolving.",
+      "version": "0.9.0",
+      "category": "media",
+      "homepage": "https://github.com/skyblanket/swift-render/blob/main/docs/review-loop.md",
+      "license": "MIT"
+    }
+  ]
+}

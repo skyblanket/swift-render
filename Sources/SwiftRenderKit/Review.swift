@@ -288,3 +288,151 @@ public struct ReviewStore: Sendable {
         return nil
     }
 }
+
+// MARK: - Parsing and lookup helpers (shared by the review CLI, MCP server and Studio)
+
+public extension ReviewStatus {
+    /// Lenient parse for CLI/agent input: "inProgress", "in-progress", "in_progress",
+    /// "wontfix", "won't fix", … (case-insensitive).
+    init?(loose text: String) {
+        switch text.lowercased().filter(\.isLetter) {
+        case "open", "reopen": self = .open
+        case "inprogress", "progress", "claimed": self = .inProgress
+        case "resolved", "done", "fixed": self = .resolved
+        case "wontfix", "wontdo": self = .wontFix
+        default: return nil
+        }
+    }
+
+    /// Comma-separated filter: "open,inProgress" → that set; "active" → open + inProgress;
+    /// "all" → nil (no filter). Throws on an unknown word.
+    static func parseFilter(_ text: String) throws -> Set<ReviewStatus>? {
+        var out = Set<ReviewStatus>()
+        for raw in text.split(separator: ",") {
+            let word = raw.trimmingCharacters(in: .whitespaces)
+            switch word.lowercased() {
+            case "all": return nil
+            case "active": out.formUnion([.open, .inProgress])
+            default:
+                guard let s = ReviewStatus(loose: word) else {
+                    throw ReviewError.io("unknown status '\(word)' (open, inProgress, resolved, wontFix, active, all)")
+                }
+                out.insert(s)
+            }
+        }
+        return out.isEmpty ? nil : out
+    }
+}
+
+public extension ReviewRegion {
+    /// Parses "x,y,w,h" (normalized 0…1, origin top-left), clamped to the frame.
+    /// nil when malformed or empty.
+    init?(parsing text: String) {
+        let v = text.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard v.count == 4, v[2] > 0, v[3] > 0 else { return nil }
+        let c = ReviewRegion(x: v[0], y: v[1], w: v[2], h: v[3]).clamped
+        guard c.w > 0, c.h > 0 else { return nil }
+        self = c
+    }
+
+    /// The part of the region inside the unit square.
+    var clamped: ReviewRegion {
+        // Leave in-bounds values untouched (x + w - x isn't always w in floating point).
+        if x >= 0, y >= 0, w >= 0, h >= 0, x + w <= 1, y + h <= 1 { return self }
+        let x0 = min(max(x, 0), 1), y0 = min(max(y, 0), 1)
+        let x1 = min(max(x + w, 0), 1), y1 = min(max(y + h, 0), 1)
+        return ReviewRegion(x: x0, y: y0, w: max(0, x1 - x0), h: max(0, y1 - y0))
+    }
+
+    /// Pixel rectangle (origin top-left) on a `width`×`height` image.
+    func pixelRect(width: Int, height: Int) -> CGRect {
+        let c = clamped
+        return CGRect(x: c.x * Double(width), y: c.y * Double(height),
+                      width: c.w * Double(width), height: c.h * Double(height))
+    }
+
+    /// "x 0.10 y 0.20 w 0.30 h 0.40"
+    var label: String { String(format: "x %.2f y %.2f w %.2f h %.2f", x, y, w, h) }
+}
+
+public extension ReviewComment {
+    /// The frame captured when the comment was made (or first claimed).
+    var beforeAttachment: ReviewAttachment? { attachments?.first { $0.kind == .before } }
+
+    /// The newest `.after` frame attached on a reply.
+    var latestAfter: ReviewAttachment? {
+        for reply in replies.reversed() {
+            if let a = reply.attachments.last(where: { $0.kind == .after }) { return a }
+        }
+        return nil
+    }
+
+    /// One line for terminal lists: `c1a2b3c4  00:12.40  open  ▢  body  (2 replies)`.
+    var summaryLine: String {
+        let flat = body.replacingOccurrences(of: "\n", with: " ")
+        let short = flat.count > 72 ? String(flat.prefix(71)) + "…" : flat
+        var s = "\(id)  \(timecode)  \(status.rawValue)"
+        if region != nil { s += "  ▢" }
+        s += "  \(short)"
+        if !replies.isEmpty { s += "  (\(replies.count) repl\(replies.count == 1 ? "y" : "ies"))" }
+        return s
+    }
+}
+
+/// A comment with its scene — the shape `review … --json` and the MCP server emit.
+public struct ReviewEntry: Codable, Sendable, Equatable {
+    public var scene: String
+    public var comment: ReviewComment
+    public init(scene: String, comment: ReviewComment) { self.scene = scene; self.comment = comment }
+}
+
+public extension ReviewStore {
+    /// Find by exact id, else by a unique prefix (≥ 4 characters) across all scenes.
+    func resolve(id: String) throws -> ReviewEntry {
+        if let hit = find(id: id) { return ReviewEntry(scene: hit.scene, comment: hit.comment) }
+        guard id.count >= 4 else { throw ReviewError.notFound(scene: "*", id: id) }
+        let matches = all().filter { $0.comment.id.hasPrefix(id) }
+        if matches.count == 1 { return ReviewEntry(scene: matches[0].scene, comment: matches[0].comment) }
+        if matches.isEmpty { throw ReviewError.notFound(scene: "*", id: id) }
+        throw ReviewError.io("ambiguous id \(id): " + matches.map(\.comment.id).joined(separator: ", "))
+    }
+
+    /// Absolute URL for a project-relative attachment path.
+    func url(forAttachment path: String) -> URL {
+        path.hasPrefix("/") ? URL(fileURLWithPath: path) : project.root.appendingPathComponent(path)
+    }
+
+    /// Adds an attachment to the comment itself. A comment has one `.before` frame,
+    /// so a new one replaces the old.
+    @discardableResult
+    func attach(scene: String, id: String, _ attachment: ReviewAttachment) throws -> ReviewComment {
+        try update(scene: scene, id: id) { c in
+            var list = c.attachments ?? []
+            if attachment.kind == .before { list.removeAll { $0.kind == .before } }
+            list.append(attachment)
+            c.attachments = list
+        }
+    }
+
+    /// Deletes a comment plus the attachment files it and its replies reference.
+    func remove(scene: String, id: String) throws {
+        let comment = try load(scene: scene).comments.first { $0.id == id }
+        try delete(scene: scene, id: id)
+        guard let comment else { return }
+        let paths = (comment.attachments ?? []).map(\.path) + comment.replies.flatMap { $0.attachments.map(\.path) }
+        for p in paths where p.hasPrefix(".swift-render/attachments/") {
+            try? FileManager.default.removeItem(at: url(forAttachment: p))
+        }
+    }
+
+    /// Short git revision of the project, "+dirty" when tracked files changed; nil outside git.
+    func currentRevision() -> String? {
+        guard let r = try? ProcessRunner.run("/usr/bin/env", ["git", "rev-parse", "--short", "HEAD"], cwd: project.root),
+              r.status == 0 else { return nil }
+        let sha = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sha.isEmpty else { return nil }
+        let dirty = (try? ProcessRunner.run("/usr/bin/env", ["git", "status", "--porcelain", "--untracked-files=no"],
+                                            cwd: project.root)).map { $0.status == 0 && !$0.stdout.isEmpty } ?? false
+        return dirty ? sha + "+dirty" : sha
+    }
+}
