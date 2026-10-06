@@ -1,6 +1,7 @@
 import SwiftUI
 import XCTest
 @testable import SwiftRender
+@testable import SwiftRenderScenes
 
 final class MusicTests: XCTestCase {
     func testMidiPitch() {

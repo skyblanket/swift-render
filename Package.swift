@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "SwiftRender", targets: ["SwiftRender"]),
+        .library(name: "SwiftRenderScenes", targets: ["SwiftRenderScenes"]),
         .executable(name: "swift-render", targets: ["SwiftRenderCLI"]),
     ],
     targets: [
@@ -18,9 +19,13 @@ let package = Package(
             ],
             plugins: ["MetalCompilerPlugin"]
         ),
+        .target(
+            name: "SwiftRenderScenes",
+            dependencies: ["SwiftRender"]
+        ),
         .executableTarget(
             name: "SwiftRenderCLI",
-            dependencies: ["SwiftRender"],
+            dependencies: ["SwiftRender", "SwiftRenderScenes"],
             plugins: ["SceneRegistryPlugin"]
         ),
         .plugin(
@@ -33,7 +38,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftRenderTests",
-            dependencies: ["SwiftRender"]
+            dependencies: ["SwiftRender", "SwiftRenderScenes"]
         ),
     ]
 )

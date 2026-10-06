@@ -156,7 +156,7 @@ func scaffoldScene(name: String, kind: String) throws -> URL {
     guard name.range(of: #"^[A-Z][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
         throw NSError(domain: "new", code: 1, userInfo: [NSLocalizedDescriptionKey: "scene name must be UpperCamelCase"])
     }
-    let url = packageRoot.appendingPathComponent("Sources/SwiftRender/Scenes/\(name).swift")
+    let url = packageRoot.appendingPathComponent("Sources/SwiftRenderScenes/\(name).swift")
     if FileManager.default.fileExists(atPath: url.path) {
         throw NSError(domain: "new", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(url.path) already exists"])
     }

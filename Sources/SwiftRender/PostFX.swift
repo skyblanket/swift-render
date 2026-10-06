@@ -10,6 +10,11 @@ public struct PostFX: ViewModifier {
     var vignetteAmount: Double = 0.40
     var enabled: Bool = true
 
+    public init(time: Double, grainAmount: Double = 0.10, vignetteAmount: Double = 0.40, enabled: Bool = true) {
+        self.time = time; self.grainAmount = grainAmount
+        self.vignetteAmount = vignetteAmount; self.enabled = enabled
+    }
+
     public func body(content: Content) -> some View {
         ZStack {
             // Opaque base: scenes that fade by lowering their own opacity would

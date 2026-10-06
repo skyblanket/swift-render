@@ -299,7 +299,7 @@ func printUsage() {
     swift-render — programmatic motion graphics in Swift
 
     USAGE:
-      swift-render new <Scene> [--kind audio]  Scaffold Sources/SwiftRender/Scenes/<Scene>.swift
+      swift-render new <Scene> [--kind audio]  Scaffold Sources/SwiftRenderScenes/<Scene>.swift
       swift-render check <Scene>            Contact sheet + blank-frame scan + audio report
       swift-render preview <Scene>          Live window: scrub, play/pause, frame-step, audio
       swift-render render <Scene> [opts]    Render a scene to MP4
