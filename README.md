@@ -514,6 +514,20 @@ Code outside the engine reaches the bundled shaders and resources through
 
 ## For AI agents
 
+**Any agent, any Swift repo.** `swift-render-mcp` is a stdio MCP server for Claude Code, Claude
+Desktop, Codex and Cursor. Point it at any Swift codebase and an agent can make a launch film with
+`launch_film`. It sees the result as a contact sheet and edits the copy through props. It can also
+scaffold and write its own scenes (`init_project`, `new_scene`), look at frames, check the audio
+and render MP4s. The API guide is built in (`docs`, and the resources `swift-render://docs/<topic>`).
+Inside a swift-render project it also runs the review loop.
+[docs/agents.md](docs/agents.md) covers the build, a config snippet for each client, the modes,
+and the plain-CLI equivalents for agents without MCP.
+
+```bash
+swift build -c release --product swift-render && swift build -c release --product swift-render-mcp
+claude mcp add --scope user swift-render -- "$(swift build -c release --show-bin-path)/swift-render-mcp"
+```
+
 `docs/ai-quickstart.md` is a compact, LLM-ready guide to the whole API, including knobs, clip labels, LaunchKit, `launch`/`init` and the `review` CLI. The design goal: an agent that has never seen this repo writes a working, good-looking scene on the first attempt. (This README's hero ad is the proof.)
 
 To have an agent work through review notes, use the `swift-render-director` agent and the `swift-render` MCP server (see [The review loop](#the-review-loop)). Studio's `--snapshot` lets an agent see the editor itself.

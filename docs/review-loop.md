@@ -72,28 +72,36 @@ Ids accept a unique prefix of 4+ characters. `--` ends options (for a body that 
 
 ## `swift-render-mcp`
 
-Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio.
+Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio. This section covers the review loop.
+The same server also makes videos from any agent in any Swift codebase (`docs`, `launch_film`,
+`new_scene`, `init_project`, `get_props`, `set_props`, the `swift-render://docs/<topic>` resources,
+and project / standalone / docs-only modes). [agents.md](agents.md) documents that side and has
+the setup for every client.
 
 - `initialize` echoes the client's `protocolVersion` when it is one of `2024-11-05`, `2025-03-26`,
-  `2025-06-18`, `2025-11-25`, else answers `2025-11-25`; `capabilities: {tools: {}}`;
-  `serverInfo: {name: "swift-render", version}`; short `instructions`.
-- Also `notifications/*` (never answered), `ping`, `tools/list`, `tools/call`, and JSON-RPC batches.
-  Unknown methods → `-32601`, unknown tool → `-32602`, unparsable line → `-32700`; unknown fields
-  are ignored. A failing tool returns a normal result with `isError: true` and the reason as text.
-- **Concurrency and cancellation**: `initialize`, `ping` and `tools/list` are answered immediately;
+  `2025-06-18`, `2025-11-25`, else answers `2025-11-25`; `capabilities: {tools: {}, resources: {}}`;
+  `serverInfo: {name: "swift-render", title: "swift-render (<mode>)", version}`; `instructions`
+  are the six-line make-a-video recipe, the mode line and the house rules.
+- Also `notifications/*` (never answered), `ping`, `tools/list`, `tools/call`, `resources/list`,
+  `resources/read` and JSON-RPC batches. Unknown methods → `-32601`, unknown tool → `-32602`,
+  unknown resource → `-32002`, unparsable line → `-32700`; unknown fields are ignored. A failing
+  tool returns a normal result with `isError: true` and the reason as text.
+- **Concurrency and cancellation**: `initialize`, `ping`, `tools/list` and the resource methods are answered immediately;
   every other call runs on one serial worker. `notifications/cancelled` stops that call (its CLI
   child's whole process group is killed) and a cancelled request gets no response. SIGTERM, SIGINT,
   SIGHUP and stdin EOF stop running children too (after EOF, calls already asked get
   `SWIFT_RENDER_MCP_EOF_GRACE` seconds, default 30, to finish).
-- **Time limits** on each CLI child (seconds; env overrides): frames and `info` 180 and contact sheets
-  and `check` 600 (`SWIFT_RENDER_MCP_TIMEOUT` sets both), `render_video` 3600
+- **Time limits** on each CLI child (seconds; env overrides): frames, `info`, `props` and `new` 180; contact sheets,
+  `check` and `init` 600 (`SWIFT_RENDER_MCP_TIMEOUT` sets both); `render_video` and `launch_film` 3600
   (`SWIFT_RENDER_MCP_RENDER_TIMEOUT`), builds 1800 (`SWIFT_RENDER_MCP_BUILD_TIMEOUT`).
 - **Validation**: `scene` arguments must be Swift type names (letters, digits, `_`) — anything that
   looks like a path is refused before a file is touched. `times` must be finite and within 0…86400 s.
 - **stdout is protocol only**: at start the server dups fd 1 for responses and points fd 1 at
   stderr. Logs go to stderr as `[swift-render-mcp] …` (one line per tool call with its time).
 - **Project**: `$SWIFT_RENDER_ROOT`, else `Project.discover()` from the cwd (nearest
-  `swift-render.json`, else `Package.swift`).
+  `swift-render.json`, else `Package.swift`), used only when it hosts scenes: a `swift-render.json`,
+  or a manifest that uses `SwiftRenderTool`. Any other package puts the server in standalone mode
+  ([agents.md](agents.md)), and the review tools say they need a project.
 - **Rendering and introspection** shell out to the project's CLI product
   (`swift-render.json` `"product"`, default `swift-render`) with cwd = project root:
   `info --json`, `frame`, `contact`, `check`, `render`, `review scenes --json`. Before each call the
@@ -119,7 +127,12 @@ Hand-written MCP over newline-delimited JSON-RPC 2.0 on stdio.
 | `reply_comment` | `id`, `body`, `attach_frame?`, `reopen?` | agent reply; `attach_frame` renders + attaches the current frame (and returns it); `reopen` gives a claim back (inProgress → open) |
 | `resolve_comment` | `id`, `summary` | renders the after-frame first (fails without changing anything if that fails), adds it on a reply with `summary`, status `resolved`, `resolution = summary`; returns the frame |
 | `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare. Fails, writing nothing, for an unknown scene or a value of the wrong type for a declared knob (e.g. a string for a number knob, a malformed color); never overwrites a knob file that isn't valid knob JSON |
-| `render_video` | `scene`, `preview?` | renders `out/<Scene>.mp4` (or `-preview.mp4`, half-res 30 fps) |
+| `render_video` | `scene`, `preview?`, `aspect?`, `props?`, `props_file?` | renders `out/<Scene>[-9x16\|-1x1].mp4` (or `-preview.mp4`, half-res 30 fps) and returns its absolute path |
+
+`render_frames`, `contact_sheet` and `check_scene` also take `props` (an object merged over the
+current props) or `props_file` (a variant name, a `.json` in the project, or `"defaults"`). Without
+either, a props file saved with `set_props` applies. On a comment's canvas (`comment`), only explicit
+props apply, so review frames match what the note was left on.
 
 `comment` (a comment id) renders on that note's canvas — its size, fps and pinned duration — the
 same composition `get_comment` and `resolve_comment` show; the director passes it when checking a
@@ -142,7 +155,8 @@ stdout stays clean:
 ```
 
 Claude Code starts it with the session's cwd (the project root), which is also how the server finds
-the project. Elsewhere: `claude mcp add swift-render -- /path/to/swift-render-mcp`, or install the plugin.
+the project. Elsewhere: `claude mcp add swift-render -- /path/to/swift-render-mcp`, or install the
+plugin. [agents.md](agents.md) has the snippets for Claude Desktop, Codex and Cursor.
 
 ## The director agent, skill and plugin
 

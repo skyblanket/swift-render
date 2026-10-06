@@ -16,7 +16,9 @@
 #      package itself), and dependencies are never fetched or re-resolved at session start.
 #
 # The server finds its project from the cwd; when this directory's swift-render package
-# is ./Launch, SWIFT_RENDER_ROOT points it there.
+# is ./Launch, SWIFT_RENDER_ROOT points it there. In any other directory it runs standalone
+# (launch films, init, the built-in scenes, docs) with the `swift-render` CLI that sits next
+# to the server binary — so link both into PATH (docs/agents.md).
 
 if [ -z "${SWIFT_RENDER_ROOT:-}" ] && [ ! -f swift-render.json ] && [ -f Launch/swift-render.json ]; then
   SWIFT_RENDER_ROOT="$(cd Launch && pwd)"

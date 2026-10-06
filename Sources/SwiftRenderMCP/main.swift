@@ -1,15 +1,17 @@
-// swift-render-mcp — MCP server for the review loop (Claude Code, Studio's agent runner).
+// swift-render-mcp — MCP server for making and reviewing swift-render videos from any
+// agent (Claude Code, Claude Desktop, Codex, Cursor, Studio's agent runner).
 //
-//   claude mcp add swift-render -- swift-render-mcp        (or the repo's .mcp.json)
+//   claude mcp add swift-render -- /path/to/swift-render-mcp     (docs/agents.md: every client)
 //
-// Speaks MCP (JSON-RPC 2.0, newline-delimited) on stdio. The project is
-// $SWIFT_RENDER_ROOT, else discovered from the working directory. Scene work
-// shells out to the project's own CLI product, rebuilt only when sources change.
+// Speaks MCP (JSON-RPC 2.0, newline-delimited) on stdio. In a swift-render project
+// ($SWIFT_RENDER_ROOT, or one discovered from the working directory) scene work shells
+// out to the project's own CLI product, rebuilt only when sources change; anywhere else
+// it uses the ready-built `swift-render` next to this binary (see Workspace.swift).
 //
-// Threads: this (reader) thread answers `initialize`, `ping` and `tools/list` at once
-// and acts on `notifications/cancelled`; everything else runs in arrival order on a
-// serial worker. Every CLI child has a time limit and runs in its own process group,
-// which a cancel, stdin EOF or SIGTERM/SIGINT stops — no orphaned renders.
+// Threads: this (reader) thread answers `initialize`, `ping`, `tools/list` and the
+// resource methods at once and acts on `notifications/cancelled`; everything else runs
+// in arrival order on a serial worker. Every CLI child has a time limit and runs in its
+// own process group, which a cancel, stdin EOF or SIGTERM/SIGINT stops — no orphaned renders.
 import Foundation
 import SwiftRenderKit
 
@@ -18,13 +20,16 @@ let serverVersion = "0.10.0"
 if CommandLine.arguments.contains("--version") { print(serverVersion); exit(0) }
 if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-h") {
     FileHandle.standardError.write(Data("""
-    swift-render-mcp — MCP stdio server for swift-render review comments and renders.
-    Project: $SWIFT_RENDER_ROOT, else the nearest swift-render.json / Package.swift above the cwd.
-    Tools: list_scenes scene_info render_frames contact_sheet check_scene build list_comments
-           get_comment claim_comment reply_comment resolve_comment set_knobs render_video
-    Time limits (seconds): SWIFT_RENDER_MCP_TIMEOUT (frames, info, sheets),
-           SWIFT_RENDER_MCP_RENDER_TIMEOUT (render_video), SWIFT_RENDER_MCP_BUILD_TIMEOUT.
-    See docs/review-loop.md.
+    swift-render-mcp — MCP stdio server: make swift-render videos (SwiftUI → MP4) from any agent.
+    Project: $SWIFT_RENDER_ROOT, else the nearest swift-render project above the cwd; elsewhere
+             standalone with the swift-render CLI next to this binary ($SWIFT_RENDER_CLI, then PATH).
+    Tools: docs launch_film new_scene init_project get_props set_props list_scenes scene_info
+           render_frames contact_sheet check_scene render_video set_knobs build
+           list_comments get_comment claim_comment reply_comment resolve_comment
+    Resources: swift-render://docs/<topic> (the API guide).
+    Time limits (seconds): SWIFT_RENDER_MCP_TIMEOUT (frames, info, sheets, init),
+           SWIFT_RENDER_MCP_RENDER_TIMEOUT (render_video, launch_film), SWIFT_RENDER_MCP_BUILD_TIMEOUT.
+    See docs/agents.md (setup for every client) and docs/review-loop.md.
 
     """.utf8))
     exit(0)
@@ -37,13 +42,9 @@ dup2(STDERR_FILENO, STDOUT_FILENO)
 let protocolOut = FileHandle(fileDescriptor: protocolFD, closeOnDealloc: false)
 signal(SIGPIPE, SIG_IGN)
 
-let project = Project.discover()
-if let project {
-    log("project \(project.root.path) · product \(project.config.product)")
-} else {
-    log("no project found from \(FileManager.default.currentDirectoryPath); tools will report it")
-}
-let server = MCPServer(tools: ToolBox(project: project), version: serverVersion)
+let workspace = Workspace.discover()
+log(workspace.summary)
+let server = MCPServer(tools: ToolBox(workspace: workspace), version: serverVersion)
 
 /// Responses come from two threads (reader and worker): one line at a time.
 let sendLock = NSLock()

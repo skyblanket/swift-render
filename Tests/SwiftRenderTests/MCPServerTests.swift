@@ -26,6 +26,11 @@ final class MCPServerTests: XCTestCase {
         cp "$FAKE_PNG" "$out"; exit 0 ;;
       contact|check)
         cp "$FAKE_PNG" "$out"; exit 0 ;;
+      props)
+        if [ "$2" = Known ]; then echo '{"title": "Default", "speed": 1}'; exit 0; fi
+        echo "$2 takes no props" >&2; exit 1 ;;
+      review)
+        echo '[]'; exit 0 ;;
     esac
     exit 0
 
@@ -74,66 +79,8 @@ final class MCPServerTests: XCTestCase {
         ])
     }
 
-    /// A line-oriented JSON-RPC client over the server's stdio.
-    private final class Client: @unchecked Sendable {
-        let process = Process()
-        private let input = Pipe(), output = Pipe()
-        private let lock = NSLock()
-        private var buffer = Data()
-        private var replies: [String: [String: Any]] = [:]
-
-        init(_ bin: URL, env: [String: String]) throws {
-            process.executableURL = bin
-            process.environment = ProcessInfo.processInfo.environment.merging(env) { $1 }
-            process.standardInput = input
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            output.fileHandleForReading.readabilityHandler = { [weak self] h in
-                let d = h.availableData
-                guard let self, !d.isEmpty else { return }
-                self.lock.lock(); defer { self.lock.unlock() }
-                self.buffer.append(d)
-                while let nl = self.buffer.firstIndex(of: 0x0A) {
-                    let line = self.buffer[self.buffer.startIndex..<nl]
-                    self.buffer = Data(self.buffer[(nl + 1)...])
-                    if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any], let id = obj["id"] {
-                        self.replies["\(id)"] = obj
-                    }
-                }
-            }
-            try process.run()
-        }
-
-        func send(_ obj: [String: Any]) {
-            var data = try! JSONSerialization.data(withJSONObject: obj)
-            data.append(0x0A)
-            input.fileHandleForWriting.write(data)
-        }
-
-        func call(_ id: Int, _ tool: String, _ args: [String: Any]) {
-            send(["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool, "arguments": args]])
-        }
-
-        func reply(_ id: Int, within seconds: Double) -> [String: Any]? {
-            let deadline = Date().addingTimeInterval(seconds)
-            repeat {
-                lock.lock(); let r = replies["\(id)"]; lock.unlock()
-                if let r { return r }
-                usleep(20_000)
-            } while Date() < deadline
-            return nil
-        }
-
-        func closeInput() { try? input.fileHandleForWriting.close() }
-
-        func stop() {
-            if process.isRunning { process.terminate() }
-            output.fileHandleForReading.readabilityHandler = nil
-        }
-    }
-
-    private func start(_ fake: Fake, env extra: [String: String] = [:]) throws -> Client {
-        let c = try Client(serverBin, env: fake.env.merging(extra) { $1 })
+    private func start(_ fake: Fake, env extra: [String: String] = [:]) throws -> MCPTestClient {
+        let c = try MCPTestClient(serverBin, env: fake.env.merging(extra) { $1 })
         addTeardownBlock { c.stop() }
         c.send(["jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "t", "version": "1"]]])
@@ -367,5 +314,30 @@ final class MCPServerTests: XCTestCase {
                        fake.project.attachmentsDir.standardizedFileURL.path, claimOut)
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: fake.project.root.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("escaped-before.png").path))
+    }
+
+    // MARK: render_video
+
+    func testRenderVideoTakesAspectAndPropsAndReportsTheProjectMode() throws {
+        let fake = try makeFake()
+        let c = try start(fake)
+        let info = try XCTUnwrap(c.initialize())
+        XCTAssertTrue((info["instructions"] as? String ?? "").contains("mode: project"), "\(info)")
+        XCTAssertTrue(((info["serverInfo"] as? [String: Any])?["title"] as? String ?? "").contains("project"))
+
+        let r = c.tool("render_video", ["scene": "Known", "preview": true, "aspect": "9:16", "props": ["title": "Hi"]])
+        XCTAssertFalse(r.isError, r.text)
+        let out = fake.project.root.appendingPathComponent("out/Known-9x16-preview.mp4").path
+        XCTAssertTrue(r.text.contains(out), r.text)
+        let calls = try String(contentsOf: fake.log, encoding: .utf8)
+        let render = try XCTUnwrap(calls.split(separator: "\n").first { $0.hasPrefix("render Known") })
+        XCTAssertTrue(render.contains("--out \(out) --aspect 9:16 --preview --props "), String(render))
+        XCTAssertTrue(render.hasSuffix(".swift-render/cache/mcp/props-Known.json"), String(render))
+        // Inline props merge over the scene's defaults (JSON decoding needs complete payloads).
+        let props = try String(contentsOf: fake.project.cacheDir.appendingPathComponent("mcp/props-Known.json"), encoding: .utf8)
+        XCTAssertTrue(props.contains("\"title\" : \"Hi\"") && props.contains("\"speed\" : 1"), props)
+
+        XCTAssertTrue(c.tool("render_video", ["scene": "Known", "aspect": "4:3"]).text.contains("aspect must be"))
+        XCTAssertTrue(c.tool("list_scenes").text.hasPrefix("mode: project"))
     }
 }

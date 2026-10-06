@@ -3,11 +3,11 @@ import SwiftRenderKit
 
 // MARK: - MCP over stdio (JSON-RPC 2.0, one message per line)
 //
-// Hand-written on purpose: the surface is four methods, and a dependency-free
+// Hand-written on purpose: the surface is a handful of methods, and a dependency-free
 // server builds in seconds. `tools/call` (and anything unusual) runs one at a time,
-// in order, on a worker (see main.swift); `initialize`, `ping` and `tools/list` are
-// answered at once, and `notifications/cancelled` stops the matching call — so a
-// hung render never makes the server unresponsive.
+// in order, on a worker (see main.swift); `initialize`, `ping`, `tools/list` and the
+// resource methods are answered at once, and `notifications/cancelled` stops the
+// matching call — so a hung render never makes the server unresponsive.
 
 typealias JSONObject = [String: Any]
 
@@ -17,6 +17,8 @@ enum RPCCode {
     static let methodNotFound = -32601
     static let invalidParams = -32602
     static let internalError = -32603
+    /// MCP: resources/read for a uri the server doesn't have.
+    static let resourceNotFound = -32002
 }
 
 /// What a tool hands back: MCP content blocks plus the error flag.
@@ -52,8 +54,12 @@ final class MCPServer {
 
     init(tools: ToolBox, version: String) { self.tools = tools; self.version = version }
 
-    /// Answered on the reader thread, never queued behind a running tool call.
-    static let immediateMethods: Set<String> = ["initialize", "ping", "tools/list"]
+    /// Answered on the reader thread, never queued behind a running tool call (none of
+    /// them touches a CLI: the docs are compiled in).
+    static let immediateMethods: Set<String> = ["initialize", "ping", "tools/list", "resources/list",
+                                                "resources/templates/list", "resources/read"]
+
+    static let resourcePrefix = "swift-render://docs/"
 
     /// One input line → the response to write (object or batch array), or nil for notifications.
     func handle(line: String, cancel: ProcessCancel? = nil) -> Any? {
@@ -99,6 +105,23 @@ final class MCPServer {
             return response(id: id, result: [:])
         case "tools/list":
             return response(id: id, result: ["tools": tools.catalog])
+        case "resources/list":
+            let list: [JSONObject] = Guide.topicIDs.map { topic in
+                ["uri": Self.resourcePrefix + topic, "name": topic, "title": Guide.title(topic),
+                 "description": Guide.summary(topic), "mimeType": "text/markdown"]
+            }
+            return response(id: id, result: ["resources": list])
+        case "resources/templates/list":
+            return response(id: id, result: ["resourceTemplates": [] as [JSONObject]])
+        case "resources/read":
+            guard let uri = params["uri"] as? String else {
+                return errorResponse(id: id, code: RPCCode.invalidParams, message: "resources/read needs a uri")
+            }
+            guard uri.hasPrefix(Self.resourcePrefix), let text = Guide.text(String(uri.dropFirst(Self.resourcePrefix.count))) else {
+                return errorResponse(id: id, code: RPCCode.resourceNotFound, message: "Resource not found: \(uri.prefix(200))",
+                                     data: ["uri": uri])
+            }
+            return response(id: id, result: ["contents": [["uri": uri, "mimeType": "text/markdown", "text": text] as JSONObject]])
         case "tools/call":
             guard let name = params["name"] as? String else {
                 return errorResponse(id: id, code: RPCCode.invalidParams, message: "tools/call needs a tool name")
@@ -122,16 +145,15 @@ final class MCPServer {
         if let client = params["clientInfo"] as? JSONObject {
             log("initialize from \(client["name"] ?? "?") \(client["version"] ?? "") protocol \(asked ?? "?") → \(chosen)")
         }
+        let w = tools.workspace
+        let mode = w.mode == .project ? "project \(w.project!.root.lastPathComponent)" : w.mode.rawValue
         return [
             "protocolVersion": chosen,
-            "capabilities": ["tools": [:] as JSONObject],
-            "serverInfo": ["name": "swift-render", "title": "swift-render review loop", "version": version],
+            "capabilities": ["tools": [:] as JSONObject, "resources": [:] as JSONObject],
+            "serverInfo": ["name": "swift-render", "title": "swift-render (\(mode))", "version": version],
             "instructions": """
-            swift-render renders SwiftUI scenes (pure functions of time) to video. Reviewers leave \
-            timecoded, optionally region-boxed comments; you address them: list_comments → get_comment \
-            (frame + region + clip source) → claim_comment → edit the scene's Swift → build → render_frames \
-            with the comment id (same canvas as the note) to look at the result → resolve_comment (or \
-            reply_comment with a question and leave it open).
+            \(Guide.recipe)
+            \(w.summary)
             \(HouseRules.text)
             """,
         ]
@@ -141,8 +163,10 @@ final class MCPServer {
         ["jsonrpc": "2.0", "id": id, "result": result]
     }
 
-    private func errorResponse(id: Any, code: Int, message: String) -> JSONObject {
-        ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message] as JSONObject]
+    private func errorResponse(id: Any, code: Int, message: String, data: JSONObject? = nil) -> JSONObject {
+        var error: JSONObject = ["code": code, "message": message]
+        if let data { error["data"] = data }
+        return ["jsonrpc": "2.0", "id": id, "error": error]
     }
 }
 

@@ -1,12 +1,12 @@
 {
   "name": "swift-render",
   "version": "0.10.0",
-  "description": "Review loop for swift-render films: the swift-render-director agent and the swift-render MCP server pick up timecoded, region-boxed comments left in swift-render Studio, edit the scene Swift, re-render, look, and resolve them.",
+  "description": "Make and review swift-render videos (SwiftUI scenes rendered to MP4) from any Swift codebase: the swift-render MCP server (launch films, new scenes, props, frames, renders, the API guide), the swift-render-make and swift-render-review skills, and the swift-render-director agent that resolves timecoded, region-boxed comments left in swift-render Studio.",
   "author": {
     "name": "swift-render contributors",
     "url": "https://github.com/skyblanket/swift-render"
   },
-  "homepage": "https://github.com/skyblanket/swift-render/blob/main/docs/review-loop.md",
+  "homepage": "https://github.com/skyblanket/swift-render/blob/main/docs/agents.md",
   "repository": "https://github.com/skyblanket/swift-render",
   "license": "MIT",
   "keywords": ["swift", "swiftui", "video", "motion-graphics", "launch-video", "review", "mcp"]
