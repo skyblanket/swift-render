@@ -486,9 +486,13 @@ func ejectScene(props: LaunchProps, root: URL) throws -> URL {
     let project = Project.discover(from: root)
     let base = project?.root ?? root
     let dir: String
+    // The configured scenes directory, else this repo's layout (scenes moved out of the
+    // engine target into SwiftRenderScenes in 0.9; the old path is still honoured).
     if let d = project?.config.scenesDir { dir = d }
-    else if FileManager.default.fileExists(atPath: base.appendingPathComponent("Sources/SwiftRender/Scenes").path) {
-        dir = "Sources/SwiftRender/Scenes"
+    else if let d = ["Sources/SwiftRenderScenes", "Sources/SwiftRender/Scenes"].first(where: {
+        FileManager.default.fileExists(atPath: base.appendingPathComponent($0).path)
+    }) {
+        dir = d
     } else {
         throw LaunchError("no scenes directory for \(base.path): run `swift-render init \(root.path)` to scaffold a Launch/ package")
     }
@@ -496,14 +500,17 @@ func ejectScene(props: LaunchProps, root: URL) throws -> URL {
     let url = base.appendingPathComponent(dir).appendingPathComponent("\(typeName).swift")
     guard !FileManager.default.fileExists(atPath: url.path) else { throw LaunchError("\(url.path) already exists") }
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try sceneSource(typeName: typeName, props: props, external: !dir.hasPrefix("Sources/SwiftRender/"))
+    try sceneSource(typeName: typeName, props: props, external: !dir.hasPrefix("Sources/SwiftRender/"),
+                    product: project?.config.product ?? "swift-render")
         .write(to: url, atomically: true, encoding: .utf8)
     return url
 }
 
 /// An editable launch film: the AppleLaunch sequence spelled out shot by shot, with
 /// the props as Swift defaults. Shots it doesn't override use the stock LaunchKit shot.
-func sceneSource(typeName: String, props: LaunchProps, external: Bool) -> String {
+/// `external`: the file lives outside the engine target, so it imports SwiftRender.
+/// `product`: the CLI product named in the usage comment (`launch` in an init scaffold).
+func sceneSource(typeName: String, props: LaunchProps, external: Bool, product: String = "launch") -> String {
     let staticName = lowerCamel(typeName)
     return """
     import SwiftUI
@@ -512,8 +519,8 @@ func sceneSource(typeName: String, props: LaunchProps, external: Bool) -> String
     /// its local time `l`; the plan (`LaunchPlan`) and the score (`LaunchScore`) are
     /// derived from the same props, so cuts and music stay locked together.
     ///
-    ///   swift run \(external ? "launch" : "swift-render") check \(typeName)
-    ///   swift run \(external ? "launch" : "swift-render") render \(typeName) --preview --open
+    ///   swift run \(product) check \(typeName)
+    ///   swift run \(product) render \(typeName) --preview --open
     public struct \(typeName): PropsScene {
         public typealias Props = LaunchProps
         public static var defaultProps: LaunchProps { .\(staticName) }

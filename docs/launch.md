@@ -31,7 +31,8 @@ When the props file is reused, the summary credits each value that differs from 
 to that file (`← .swift-render/launch/MyApp.json (edited)`), not to the scan's evidence.
 
 `--eject` also writes an editable `<Name>Launch.swift` into the project's scenes directory
-(`swift-render.json` `scenesDir`, or `Sources/SwiftRender/Scenes` in this repo).
+(`swift-render.json` `scenesDir`, or `Sources/SwiftRenderScenes` in this repo); its usage comment
+names the project's CLI product.
 `--no-manifest` skips `swift package dump-package` (which runs the manifest) for untrusted code.
 
 Iterate on the JSON with the usual loop:

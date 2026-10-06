@@ -294,6 +294,18 @@ final class LaunchTests: XCTestCase {
 
     // MARK: CLI helpers
 
+    func testCapitalizingLeavesLowercaseNamesAlone() {
+        XCTAssertEqual(LaunchText.capitalized("faster exports"), "Faster exports")
+        XCTAssertEqual(LaunchText.capitalized("closed-form, scrub-safe"), "Closed-form, scrub-safe")
+        XCTAssertEqual(LaunchText.capitalized("swift-render launch [path]", keeping: ["swift-render"]),
+                       "swift-render launch [path]")
+        XCTAssertEqual(LaunchText.capitalized("swift-renderer", keeping: ["swift-render"]), "Swift-renderer")
+        XCTAssertEqual(LaunchText.capitalized("iOS 18 support"), "iOS 18 support")
+        XCTAssertEqual(LaunchText.capitalized("config.json is optional"), "config.json is optional")
+        XCTAssertEqual(LaunchText.capitalized("v2 API"), "v2 API")
+        XCTAssertEqual(LaunchText.capitalized(""), "")
+    }
+
     func testSwiftLiteralHelpers() {
         XCTAssertEqual(swiftTypeName("swift-render"), "SwiftRender")
         XCTAssertEqual(swiftTypeName("3d viewer"), "App3dViewer")
@@ -352,6 +364,28 @@ final class LaunchTests: XCTestCase {
 
     private func scan(_ root: URL) -> (LaunchProps, LaunchScanReport) {
         LaunchScanner(root: root, options: .init(executeManifest: false, git: false)).scan()
+    }
+
+    func testEjectFindsTheScenesTargetAndNamesTheProjectsCLI() throws {
+        // This repo's layout since 0.9: no swift-render.json scenesDir, scenes in SwiftRenderScenes.
+        let root = try tempDir("eject")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(root, "Package.swift", "// swift-tools-version:5.10\n")
+        try write(root, "Sources/SwiftRenderScenes/Hello.swift", "")
+        let url = try ejectScene(props: .sample, root: root)
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, "SwiftRenderScenes")
+        let src = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(src.contains("import SwiftRender\n"), "a scene outside the engine target imports it")
+        XCTAssertTrue(src.contains("swift run swift-render check"), "usage names this project's CLI")
+
+        // A configured scenesDir and product win.
+        let app = try tempDir("eject-app")
+        defer { try? FileManager.default.removeItem(at: app) }
+        try write(app, "Package.swift", "// swift-tools-version:5.10\n")
+        try write(app, "swift-render.json", "{\"product\": \"launch\", \"scenesDir\": \"Sources/LaunchScenes\"}\n")
+        let other = try ejectScene(props: .sample, root: app)
+        XCTAssertEqual(other.deletingLastPathComponent().lastPathComponent, "LaunchScenes")
+        XCTAssertTrue(try String(contentsOf: other, encoding: .utf8).contains("swift run launch check"))
     }
 
     func testScannerFollowsASymlinkedRoot() throws {

@@ -128,6 +128,11 @@ private struct State {
         report.evidence.append(.init(field: field, value: value, source: source))
     }
 
+    /// The product's names as spelled in its sources, which sentence-casing must not change.
+    var knownNames: [String] {
+        [packageName, xcodeApp?.name, xcodeApp?.displayName, plistName, readmeH1?.0, folderName].compactMap { $0 }
+    }
+
     mutating func run() {
         walk()
         scanPackage()
@@ -745,7 +750,8 @@ private struct State {
                 // A bold lead-in is the item's own title; otherwise its first clause.
                 let raw = e.element.1
                 let title = Self.firstMatch(#"^\*\*([^*]+)\*\*"#, raw).map(LaunchText.clean) ?? LaunchText.clause(raw, limit: 60)
-                let clean = LaunchText.capitalized(title.trimmingCharacters(in: CharacterSet(charactersIn: ".:; ")))
+                let clean = LaunchText.capitalized(title.trimmingCharacters(in: CharacterSet(charactersIn: ".:; ")),
+                                                   keeping: knownNames)
                 return .init(e.element.0, LaunchText.truncate(clean, 60))
             }
         props.changelog = items

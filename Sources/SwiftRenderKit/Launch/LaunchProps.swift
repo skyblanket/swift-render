@@ -606,9 +606,17 @@ public enum LaunchText {
         return truncate(text.trimmingCharacters(in: CharacterSet(charactersIn: ":;, ")), limit)
     }
 
-    /// First letter uppercased (the rest untouched).
-    public static func capitalized(_ s: String) -> String {
+    /// First letter uppercased (the rest untouched) — unless the text starts with one of
+    /// `names` (the product's own spelling, e.g. `swift-render`) or with a word that is
+    /// lowercase on purpose (`iOS`, `macOS`, `config.json`, `v2`, `snake_case`).
+    public static func capitalized(_ s: String, keeping names: [String] = []) -> String {
         guard let f = s.first, f.isLowercase else { return s }
+        for n in names where !n.isEmpty && s.hasPrefix(n) {
+            let rest = s.dropFirst(n.count)
+            if rest.first.map({ !$0.isLetter && !$0.isNumber }) ?? true { return s }
+        }
+        let word = s.prefix { !$0.isWhitespace }
+        if word.dropFirst().contains(where: { $0.isUppercase || $0.isNumber || "_./`@#".contains($0) }) { return s }
         return f.uppercased() + s.dropFirst()
     }
 
