@@ -8,7 +8,9 @@
     python3 scripts/mcp-smoke.py --claude           # one real headless Claude Code run (needs `claude` logged in)
 
 --full adds a throwaway comment with `swift-render review add`, walks it through
-get/claim/reply/resolve over MCP, then deletes it (and its attachments) again.
+get/claim/reply/resolve over MCP, then deletes it (and its attachments) again; and starts a
+second server in a throwaway Swift package outside the repo (standalone mode) to make a launch
+film there, edit its props and check the creation tools' refusals.
 --claude adds a throwaway comment, runs the exact `claude -p … --agent swift-render-director`
 command Studio uses, asks it to reply "ack", checks the reply landed in the review file,
 prints the stream-json events it saw, and deletes the comment again.
@@ -18,14 +20,18 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOLS = {"list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene", "build",
-         "list_comments", "get_comment", "claim_comment", "reply_comment", "resolve_comment",
-         "set_knobs", "render_video"}
+REVIEW_TOOLS = {"list_scenes", "scene_info", "render_frames", "contact_sheet", "check_scene", "build",
+                "list_comments", "get_comment", "claim_comment", "reply_comment", "resolve_comment",
+                "set_knobs", "render_video"}
+CREATE_TOOLS = {"docs", "launch_film", "new_scene", "init_project", "get_props", "set_props"}
+TOOLS = REVIEW_TOOLS | CREATE_TOOLS
 failures = []
 
 
@@ -37,9 +43,9 @@ def check(cond, what):
 
 
 class Client:
-    def __init__(self, argv):
-        self.proc = subprocess.Popen(argv, cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=sys.stderr, bufsize=0)
+    def __init__(self, argv, cwd=ROOT, env=None):
+        self.proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=sys.stderr, bufsize=0, env=env)
         self.next_id = 0
 
     def send(self, obj):
@@ -178,6 +184,87 @@ def claude_e2e(scene, budget):
         drop_if_empty(scene, existed)
 
 
+TINY_PACKAGE = {
+    "Package.swift": """// swift-tools-version: 5.10
+import PackageDescription
+
+let package = Package(
+    name: "Tally",
+    platforms: [.macOS(.v14), .iOS(.v17)],
+    products: [.library(name: "Tally", targets: ["Tally"])],
+    targets: [.target(name: "Tally")]
+)
+""",
+    "README.md": """# Tally
+
+Count anything, beautifully. Live counters with springy SwiftUI digits.
+
+## Features
+
+- **Live counters** — bind any number and watch it roll.
+- **Springy digits** — analytic springs, no timers.
+- **Haptics built in** — feel every increment on iPhone.
+""",
+    "Sources/Tally/Tally.swift": "public struct Tally { public var value = 0; public init() {} }\n",
+}
+
+
+def standalone_e2e(args):
+    """A second server in a Swift package that has never seen swift-render (outside the repo):
+    standalone mode, with the swift-render CLI next to the server binary."""
+    print("standalone (any Swift repo)")
+    if args.bin:
+        server = os.path.abspath(args.bin)
+    else:
+        bin_dir = subprocess.run(["swift", "build", "--show-bin-path"], cwd=ROOT, capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        server = os.path.join(bin_dir, "swift-render-mcp")
+    if not os.path.exists(os.path.join(os.path.dirname(server), "swift-render")):
+        subprocess.run(["swift", "build", "--product", "swift-render"], cwd=ROOT, check=True,
+                       stdout=sys.stderr, stderr=sys.stderr)
+    tmp = tempfile.mkdtemp(prefix="sr-mcp-smoke-")
+    pkg = os.path.join(tmp, "Tally")
+    for rel, body in TINY_PACKAGE.items():
+        os.makedirs(os.path.dirname(os.path.join(pkg, rel)), exist_ok=True)
+        with open(os.path.join(pkg, rel), "w") as f:
+            f.write(body)
+    env = {k: v for k, v in os.environ.items() if k not in ("SWIFT_RENDER_ROOT", "SWIFT_RENDER_CLI")}
+    c = Client([server], cwd=pkg, env=env)
+    try:
+        r = c.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                     "clientInfo": {"name": "mcp-smoke", "version": "1"}})
+        res = r.get("result", {})
+        check("mode: standalone" in res.get("instructions", ""), "initialize in a plain package → mode: standalone")
+        _, res, text, _ = c.call("list_scenes")
+        check(not res.get("isError") and text.startswith("mode: standalone") and "AppleLaunch" in text,
+              "list_scenes → built-in scenes, mode line first")
+        _, res, text, imgs = c.call("launch_film", {"preview": True}, args.save)
+        film = next((line.split("film: ", 1)[1].split("  (")[0] for line in text.splitlines()
+                     if line.startswith("film: ")), "")
+        check(not res.get("isError") and film and os.path.getsize(film) > 10_000 and len(imgs) == 1,
+              f"launch_film preview → {os.path.basename(film)} + contact sheet")
+        check("tagline     Count anything, beautifully." in text and "README.md" in text,
+              "launch_film reports what it detected, with sources")
+        props = os.path.join(pkg, ".swift-render/launch/Tally.json")
+        _, res, text, _ = c.call("set_props", {"scene": "AppleLaunch", "props": {"tagline": "Count on it."}})
+        check(not res.get("isError") and json.load(open(props))["tagline"] == "Count on it.",
+              "set_props AppleLaunch edits the film's props file")
+        _, res, text, _ = c.call("get_props", {"scene": "AppleLaunch"})
+        check("Count on it." in text, "get_props shows the edit")
+        _, res, text, imgs = c.call("render_frames", {"scene": "AppleLaunch", "times": [9], "width": 480}, args.save)
+        check(not res.get("isError") and len(imgs) == 1 and "Tally.json" in text, "render_frames uses the film's props")
+        _, res, text, _ = c.call("new_scene", {"name": "TallyTeaser"})
+        check(res.get("isError") is True and "init_project" in text, "new_scene outside a project → points to init_project")
+        _, res, text, _ = c.call("launch_film", {"path": "/etc"})
+        check(res.get("isError") is True, "launch_film refuses a system folder")
+        wrote = sorted(os.path.relpath(os.path.join(d, f), pkg) for d, _, fs in os.walk(pkg) for f in fs
+                       if not os.path.relpath(os.path.join(d, f), pkg).startswith(("Sources", "Package", "README")))
+        check(all(w.startswith((".swift-render/", "out/")) for w in wrote), f"writes stay in .swift-render/ and out/ ({len(wrote)})")
+    finally:
+        c.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", help="server binary (default: the command in .mcp.json)")
@@ -201,16 +288,31 @@ def main():
     res = r.get("result", {})
     check(res.get("protocolVersion") == "2025-06-18", "initialize echoes a supported protocolVersion")
     check(res.get("capabilities", {}).get("tools") == {}, "capabilities.tools = {}")
+    check(res.get("capabilities", {}).get("resources") == {}, "capabilities.resources = {}")
     check(res.get("serverInfo", {}).get("name") == "swift-render", "serverInfo.name = swift-render")
+    check("mode: project" in res.get("instructions", "") and "launch_film" in res.get("instructions", ""),
+          "instructions: the make-a-video recipe + mode: project")
     c.send({"jsonrpc": "2.0", "method": "notifications/initialized"})     # must not be answered
     r = c.request("initialize", {"protocolVersion": "1999-01-01", "capabilities": {}})
     check(r["result"]["protocolVersion"] == "2025-11-25", "unknown protocolVersion → newest supported")
     check(c.request("ping").get("result") == {}, "ping → {}")
     r = c.request("tools/list")
     names = {t["name"] for t in r["result"]["tools"]}
-    check(names == TOOLS, f"tools/list has the 13 contract tools ({len(names)})")
+    check(names == TOOLS, f"tools/list has the {len(TOOLS)} contract tools ({len(names)})")
     check(all(t["inputSchema"].get("type") == "object" for t in r["result"]["tools"]), "every inputSchema is an object")
+    check(all(isinstance(p.get("type"), str) for t in r["result"]["tools"]
+              for p in t["inputSchema"].get("properties", {}).values()), "every argument has a single JSON type")
     r = c.request("resources/list")
+    uris = [x["uri"] for x in r.get("result", {}).get("resources", [])]
+    check("swift-render://docs/scenes" in uris and "swift-render://docs/more" not in uris,
+          f"resources/list: {len(uris)} docs topics, every quickstart section filed")
+    r = c.request("resources/read", {"uri": "swift-render://docs/all"})
+    text = (r.get("result", {}).get("contents") or [{}])[0].get("text", "")
+    with open(os.path.join(ROOT, "docs/ai-quickstart.md"), encoding="utf-8") as f:
+        check(text == f.read().strip("\n"), "resources/read docs/all = docs/ai-quickstart.md (embedded copy fresh)")
+    r = c.request("resources/read", {"uri": "swift-render://docs/nope"})
+    check(r.get("error", {}).get("code") == -32002, "unknown resource → -32002")
+    r = c.request("prompts/list")
     check(r.get("error", {}).get("code") == -32601, "unknown method → -32601")
     r = c.request("tools/call", {"name": "no_such_tool", "arguments": {}})
     check(r.get("error", {}).get("code") == -32602, "unknown tool → -32602")
@@ -234,7 +336,26 @@ def main():
     sizes = [png_size(i) for i in imgs]
     check(not res.get("isError") and sizes and sizes[0][1] > sizes[0][0], f"render_frames aspect 9:16 → portrait {sizes}")
 
+    print("creation tools (project mode)")
+    _, res, text, _ = c.call("docs")
+    check(not res.get("isError") and "How to make a video" in text and "`timeline`" in text, "docs → recipe + topic index")
+    _, res, text, _ = c.call("docs", {"topic": "scenes"})
+    check(not res.get("isError") and "Ease.clip" in text, "docs scenes → the scene API")
+    _, res, text, _ = c.call("get_props", {"scene": "AppleLaunch"})
+    check(not res.get("isError") and '"tagline"' in text, "get_props AppleLaunch → props JSON")
+    _, res, text, _ = c.call("get_props", {"scene": scene})
+    check(res.get("isError") is True and "takes no props" in text, f"get_props {scene} → takes no props")
+    _, res, text, _ = c.call("render_video", {"scene": scene, "aspect": "4:3"})
+    check(res.get("isError") is True and "aspect must be" in text, "render_video refuses a bad aspect")
+
     print("hardening")
+    _, res, text, _ = c.call("new_scene", {"name": "../../Evil"})
+    check(res.get("isError") is True and "UpperCamelCase" in text, "new_scene refuses a path as name")
+    _, res, text, _ = c.call("set_props", {"scene": "AppleLaunch", "props": {"x": 1}, "file": "../../evil.json"})
+    check(res.get("isError") is True and not os.path.exists(os.path.join(os.path.dirname(ROOT), "evil.json")),
+          "set_props refuses a file outside .swift-render/props")
+    _, res, text, _ = c.call("launch_film", {"path": "/"})
+    check(res.get("isError") is True and "refusing" in text, "launch_film refuses /")
     for times in (["nan"], "inf", [1e19]):
         _, res, text, _ = c.call("render_frames", {"scene": scene, "times": times})
         check(res.get("isError") is True and "finite" in text, f"render_frames times={times!r} refused")
@@ -297,6 +418,8 @@ def main():
         check(not res.get("isError") and (had_knobs or not os.path.exists(knobs)), "set_knobs null removes keys")
 
     c.close()
+    if args.full:
+        standalone_e2e(args)
     print("\n" + ("PASS" if not failures else f"FAIL ({len(failures)}): " + "; ".join(failures)))
     sys.exit(1 if failures else 0)
 

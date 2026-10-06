@@ -242,7 +242,8 @@ final class ReviewLoopTests: XCTestCase {
         XCTAssertEqual(result(1)["protocolVersion"] as? String, "2025-11-25")
         XCTAssertEqual(replies[2]["id"] as? String, "p")
         let names = ((result(3)["tools"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
-        XCTAssertEqual(Set(names), Set(Self.toolNames))
+        // The review-loop contract; the creation tools (MCPCreateTests) come on top.
+        XCTAssertTrue(Set(names).isSuperset(of: Self.toolNames), "\(names)")
         XCTAssertTrue(text(4).contains(c.id) && text(4).contains("logo too small"), text(4))
         XCTAssertEqual(result(5)["isError"] as? Bool, false, text(5))
         XCTAssertEqual(result(6)["isError"] as? Bool, true)

@@ -3,26 +3,55 @@ import SwiftRenderKit
 
 // MARK: - Tools
 //
-// Names and argument shapes are a contract with Studio and the
-// swift-render-director agent (.claude/agents/swift-render-director.md).
+// Names and argument shapes are a contract with Studio, the swift-render-director
+// agent (.claude/agents/swift-render-director.md) and every agent config in docs/agents.md.
 // Review writes go through ReviewStore (flock) so Studio and the CLI can write
-// concurrently; renders go through the project's CLI so they use the code on disk.
+// concurrently; renders go through a CLI (see Workspace) so they use the code on disk.
+// The creation tools (docs, launch_film, new_scene, init_project, get_props, set_props)
+// live in CreateTools.swift.
 
 final class ToolBox {
-    let project: Project?
-    let cli: ProjectCLI?
+    /// Mode, workspace and CLIs. Changes once at most: `init_project` turns a standalone
+    /// server into a project one.
+    var workspace: Workspace { lock.lock(); defer { lock.unlock() }; return _workspace }
+    private var _workspace: Workspace
+    /// `initialize` reads the workspace on the reader thread while a call may adopt a project.
+    private let lock = NSLock()
+    private(set) var cli: ProjectCLI?
     /// Who agent replies are attributed to.
     let agentName: String
+    /// The running call's cancel token, handed to every CLI it starts.
+    private(set) var cancel: ProcessCancel?
 
-    init(project: Project?, agentName: String = "Claude") {
-        self.project = project
-        self.cli = project.map(ProjectCLI.init)
+    init(workspace: Workspace, agentName: String = "Claude") {
+        self._workspace = workspace
+        self.cli = workspace.project.map(ProjectCLI.init)
         self.agentName = agentName
+    }
+
+    /// Review-loop only (tests, Studio): a project and no standalone CLI.
+    convenience init(project: Project?, agentName: String = "Claude") {
+        self.init(workspace: Workspace(project: project, root: project?.root), agentName: agentName)
+    }
+
+    var project: Project? { workspace.project }
+
+    /// After `init_project`: the new Launch/ package hosts scenes from now on.
+    func adopt(project: Project) {
+        lock.lock(); _workspace.project = project; lock.unlock()
+        cli = ProjectCLI(project: project)
+        cli?.cancel = cancel
     }
 
     private typealias Handler = (ToolBox) -> (Args) throws -> ToolResult
 
     private static let handlers: [String: Handler] = [
+        "docs": ToolBox.docs,
+        "launch_film": ToolBox.launchFilm,
+        "new_scene": ToolBox.newScene,
+        "init_project": ToolBox.initProject,
+        "get_props": ToolBox.getProps,
+        "set_props": ToolBox.setProps,
         "list_scenes": ToolBox.listScenes,
         "scene_info": ToolBox.sceneInfo,
         "render_frames": ToolBox.renderFrames,
@@ -44,32 +73,57 @@ final class ToolBox {
     /// `notifications/cancelled`, server shutdown).
     func call(_ name: String, _ arguments: JSONObject, cancel: ProcessCancel? = nil) -> ToolResult {
         guard let handler = Self.handlers[name] else { return .error("unknown tool \(name)") }
+        self.cancel = cancel
         cli?.cancel = cancel
-        defer { cli?.cancel = nil }
+        defer { cli?.cancel = nil; self.cancel = nil }
         do { return try handler(self)(Args(arguments)) }
         catch { return .error(String(describing: error)) }
     }
 
     // MARK: catalog
 
+    /// One tool's catalog entry.
+    static func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
+                     required: [String] = [], readOnly: Bool = false) -> JSONObject {
+        var schema: JSONObject = ["type": "object", "properties": props, "additionalProperties": false]
+        if !required.isEmpty { schema["required"] = required }
+        return ["name": name, "title": title, "description": description, "inputSchema": schema,
+                "annotations": ["readOnlyHint": readOnly] as JSONObject]
+    }
+
+    static let sceneArg: JSONObject = ["type": "string",
+                                       "description": "Scene name (a Swift type name), e.g. \"AppleLaunch\" — see list_scenes."]
+    static let aspectArg: JSONObject = ["type": "string", "enum": ["16:9", "9:16", "1:1"],
+                                        "description": "Canvas aspect: 16:9 landscape (default), 9:16 vertical, 1:1 square."]
+    static let propsArg: JSONObject = [
+        "type": "object", "additionalProperties": true,
+        "description": "Props for a data-driven scene (AppleLaunch or any PropsScene), e.g. {\"tagline\": \"Ship it.\"}: "
+            + "missing keys keep their current values. Omit both props and props_file to use the props saved with "
+            + "set_props (for AppleLaunch, else the film launch_film made here), else the scene's defaults.",
+    ]
+    static let propsFileArg: JSONObject = [
+        "type": "string",
+        "description": "Instead of props: a variant name saved with set_props {file}, a .json path inside the project, "
+            + "or \"defaults\" (ignore saved props).",
+    ]
+
     var catalog: [JSONObject] {
-        let scene: JSONObject = ["type": "string", "description": "Scene name, e.g. \"TimelineDemo\" (see list_scenes)."]
+        func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
+                  required: [String] = [], readOnly: Bool = false) -> JSONObject {
+            Self.tool(name, title, description, props, required: required, readOnly: readOnly)
+        }
+        let scene = Self.sceneArg
         let id: JSONObject = ["type": "string", "description": "Comment id, e.g. \"c1a2b3c4d\" (a unique prefix works)."]
         let onComment: JSONObject = ["type": "string",
                                      "description": "Optional comment id: render on that comment's canvas (aspect, size, "
                                         + "pinned duration) — the same composition get_comment and resolve_comment show."]
         let aspect: JSONObject = ["type": "string", "enum": ["16:9", "9:16", "1:1"],
                                   "description": "Optional canvas aspect (default: the scene's own). Ignored with `comment`."]
-        func tool(_ name: String, _ title: String, _ description: String, _ props: JSONObject = [:],
-                  required: [String] = [], readOnly: Bool = false) -> JSONObject {
-            var schema: JSONObject = ["type": "object", "properties": props]
-            if !required.isEmpty { schema["required"] = required }
-            return ["name": name, "title": title, "description": description, "inputSchema": schema,
-                    "annotations": ["readOnlyHint": readOnly] as JSONObject]
-        }
-        return [
+        let props = Self.propsArg
+        return creationCatalog + [
             tool("list_scenes", "List scenes",
-                 "Scenes registered in this project's CLI: kind, default length, and how many open review comments each has.",
+                 "Scenes this server can render (first line says the mode: project or standalone): kind, default length, "
+                 + "score/props, and in a project how many open review comments each has.",
                  readOnly: true),
             tool("scene_info", "Scene structure",
                  "Clips (start/end, transition, source file:line), knobs, captions and score events for one scene. "
@@ -83,15 +137,18 @@ final class ToolBox {
                             "description": "Seconds from scene start."] as JSONObject,
                   "width": ["type": "integer", "minimum": 160, "maximum": 1280,
                             "description": "Returned image width in px (default 960, max 1280)."] as JSONObject,
-                  "comment": onComment, "aspect": aspect],
+                  "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
                  required: ["scene", "times"], readOnly: true),
             tool("contact_sheet", "Contact sheet",
-                 "A grid of thumbnails across the whole scene — the fastest way to see its overall shape.",
-                 ["scene": scene, "comment": onComment, "aspect": aspect], required: ["scene"], readOnly: true),
+                 "A grid of thumbnails across the whole scene (each labelled with its time) — the fastest way to see "
+                 + "its overall shape. Look at one after every change.",
+                 ["scene": scene, "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
+                 required: ["scene"], readOnly: true),
             tool("check_scene", "Check scene",
                  "Run `check`: contact sheet + blank-frame scan + audio report (loudness, clipping, house-rule warnings "
                  + "such as whoosh/riser sweeps). Run before finishing.",
-                 ["scene": scene, "comment": onComment, "aspect": aspect], required: ["scene"], readOnly: true),
+                 ["scene": scene, "comment": onComment, "aspect": aspect, "props": props, "props_file": Self.propsFileArg],
+                 required: ["scene"], readOnly: true),
             tool("build", "Build",
                  "Build the project's CLI product now and return compiler diagnostics (file:line:col). "
                  + "Other tools also rebuild automatically when sources changed.", readOnly: true),
@@ -133,35 +190,82 @@ final class ToolBox {
                   "reset": ["type": "boolean", "description": "Clear all overrides first."] as JSONObject],
                  required: ["scene", "values"]),
             tool("render_video", "Render video",
-                 "Render the scene to MP4 under out/. preview=true is half resolution at 30 fps (much faster).",
-                 ["scene": scene, "preview": ["type": "boolean", "description": "Fast preview render (default false)."]
-                    as JSONObject],
+                 "Render the scene to an MP4 and return its path (out/<Scene>[-9x16|-1x1][-preview].mp4 in the project, "
+                 + "or the workspace in standalone mode). preview=true is half resolution at 30 fps — much faster; do the "
+                 + "full render last.",
+                 ["scene": scene,
+                  "preview": ["type": "boolean", "description": "Fast preview render (default false)."] as JSONObject,
+                  "aspect": Self.aspectArg, "props": props, "props_file": Self.propsFileArg],
                  required: ["scene"]),
         ]
     }
 
     // MARK: helpers
 
-    private func requireProject() throws -> (Project, ProjectCLI) {
+    /// The project's own CLI — review comments, builds and knobs need one.
+    func requireProject() throws -> (Project, ProjectCLI) {
         guard let project, let cli else {
-            throw ToolError("no swift-render project found (no swift-render.json or Package.swift above the server's "
-                            + "working directory) — start the server in the project root or set SWIFT_RENDER_ROOT")
+            throw ToolError("this needs a swift-render project (\(workspace.summary)). Start the server in one, set "
+                            + "SWIFT_RENDER_ROOT, or call init_project to give this codebase its own Launch/ package")
         }
         return (project, cli)
+    }
+
+    /// The CLI scene tools run: the project's (rebuilt when sources change), else the
+    /// standalone `swift-render` with the workspace (or a temp folder) as its cwd.
+    func sceneCLI() throws -> SceneCLI {
+        if let cli { cli.cancel = cancel; return cli }
+        guard let url = workspace.cli else { throw ToolError(workspace.summary) }
+        let s = StandaloneCLI(url: url, cwd: try home())
+        s.cancel = cancel
+        return s
+    }
+
+    /// The CLI for `launch`, `init` and `new`: the ready-built one when there is one (no build
+    /// needed — every SwiftRenderTool CLI has these), else the project's.
+    func launcherCLI() throws -> SceneCLI {
+        if let url = workspace.cli {
+            let s = StandaloneCLI(url: url, cwd: try home())
+            s.cancel = cancel
+            return s
+        }
+        if let cli { cli.cancel = cancel; return cli }
+        throw ToolError(workspace.summary)
+    }
+
+    /// Where renders, saved props and scratch go: the project, else the workspace, else
+    /// a folder in the temp directory (Claude Desktop starts servers in `/`).
+    func home() throws -> URL {
+        if let root = project?.root ?? workspace.root { return root }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("swift-render-mcp", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return tmp
     }
 
     private func requireStore() throws -> ReviewStore {
         ReviewStore(project: try requireProject().0)
     }
 
-    private func scratch(_ name: String) throws -> URL {
-        let (project, _) = try requireProject()
-        try project.ensureDotDir()
-        let dir = project.cacheDir.appendingPathComponent("mcp", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    /// `<home>/.swift-render/cache/mcp/<name>` (removed first).
+    func scratch(_ name: String, in base: URL? = nil) throws -> URL {
+        if base == nil, let project { try project.ensureDotDir() }
+        let dir = try Self.cacheDir(in: base ?? home())
         let url = dir.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: url)
         return url
+    }
+
+    /// `<root>/.swift-render/cache/mcp`, with the `.swift-render/.gitignore` that keeps it out of git.
+    static func cacheDir(in root: URL) throws -> URL {
+        let fm = FileManager.default
+        let dot = root.appendingPathComponent(".swift-render", isDirectory: true)
+        let dir = dot.appendingPathComponent("cache/mcp", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ignore = dot.appendingPathComponent(".gitignore")
+        if !fm.fileExists(atPath: ignore.path) {
+            try "cache/\nreviews/.*.lock\n".write(to: ignore, atomically: true, encoding: .utf8)
+        }
+        return dir
     }
 
     /// CLI options that put a render on a comment's canvas (size + fps, else its aspect,
@@ -188,10 +292,11 @@ final class ToolBox {
 
     /// Renders one frame through the CLI on the comment's canvas (or `aspect`).
     private func renderFrame(scene: String, t: Double, comment: ReviewComment? = nil, aspect: String? = nil,
-                             scale: Double? = nil, to url: URL) throws {
-        let (_, cli) = try requireProject()
+                             props: [String] = [], scale: Double? = nil, to url: URL) throws {
+        let cli = try sceneCLI()
         try? FileManager.default.removeItem(at: url)
-        var args = ["frame", scene, "--at", fmt(t), "--out", url.path] + canvasArgs(comment: comment, aspect: aspect)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var args = ["frame", scene, "--at", fmt(t), "--out", url.path] + canvasArgs(comment: comment, aspect: aspect) + props
         if let scale, scale < 1 { args += ["--scale", fmt(scale)] }
         try cli.runChecked(args)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -224,12 +329,19 @@ final class ToolBox {
     // MARK: scenes
 
     private func listScenes(_ a: Args) throws -> ToolResult {
-        let (_, cli) = try requireProject()
-        let r = try cli.runChecked(["review", "scenes", "--json"])
+        let cli = try sceneCLI()
         struct Row: Decodable { var summary: SceneSummary; var activeComments: Int; var sourcePath: String? }
-        let rows = try JSONDecoder().decode([Row].self, from: Data(r.stdout.utf8))
+        let rows: [Row]
+        if project != nil {
+            let r = try cli.runChecked(["review", "scenes", "--json"])
+            rows = try JSONDecoder().decode([Row].self, from: Data(r.stdout.utf8))
+        } else {
+            let r = try cli.runChecked(["list", "--json"])
+            rows = try JSONDecoder().decode([SceneSummary].self, from: Data(r.stdout.utf8))
+                .map { Row(summary: $0, activeComments: 0, sourcePath: nil) }
+        }
         var out = ToolResult()
-        out.text(rows.map { row in
+        out.text(workspace.summary + "\n" + rows.map { row in
             let s = row.summary
             var line = String(format: "%@ · %@ · %.2fs", s.name, s.kind.rawValue, s.defaultDuration)
             if s.hasSoundtrack { line += " · score" }
@@ -237,11 +349,15 @@ final class ToolBox {
             if row.activeComments > 0 { line += " · \(row.activeComments) active comment(s)" }
             return line
         }.joined(separator: "\n"))
+        if project == nil {
+            out.text("Built-in scenes only. For your own: init_project, then new_scene {name}. "
+                     + "For a launch film of a Swift codebase: launch_film.")
+        }
         return out
     }
 
     private func sceneInfo(_ a: Args) throws -> ToolResult {
-        let (_, cli) = try requireProject()
+        let cli = try sceneCLI()
         let scene = try a.scene()
         let info = try cli.sceneInfo(scene)
         var lines = [String(format: "%@ · %@ · %.2fs · %d×%d @ %dfps", info.name, info.kind.rawValue, info.duration,
@@ -291,19 +407,22 @@ final class ToolBox {
     }
 
     private func renderFrames(_ a: Args) throws -> ToolResult {
-        _ = try requireProject()
+        _ = try sceneCLI()
         let scene = try a.scene()
         let times = try a.doubles("times")
         guard !times.isEmpty else { throw ToolError("times must list at least one time in seconds") }
         guard times.count <= 8 else { throw ToolError("at most 8 times per call (got \(times.count))") }
         let width = min(1280, max(160, a.int("width") ?? 960))
         let (comment, aspect) = try canvasChoice(a, scene: scene)
+        let props = try propsChoice(a, scene: scene, auto: comment == nil)
         let canvas = canvasWidth(comment: comment, aspect: aspect)
         var out = ToolResult()
+        if let note = props.note { out.text(note) }
         for t in times {
             let url = try scratch("frame-\(scene)-\(fmt(t)).png")
             // Render near the target size: much faster than full size, same layout (scenes lay out in canvas points).
-            try renderFrame(scene: scene, t: t, comment: comment, aspect: aspect, scale: Double(width) / canvas, to: url)
+            try renderFrame(scene: scene, t: t, comment: comment, aspect: aspect, props: props.args,
+                            scale: Double(width) / canvas, to: url)
             out.text(String(format: "%@ at t=%.2fs (%@)", scene, t, ReviewComment.format(t))
                      + (comment.map { " on comment \($0.id)'s canvas" } ?? aspect.map { " at \($0)" } ?? ""))
             out.png(try ReviewImage.prepare(url, region: comment?.region, maxWidth: width))
@@ -312,27 +431,30 @@ final class ToolBox {
     }
 
     private func contactSheet(_ a: Args) throws -> ToolResult {
-        let (_, cli) = try requireProject()
+        let cli = try sceneCLI()
         let scene = try a.scene()
         let (comment, aspect) = try canvasChoice(a, scene: scene)
+        let props = try propsChoice(a, scene: scene, auto: comment == nil)
         let url = try scratch("contact-\(scene).png")
-        try cli.runChecked(["contact", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect))
+        try cli.runChecked(["contact", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect) + props.args)
         var out = ToolResult()
-        out.text("\(scene) contact sheet (cells are evenly spaced; each is labelled with its time)")
+        out.text("\(scene) contact sheet (cells are evenly spaced; each is labelled with its time)"
+                 + (props.note.map { "\n" + $0 } ?? ""))
         out.png(try ReviewImage.prepare(url, maxWidth: 1280))
         return out
     }
 
     private func checkScene(_ a: Args) throws -> ToolResult {
-        let (_, cli) = try requireProject()
+        let cli = try sceneCLI()
         let scene = try a.scene()
         let (comment, aspect) = try canvasChoice(a, scene: scene)
+        let props = try propsChoice(a, scene: scene, auto: comment == nil)
         let url = try scratch("check-\(scene).png")
-        try cli.runChecked(["check", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect))
+        try cli.runChecked(["check", scene, "--out", url.path] + canvasArgs(comment: comment, aspect: aspect) + props.args)
         let report = (try? String(contentsOf: url.deletingPathExtension().appendingPathExtension("txt"), encoding: .utf8))
             ?? "(no report written)"
         var out = ToolResult()
-        out.text(report.trimmingCharacters(in: .whitespacesAndNewlines))
+        out.text(report.trimmingCharacters(in: .whitespacesAndNewlines) + (props.note.map { "\n" + $0 } ?? ""))
         out.png(try ReviewImage.prepare(url, maxWidth: 1280))
         return out
     }
@@ -588,17 +710,43 @@ final class ToolBox {
     }
 
     private func renderVideo(_ a: Args) throws -> ToolResult {
-        let (project, cli) = try requireProject()
+        let cli = try sceneCLI()
         let scene = try a.scene()
         let preview = a.bool("preview") ?? false
-        let rel = "out/\(scene)\(preview ? "-preview" : "").mp4"
+        let aspect = try Self.aspect(a)
+        let props = try propsChoice(a, scene: scene, auto: true)
+        let suffix = aspect.map { "-" + $0.replacingOccurrences(of: ":", with: "x") } ?? ""
+        let rel = "out/\(scene)\(suffix)\(preview ? "-preview" : "").mp4"
+        let base = try home()
+        try Self.ensureOutDir(in: base)
+        let url = base.appendingPathComponent(rel)
         let started = Date()
-        let r = try cli.runChecked(["render", scene, "--out", project.root.appendingPathComponent(rel).path]
-                                   + (preview ? ["--preview"] : []))
+        let args = ["render", scene, "--out", url.path] + (aspect.map { ["--aspect", $0] } ?? [])
+            + (preview ? ["--preview"] : []) + props.args
+        let r = try cli.runChecked(args)
         let tail = r.stdout.split(separator: "\n").suffix(4).joined(separator: "\n")
         var out = ToolResult()
-        out.text(String(format: "rendered %@ in %.1fs → %@\n%@", scene, Date().timeIntervalSince(started), rel, tail))
+        out.text(String(format: "rendered %@ in %.1fs → %@\n%@", scene, Date().timeIntervalSince(started), url.path, tail)
+                 + (props.note.map { "\n" + $0 } ?? ""))
         return out
+    }
+
+    /// `aspect`, validated (nil = the scene's own).
+    static func aspect(_ a: Args) throws -> String? {
+        let aspect = a.optionalString("aspect")
+        if let aspect, !["16:9", "9:16", "1:1"].contains(aspect) {
+            throw ToolError("aspect must be 16:9, 9:16 or 1:1 (got \(aspect))")
+        }
+        return aspect
+    }
+
+    /// `<root>/out/`; a new one gets a `*` .gitignore so films stay out of `git add -A`
+    /// (what `launch` does too).
+    static func ensureOutDir(in root: URL) throws {
+        let out = root.appendingPathComponent("out", isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: out.path) else { return }
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try? "*\n".write(to: out.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
     }
 }
 
