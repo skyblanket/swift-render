@@ -14,8 +14,8 @@ struct KnobsTab: View {
     var body: some View {
         let knobs = model.info?.knobs ?? []
         if knobs.isEmpty {
-            ContentUnavailableView("No knobs", systemImage: "slider.horizontal.3",
-                                   description: Text("Declare tunables in the scene with Knob.double(\"key\", 0.4, 0…2)."))
+            StudioEmptyState(title: "No Knobs", symbol: "slider.horizontal.3",
+                             message: "Declare tunables in the scene with Knob.double(\"key\", 0.4, 0…2).")
         } else {
             List(knobs, id: \.key) { k in
                 HStack {

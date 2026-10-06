@@ -13,8 +13,7 @@ struct PropsTab: View {
 
     var body: some View {
         if model.info?.propsJSON == nil && model.propsJSON == nil {
-            ContentUnavailableView("No props", systemImage: "curlybraces",
-                                   description: Text("This scene isn't a PropsScene."))
+            StudioEmptyState(title: "No Props", symbol: "curlybraces", message: "This scene isn't a PropsScene.")
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: $text)

@@ -67,6 +67,34 @@ enum StudioStyle {
     static func timecode(_ t: Double) -> String { ReviewComment.format(max(0, t)) }
 }
 
+/// Inspector-sized empty state: `ContentUnavailableView` is sized for a whole window
+/// and dwarfs a 300-pt panel.
+struct StudioEmptyState: View {
+    var title: String
+    var symbol: String
+    var message: String? = nil
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 2)
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+            if let message {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: 260)
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 /// Small capsule label used in HUD rows and badges.
 struct StudioBadge: View {
     var text: String

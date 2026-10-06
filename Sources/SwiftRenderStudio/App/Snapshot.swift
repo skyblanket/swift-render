@@ -26,16 +26,17 @@ enum SnapshotRunner {
 
         let hosting = NSHostingController(rootView: ProjectWindowContent(model: model))
         hosting.sceneBridgingOptions = [.toolbars, .title]
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
+        hosting.sizingOptions = []          // the window size is ours, not the content's ideal size
+        let window = SnapshotWindow(contentRect: NSRect(origin: .zero, size: size),
+                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                    backing: .buffered, defer: false)
         window.contentViewController = hosting
         window.toolbarStyle = .unified
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
-        window.setContentSize(size)
         // Far off every screen: laid out and displayed, never seen, never key.
-        window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
+        window.setFrame(window.frameRect(forContentRect: NSRect(x: -30_000, y: -30_000, width: size.width,
+                                                                height: size.height)), display: false)
         window.orderFrontRegardless()
 
         Task { @MainActor in
@@ -269,4 +270,10 @@ enum SnapshotRunner {
         let w = size.width * s, h = size.height * s
         return CGRect(x: r.midX - w / 2, y: r.midY - h / 2, width: w, height: h)
     }
+}
+
+/// Same size on every machine: AppKit would otherwise clamp a titled window to the
+/// current screen, so snapshots taken on a laptop and a desktop would differ.
+private final class SnapshotWindow: NSWindow {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }

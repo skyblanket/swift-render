@@ -41,7 +41,7 @@ struct InfoTab: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         } else {
-            ContentUnavailableView("No scene", systemImage: "film")
+            StudioEmptyState(title: "No Scene", symbol: "film")
         }
     }
 

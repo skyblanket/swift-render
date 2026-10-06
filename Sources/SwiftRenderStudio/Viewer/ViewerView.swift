@@ -47,11 +47,10 @@ struct ViewerView: View {
     @ViewBuilder private var placeholder: some View {
         switch model.host.state {
         case .failed(let why):
-            ContentUnavailableView("Render host unavailable", systemImage: "bolt.horizontal.circle",
-                                   description: Text(why))
+            StudioEmptyState(title: "Render Host Unavailable", symbol: "bolt.horizontal.circle", message: why)
         case .ready where model.playback.poisoned.contains(frameIndex(model.playback.t, fps: model.playback.fps)):
-            ContentUnavailableView("Frame skipped", systemImage: "exclamationmark.triangle",
-                                   description: Text("This frame crashed the host. It renders again after the next build."))
+            StudioEmptyState(title: "Frame Skipped", symbol: "exclamationmark.triangle",
+                             message: "This frame crashed the host. It renders again after the next build.")
         default:
             VStack(spacing: 10) {
                 ProgressView().controlSize(.small)

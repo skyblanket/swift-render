@@ -30,12 +30,9 @@ struct CommentsTab: View {
             if let draft = review.draft { DraftBanner(model: model, draft: draft) }
 
             if review.filtered.isEmpty {
-                ContentUnavailableView {
-                    Label(review.comments.isEmpty ? "No comments yet" : "Nothing here", systemImage: "text.bubble")
-                } description: {
-                    Text("Press C to comment at the playhead, or R to mark a region on the frame.")
-                }
-                .frame(maxHeight: .infinity)
+                StudioEmptyState(title: review.comments.isEmpty ? "No Comments Yet" : "No Matching Comments",
+                                 symbol: "text.bubble",
+                                 message: "Press C to comment at the playhead, or R to mark a region on the frame.")
             } else {
                 List(selection: Binding(get: { review.selection }, set: { id in
                     review.selection = id
