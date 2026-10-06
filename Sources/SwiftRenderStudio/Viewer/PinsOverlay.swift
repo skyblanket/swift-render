@@ -59,7 +59,7 @@ struct PinsOverlay: View {
                 .help(selected ? "Drag to move this spot" : "")
         }
         CommentDisc(number: number, state: state, selected: selected, size: 22)
-            .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+            .shadow(color: StudioStyle.shadow.opacity(0.45), radius: 3, y: 1)
             .offset(x: (isPoint ? r.minX : r.maxX) - (selected ? 14 : 11), y: r.minY - (selected ? 14 : 11))
             .onHover { inside in hovered = inside ? c.id : (hovered == c.id ? nil : hovered) }
             .onTapGesture {

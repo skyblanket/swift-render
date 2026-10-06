@@ -66,7 +66,7 @@ struct ExportActivityIcon: View {
                     .font(StudioStyle.Fonts.footnote.weight(.semibold)).monospacedDigit()
                     .padding(.horizontal, 4)
                     .background(StudioStyle.accent, in: Capsule())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(StudioStyle.onAccent)
                     .offset(x: 8, y: -6)
             }
         }

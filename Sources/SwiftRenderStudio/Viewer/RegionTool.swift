@@ -92,7 +92,7 @@ struct RegionTool: View {
                 .fill(StudioStyle.accent)
                 .frame(width: 12, height: 12)
                 .overlay(Circle().strokeBorder(StudioStyle.onPicture, lineWidth: 2))
-                .shadow(color: .black.opacity(0.4), radius: 2)
+                .shadow(color: StudioStyle.shadow.opacity(0.4), radius: 2)
                 .offset(x: r.minX - 6, y: r.minY - 6)
                 .allowsHitTesting(false)
         } else {
@@ -171,7 +171,7 @@ struct RegionTool: View {
     }
 
     private func installFlagsMonitor() {
-        guard flagsMonitor == nil else { return }
+        guard flagsMonitor == nil, !StudioStyle.isSnapshot else { return }
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in
             let held = e.modifierFlags.contains(.option)
             MainActor.assumeIsolated { if optionHeld != held { optionHeld = held } }

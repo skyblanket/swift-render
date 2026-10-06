@@ -142,7 +142,7 @@ struct ScoreLane: LaneRenderer {
                 notes.addRoundedRect(in: r, cornerSize: CGSize(width: 2, height: 2), style: .continuous)
             }
         }
-        ctx.fill(notes, with: .color(tone.opacity(0.22)))
+        ctx.fill(notes, with: .color(tone.opacity(0.16)))
         // Labels: the widest phrases first, never two over the same stretch.
         var taken: [ClosedRange<CGFloat>] = []
         let byKind = Dictionary(grouping: slice, by: \.kind)

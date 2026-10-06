@@ -60,7 +60,7 @@ struct CommentComposer: View {
             .background {
                 if floating {
                     StudioStyle.rounded(StudioStyle.Radius.large).fill(StudioStyle.raised)
-                        .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
+                        .shadow(color: StudioStyle.shadow.opacity(0.3), radius: 16, y: 6)
                 }
             }
             .overlay {

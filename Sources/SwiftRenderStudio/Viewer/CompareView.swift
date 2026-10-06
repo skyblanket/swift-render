@@ -229,12 +229,12 @@ struct CompareView: View {
     private var wipeHandle: some View {
         let x = canvas.width * wipe
         return ZStack {
-            Rectangle().fill(.white).frame(width: 1.5).shadow(color: .black.opacity(0.6), radius: 2)
+            Rectangle().fill(StudioStyle.onPicture).frame(width: 1.5).shadow(color: StudioStyle.shadow.opacity(0.6), radius: 2)
             Circle()
-                .fill(.white)
+                .fill(StudioStyle.onPicture)
                 .frame(width: 26, height: 26)
-                .overlay(Image(systemName: "arrow.left.and.right").font(StudioStyle.Fonts.footnoteEmphasis).foregroundStyle(.black))
-                .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
+                .overlay(Image(systemName: "arrow.left.and.right").font(StudioStyle.Fonts.footnoteEmphasis).foregroundStyle(StudioStyle.onLight))
+                .shadow(color: StudioStyle.shadow.opacity(0.5), radius: 3, y: 1)
         }
         .frame(width: 26, height: canvas.height)
         .offset(x: x - 13)
@@ -340,7 +340,7 @@ struct CompareView: View {
         .controlSize(.regular)
         .padding(.horizontal, StudioStyle.Space.l).padding(.vertical, StudioStyle.Space.s)
         .studioGlass(cornerRadius: 22)
-        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .shadow(color: StudioStyle.shadow.opacity(0.25), radius: 10, y: 4)
         .padding(.bottom, StudioStyle.Space.l)
     }
 

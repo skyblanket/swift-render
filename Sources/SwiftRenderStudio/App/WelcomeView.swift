@@ -18,7 +18,7 @@ struct WelcomeView: View {
             VStack(alignment: .leading, spacing: StudioStyle.Space.l) {
                 Image(systemName: StudioStyle.Symbol.film)
                     .font(StudioStyle.Fonts.emptyGlyph)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(StudioStyle.onAccent)
                     .frame(width: 56, height: 56)
                     .background(StudioStyle.accent, in: StudioStyle.rounded(StudioStyle.Radius.large))
                 VStack(alignment: .leading, spacing: StudioStyle.Space.xs) {

@@ -59,9 +59,9 @@ struct ViewerView: View {
     @ViewBuilder private var surround: some View {
         switch model.ui.viewerBackground {
         case .automatic: StudioStyle.canvas
-        case .black: Color.black
-        case .gray: Color(nsColor: .systemGray)
-        case .white: Color.white
+        case .black: StudioStyle.Surround.black
+        case .gray: StudioStyle.Surround.gray
+        case .white: StudioStyle.Surround.white
         }
     }
 

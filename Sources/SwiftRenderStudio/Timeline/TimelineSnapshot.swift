@@ -13,8 +13,8 @@ import SwiftRenderKit
 //   --select-clip <n|id>    select the n-th clip (by start) or a clip id
 //   --hover <x>,<y>         hover a lanes-column point (card + highlight)
 //
-// The lane area height follows the window's `layout.timelineHeight` default, which
-// the argument domain overrides without writing: `-layout.timelineHeight 420`.
+// The timeline fits its lanes unless `layout.timelineHeightManual` is set, which the
+// argument domain overrides without writing: `-layout.timelineHeightManual 420`.
 
 @MainActor
 enum TimelineSnapshot {

@@ -30,7 +30,7 @@ struct SidebarView: View {
             Section("Scenes") {
                 if model.scenes.isEmpty {
                     if case .failed = model.build.phase {
-                        Text("Scenes show up after the first good build.")
+                        Text("Scenes appear after a good build.")
                             .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
                     } else {
                         HStack(spacing: StudioStyle.Space.s) {

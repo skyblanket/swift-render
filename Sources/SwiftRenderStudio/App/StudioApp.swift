@@ -6,7 +6,7 @@ import SwiftRenderKit
 //
 //   swift-render-studio [projectPath] [--scene X] [--at t] [--fake-host | --fake-process-host]
 //                       [--fake-crash-at t] [--fake-build-fail] [--tab comments|knobs|props|info]
-//                       [--appearance light|dark|system] [--snapshot out.png [--play-for seconds]]
+//                       [--appearance light|dark|system] [--snapshot out.png [--play-for seconds] [--window 1280x800]]
 //   swift-render-studio --fake-serve        (a fake render host on stdio; see FakeServe)
 //
 // `--snapshot` lays out a project window offscreen (no activation, no Dock icon),

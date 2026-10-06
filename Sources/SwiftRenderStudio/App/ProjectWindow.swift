@@ -77,8 +77,11 @@ struct ProjectWindowContent: View {
         .sheet(isPresented: $model.ui.showRenderSheet) { RenderSheet(model: model) }
         .focusedSceneValue(\.project, model)
         .background(WindowAccessor { window in
-            if router == nil { router = KeyRouter(model: model) }
-            router?.install(window: window)
+            // Snapshots never take keys (the window draws as key but must not act on typing).
+            if !StudioStyle.isSnapshot {
+                if router == nil { router = KeyRouter(model: model) }
+                router?.install(window: window)
+            }
             // The project folder (often a worktree name) lives in the title's tooltip, not under it.
             window.representedURL = model.project.root
         })

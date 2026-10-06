@@ -50,7 +50,7 @@ final class ScrollCatcherView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
-        guard window != nil else { return }
+        guard window != nil, !StudioStyle.isSnapshot else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { [weak self] e in
             guard let self, e.window === self.window else { return e }
             let p = self.convert(e.locationInWindow, from: nil)

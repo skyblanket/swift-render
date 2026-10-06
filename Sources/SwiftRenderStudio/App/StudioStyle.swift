@@ -63,6 +63,20 @@ enum StudioStyle {
     /// Ink and scrim for labels drawn over the picture, which is dark or light on its own terms.
     static let onPicture = Color.white
     static let pictureScrim = Color.black.opacity(0.55)
+    /// Ink on an accent fill, and ink on a white handle.
+    static let onAccent = Color.white
+    static let onLight = Color.black
+    /// Drop shadows (applied with an opacity).
+    static let shadow = Color.black
+    /// Message bubbles in a thread: a soft step off the inspector.
+    static let bubble = dynamic("bubble", light: gray(0xEFEFF2), dark: gray(0x2C2C2F))
+
+    /// View › Background choices around the picture.
+    enum Surround {
+        static let black = Color.black
+        static let gray = Color(nsColor: .systemGray)
+        static let white = Color.white
+    }
 
     /// One muted tone per timeline lane (content, not chrome), drawn at ~35%.
     enum Lane {
@@ -354,7 +368,7 @@ extension View {
     /// A raised card: fields, composer, hover cards.
     func studioCard(cornerRadius: CGFloat = StudioStyle.Radius.large, shadow: Bool = true) -> some View {
         background(StudioStyle.rounded(cornerRadius).fill(StudioStyle.raised)
-            .shadow(color: .black.opacity(shadow ? 0.25 : 0), radius: 12, y: 4))
+            .shadow(color: StudioStyle.shadow.opacity(shadow ? 0.25 : 0), radius: 12, y: 4))
             .overlay(StudioStyle.rounded(cornerRadius).strokeBorder(StudioStyle.hairline))
     }
 }

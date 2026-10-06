@@ -26,7 +26,7 @@ struct ThreadView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: StudioStyle.Space.l) {
                     header(c, state)
-                    if state == .claudeOnIt { working(c) }
+                    if state == .claudeOnIt, isLive(c) { working(c) }
                     VStack(alignment: .leading, spacing: StudioStyle.Space.m) {
                         message(c.author, c.body, c.createdAt, attachments: [])
                         ForEach(c.replies) { r in
@@ -101,6 +101,10 @@ struct ThreadView: View {
         }
     }
 
+    private func isLive(_ c: ReviewComment) -> Bool {
+        model.agent.isRunning && (model.agent.currentRun?.commentIDs.contains(c.id) ?? false)
+    }
+
     /// "Claude's on it · 0:42" with Stop and Show Steps, while a live run holds this comment.
     @ViewBuilder
     private func working(_ c: ReviewComment) -> some View {
@@ -144,7 +148,7 @@ struct ThreadView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(StudioStyle.raised, in: StudioStyle.rounded(StudioStyle.Radius.large))
+                    .background(StudioStyle.bubble, in: StudioStyle.rounded(StudioStyle.Radius.large))
                 ForEach(attachments, id: \.path) { att in
                     AttachmentThumb(model: model, attachment: att, commentID: comment.id, width: 168)
                 }

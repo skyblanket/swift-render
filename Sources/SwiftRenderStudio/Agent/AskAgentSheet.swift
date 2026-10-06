@@ -53,6 +53,11 @@ struct AskAgentSheet: View {
                         .lineLimit(2...4)
                         .labelsHidden()
                         .textFieldStyle(.plain)
+                } header: {
+                    Text("Anything Else")
+                } footer: {
+                    Text("Optional. For example: keep the colors, no new fonts.")
+                        .font(StudioStyle.Fonts.subheadline).foregroundStyle(.secondary)
                 }
                 Section {
                     DisclosureGroup("Options", isExpanded: $optionsExpanded) { options }
@@ -63,7 +68,7 @@ struct AskAgentSheet: View {
 
             footer
         }
-        .frame(width: 560, height: optionsExpanded ? 640 : 500)
+        .frame(width: 560, height: optionsExpanded ? 680 : 540)
         .onAppear(perform: prefill)
         // A build that fails (or recovers) while the sheet is open.
         .onChange(of: buildErrors.isEmpty) { _, clean in fixBuild = !clean }

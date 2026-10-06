@@ -14,8 +14,8 @@ import SwiftRenderKit
 @MainActor
 enum SnapshotRunner {
     static func run(_ options: LaunchOptions, out: String) {
-        // An app that reports itself active (without activating, so it never takes focus):
-        // inactive apps draw prominent buttons, selected rows and segments gray.
+        // Never takes input: a snapshot window draws as key (see SnapshotWindow), and no
+        // keystroke typed into another app may reach it.
         let app = SnapshotApplication.shared
         app.setActivationPolicy(.accessory)
         app.appearance = StudioAppearance.current.nsAppearance
@@ -24,7 +24,7 @@ enum SnapshotRunner {
         let root = options.projectPath.map { Project.discover(from: $0)?.root ?? $0 }
             ?? Project.discover(from: cwd)?.root ?? cwd
         let model = ProjectModel(root: root, options: options)
-        let size = NSSize(width: 1600, height: 1000)
+        let size = options.windowSize ?? NSSize(width: 1600, height: 1000)
 
         let hosting = NSHostingController(rootView: ProjectWindowContent(model: model))
         hosting.sceneBridgingOptions = [.toolbars, .title]
@@ -374,9 +374,19 @@ enum SnapshotRunner {
 
 /// Same size on every machine: AppKit would otherwise clamp a titled window to the
 /// current screen, so snapshots taken on a laptop and a desktop would differ.
-/// The snapshot process's NSApplication: reports itself active, never activates.
+/// The snapshot process's NSApplication: drops every keyboard and pointer event, so a
+/// window that draws as key can't act on input meant for another app.
 final class SnapshotApplication: NSApplication {
-    override var isActive: Bool { true }
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp, .scrollWheel, .mouseMoved, .leftMouseDragged, .rightMouseDragged,
+             .otherMouseDragged, .magnify, .swipe, .rotate:
+            return
+        default:
+            super.sendEvent(event)
+        }
+    }
 }
 
 /// It also reports itself key and main: an offscreen window never is, and an inactive

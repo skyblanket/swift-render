@@ -90,6 +90,8 @@ struct LaunchOptions: Equatable, Sendable {
     var newLaunchFilm = false
     /// `--appearance light|dark|system`: overrides View › Appearance for this process.
     var appearance: StudioAppearance?
+    /// Snapshot mode: `--window 1280x800` (default 1600×1000).
+    var windowSize: CGSize?
 
     static func parse(_ argv: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -121,6 +123,10 @@ struct LaunchOptions: Equatable, Sendable {
             case "--ask-sheet": o.askSheet = true; i += 1
             case "--new-launch-film": o.newLaunchFilm = true; i += 1
             case "--appearance": o.appearance = v.flatMap(StudioAppearance.init(rawValue:)); i += 2
+            case "--window":
+                let p = (v ?? "").lowercased().split(separator: "x").compactMap { Double($0) }
+                if p.count == 2, p[0] >= 600, p[1] >= 400 { o.windowSize = CGSize(width: p[0], height: p[1]) }
+                i += 2
             case "--render": o.renderPreset = v.flatMap(RenderPreset.init(rawValue:)); i += 2
             case "--render-wait": o.renderWaitDone = v == "done"; i += 2
             case "--show": o.show = v; i += 2
