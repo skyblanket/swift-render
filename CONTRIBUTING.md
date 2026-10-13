@@ -1,6 +1,6 @@
 # Contributing to swift-render
 
-Thanks for thinking about contributing. This doc covers the layout and the basics.
+Swift Render is a reusable video engine, a CLI, and a separate collection of demo scenes. Keep each change in the layer that owns it.
 
 ## Layout
 
@@ -39,6 +39,8 @@ engine. Everything that renders goes through the project's own CLI (`serve`, `re
 `info`, `review`). That is why Studio and the review loop work on any package whose CLI links
 `SwiftRenderTool`, and not just on this repo.
 
+Keep app-specific assets and demo behavior out of the engine when practical. Avoid bundling private source, credentials, or assets without permission.
+
 ## Development loop
 
 ```bash
@@ -67,7 +69,7 @@ Studio builds the project into `.build/studio`, so it doesn't contend with your 
    }
    ```
    (or `swift run swift-render new YourScene` to scaffold one with a Timeline + Score).
-2. That's it for registration — `SceneRegistryPlugin` finds every `public struct X` that
+2. That's it for registration - `SceneRegistryPlugin` finds every `public struct X` that
    conforms to a scene protocol and registers it as `"X"` at build time.
 3. Give clips `.named("…")` labels and expose tunables as `Knob`s, so Studio, review comments and
    agents can point at them.
@@ -84,7 +86,7 @@ Then cover it in `Tests/SwiftRenderTests/LaunchTests.swift` and `docs/launch.md`
 ## Adding a shader
 
 1. Add a `[[ stitchable ]]` function to a `.metal` file in `Sources/SwiftRender/Shaders/`.
-2. `swift build` — the MetalCompilerPlugin compiles all shaders into the
+2. `swift build` - the MetalCompilerPlugin compiles all shaders into the
    metallib automatically. This needs the Metal compiler
    (`xcodebuild -downloadComponent MetalToolchain`); without it the build falls back
    to `Shaders/prebuilt.metallib` and renders warn that your edit isn't live.
@@ -109,6 +111,12 @@ Then cover it in `Tests/SwiftRenderTests/LaunchTests.swift` and `docs/launch.md`
 
 ## Tests
 
+```bash
+swift build
+swift test
+swift run swift-render smoke
+```
+
 `swift test` runs the whole suite. It includes a render-twice-byte-identical check that CI runs on
 every push. Studio tests run against `FakeHost` and fake processes by default. The slow ones and
 the ones that cost money are opt-in:
@@ -122,6 +130,10 @@ the ones that cost money are opt-in:
 UI checks use snapshots: `swift run swift-render-studio . --scene TimelineDemo --at 3 --snapshot out/studio.png`
 (see the snapshot options in [docs/studio.md](docs/studio.md#command-line-and-snapshots)).
 `scripts/package-studio.sh` builds, signs and launches the packaged app as an end-to-end check.
+
+Add a regression test for engine changes. For visual changes, inspect representative frames and the
+encoded movie. For sound changes, listen to the export as well as reading the audio report. A passing
+build is not a review of the output.
 
 ## Style
 
