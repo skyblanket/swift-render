@@ -9,9 +9,11 @@ import ImageIO
 // content) or a person (`swift-render review frame`). CoreGraphics + ImageIO
 // only, so Studio, the CLI and the MCP server can all use them.
 
+/// Errors reading or encoding review frames.
 public enum ReviewImageError: Error, CustomStringConvertible {
     case unreadable(String)
     case encode(String)
+    /// Human-readable message.
     public var description: String {
         switch self {
         case .unreadable(let what): return "cannot read image \(what)"
@@ -20,10 +22,12 @@ public enum ReviewImageError: Error, CustomStringConvertible {
     }
 }
 
+/// Image helpers for review frames: outline a region, cap the width, write PNG.
 public enum ReviewImage {
     /// Box colour: a saturated pink that reads on both dark and bright frames.
     public static let boxColor = (r: 1.0, g: 0.18, b: 0.47)
 
+    /// Loads the first image in a file.
     public static func load(_ url: URL) throws -> CGImage {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
@@ -32,6 +36,7 @@ public enum ReviewImage {
         return img
     }
 
+    /// Loads the first image from encoded bytes.
     public static func load(data: Data) throws -> CGImage {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
@@ -72,6 +77,7 @@ public enum ReviewImage {
         return ctx.makeImage() ?? image
     }
 
+    /// Encodes an image as PNG.
     public static func png(_ image: CGImage) throws -> Data {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, "public.png" as CFString, 1, nil) else {
@@ -82,6 +88,7 @@ public enum ReviewImage {
         return data as Data
     }
 
+    /// Writes an image as PNG, creating parent directories.
     public static func write(_ image: CGImage, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png(image).write(to: url, options: .atomic)

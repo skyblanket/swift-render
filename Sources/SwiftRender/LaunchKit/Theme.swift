@@ -15,19 +15,30 @@ import SwiftUI
 
 /// Colors and type for a launch film. Put one in the environment with `.launchTheme(_:)`.
 public struct LaunchTheme: Sendable {
+    /// Stage ground color.
     public var background: Color
+    /// Panel fill, one step above the background.
     public var surface: Color
+    /// A lighter panel fill for raised elements.
     public var surfaceElevated: Color
+    /// Main text color.
     public var primary: Color
+    /// Secondary text color.
     public var secondary: Color
+    /// Least prominent text (eyebrows, labels).
     public var tertiary: Color
+    /// Thin dividers and outlines.
     public var hairline: Color
+    /// The one accent color.
     public var accent: Color
     /// Gradient partner for the accent (headline gradients, generated icons).
     public var accentSecondary: Color?
+    /// Typeface family for display and text.
     public var typeface: LaunchProps.Typeface
+    /// Whether the theme is a dark one.
     public var isDark: Bool
 
+    /// Creates a theme from explicit colors (dark, SF Pro by default).
     public init(background: Color, surface: Color, surfaceElevated: Color, primary: Color, secondary: Color,
                 tertiary: Color, hairline: Color, accent: Color, accentSecondary: Color? = nil,
                 typeface: LaunchProps.Typeface = .sfPro, isDark: Bool = true) {
@@ -36,6 +47,7 @@ public struct LaunchTheme: Sendable {
         self.accent = accent; self.accentSecondary = accentSecondary; self.typeface = typeface; self.isDark = isDark
     }
 
+    /// Near-black stage, white type, blue accent.
     public static let keynoteDark = LaunchTheme(
         background: Color(red: 0.012, green: 0.012, blue: 0.016),
         surface: Color(red: 0.078, green: 0.078, blue: 0.086),
@@ -43,6 +55,7 @@ public struct LaunchTheme: Sendable {
         primary: .white, secondary: .white.opacity(0.62), tertiary: .white.opacity(0.40),
         hairline: .white.opacity(0.10), accent: Color(red: 0.04, green: 0.52, blue: 1.0))
 
+    /// Light-gray stage, near-black type, blue accent.
     public static let keynoteLight = LaunchTheme(
         background: Color(red: 0.961, green: 0.961, blue: 0.969),
         surface: .white,
@@ -180,7 +193,9 @@ public extension View {
 /// canvas `type` keeps headlines large relative to the narrow width. A square
 /// (or near-square) canvas stacks like a vertical one, at a type scale between the two.
 public struct LaunchLayout: Sendable {
+    /// Canvas size in points.
     public let size: CGSize
+    /// Whether the canvas is portrait.
     public let isVertical: Bool
     /// Square or near-square (landscape narrower than 1.3:1): not wide enough for side-by-side shots.
     public let isSquare: Bool
@@ -189,6 +204,7 @@ public struct LaunchLayout: Sendable {
     /// Side margin.
     public let margin: CGFloat
 
+    /// Sizes for the canvas in `ctx`.
     public init(_ ctx: RenderContext) {
         size = ctx.size
         isVertical = ctx.isVertical

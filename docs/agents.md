@@ -40,20 +40,40 @@ and the review tools work there.
 
 ### Tools
 
+21 tools. `?` marks an optional argument. Names and argument shapes are a contract with Studio
+and the director agent; the review-loop side is described in more detail in
+[review-loop.md](review-loop.md#tools-names-are-a-contract-with-studio-and-the-director-agent).
+
+**Making videos**
+
 | tool | arguments | does |
 |---|---|---|
-| `docs` | `topic?`: `index` `tools` `scenes` `timeline` `easing` `sound` `knobs` `launch` `looks` `cli` `review` `contributing` `all` | the API guide (docs/ai-quickstart.md, compiled into the binary), one topic at a time |
+| `docs` | `topic?`: `index` (default) `tools` `scenes` `timeline` `easing` `sound` `knobs` `launch` `looks` `cli` `review` `contributing` `all` | the API guide (docs/ai-quickstart.md, compiled into the binary), one topic at a time |
 | `launch_film` | `path?`, `any_folder?`, `aspect?`, `preview?`, `voiceover?`, `props?`, `rescan?`, `run_manifest?`, `open?`, `wait?` | scans the codebase and renders the AppleLaunch film into `<path>/out/`. Returns the film path, the scan table (each value with its source file, plus gaps), the props file `<path>/.swift-render/launch/<Name>.json` and a contact sheet. `props` merges keys into that file before rendering. |
+| `init_project` | `path?`, `any_folder?`, `local?`, `remote?`, `force?`, `run_manifest?` | runs `swift-render init`: `<path>/Launch/` with the film as Swift and a `launch` CLI, then starts the first build as a job. Depends on the swift-render checkout the server was built from (`local`), unless `remote: true`. |
 | `new_scene` | `name`, `kind?` (`render`/`audio`) | scaffolds `<Name>.swift` in the project's scenes folder (auto-registered) and returns its source and a short guide to writing it |
 | `write_scene` | `name`, `source`, `wait?` | creates or replaces `<Name>.swift` in the scenes folder with the whole source, builds, and returns the compiler diagnostics. For clients without file tools. |
-| `init_project` | `path?`, `any_folder?`, `local?`, `remote?`, `force?`, `run_manifest?` | runs `swift-render init`: `<path>/Launch/` with the film as Swift and a `launch` CLI, then starts the first build as a job. Depends on the swift-render checkout the server was built from, if any. |
 | `get_props` | `scene`, `file?` | the props a data-driven scene renders (the saved props, the film's props or the defaults) |
 | `set_props` | `scene`, `props`, `file?`, `replace?` | merges and saves props: `.swift-render/props/<Scene>.json`, or for `AppleLaunch` the film's props file, or a named variant `.swift-render/props/<Scene>/<name>.json` |
-| `list_scenes`, `scene_info` | `all?`; `scene`, `source?` | what exists; clips, knobs and score with `file:line` (`source: true` adds the scene's Swift) |
-| `render_frames`, `contact_sheet`, `check_scene` | `scene`, `times`…, `aspect?`, `props?`, `props_file?`, `comment?` | PNGs inline, so the agent can see them |
+| `list_scenes` | `all?` | every scene: kind, length, score/props and (in a project) active comment count; `all` adds the demo films in standalone mode |
+| `scene_info` | `scene`, `source?` | clips, knobs, captions and score with `file:line`; `source: true` adds the scene's Swift |
+| `render_frames` | `scene`, `times`, `width?`, `aspect?`, `props?`, `props_file?`, `comment?` | PNGs inline (default 960 px wide, max 1280), so the agent can see them |
+| `contact_sheet` | `scene`, `aspect?`, `props?`, `props_file?`, `comment?` | one grid PNG of the whole scene |
+| `check_scene` | `scene`, `aspect?`, `props?`, `props_file?`, `comment?` | the `check` report (blank frames, loudness, clipping, whoosh/riser) and the sheet |
 | `render_video` | `scene`, `preview?`, `aspect?`, `props?`, `props_file?`, `wait?` | `out/<Scene>[-9x16\|-1x1][-preview].mp4`, and returns its path |
-| `render_status` | `job?`, `wait?`, `cancel?` | progress and result of a job (see below); no `job` lists them |
-| `set_knobs`, `build`, `list_comments`, `get_comment`, `claim_comment`, `reply_comment`, `resolve_comment` | | the review loop (project mode); `build` takes `wait?` |
+| `render_status` | `job?`, `wait?` (seconds, default 30, max 50), `cancel?` | progress and result of a job (see below); no `job` lists them |
+| `build` | `wait?` | builds the project's CLI and returns the diagnostics |
+
+**Review loop** (project mode)
+
+| tool | arguments | does |
+|---|---|---|
+| `list_comments` | `scene?`, `status?` (`active` default, `all`, or a comma list) | the comments, one line each |
+| `get_comment` | `id` | the thread, the frame with the region boxed, and the clips at that time with `file:line` |
+| `claim_comment` | `id` | marks it `inProgress` for the agent and captures a before-frame |
+| `reply_comment` | `id`, `body`, `attach_frame?`, `reopen?` | adds a reply; `reopen` gives a claim back |
+| `resolve_comment` | `id`, `summary` | renders the after-frame, replies with the summary and resolves |
+| `set_knobs` | `scene`, `values`, `reset?` | merges knob overrides into `.swift-render/knobs/<Scene>.json` |
 
 Resources: `swift-render://docs/<topic>` (`resources/list`, `resources/read`) serve the same text as `docs`.
 
@@ -133,7 +153,7 @@ Other ways to get a server:
   `$SWIFT_RENDER_MCP`, `swift-render-mcp` on `PATH` or the Studio app. It builds from a project only
   when that project is trusted ([review-loop.md](review-loop.md#the-director-agent-skill-and-plugin)).
 
-Requirements: macOS 14+ and Xcode 16 or later (see the README). The first render in a new `Launch/` package
+Requirements: macOS 14+ and an Xcode toolchain (see the README). The first render in a new `Launch/` package
 builds it, which fetches swift-render.
 
 ## Configure your agent

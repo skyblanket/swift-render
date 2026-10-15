@@ -33,6 +33,7 @@ public enum Knob {
         return o?.knobDouble ?? value
     }
 
+    /// A bool, shown as a toggle in Studio.
     public static func bool(_ key: String, _ value: Bool,
                             file: String = #filePath, line: Int = #line) -> Bool {
         let o = KnobStore.shared.read(key) { o in
@@ -43,6 +44,7 @@ public enum Knob {
         return o?.knobBool ?? value
     }
 
+    /// A string, shown as a text field in Studio.
     public static func text(_ key: String, _ value: String,
                             file: String = #filePath, line: Int = #line) -> String {
         let o = KnobStore.shared.read(key) { o in
@@ -105,6 +107,7 @@ extension KnobValue {
 /// Process-wide knob overrides, plus the declarations seen while recording
 /// (`SceneProbe.probe` records). Thread-safe: `soundtrack` reads knobs off-main.
 public final class KnobStore: @unchecked Sendable {
+    /// The process-wide store every `Knob` reads from.
     public static let shared = KnobStore()
 
     private let lock = NSLock()
@@ -118,6 +121,7 @@ public final class KnobStore: @unchecked Sendable {
         lock.lock(); overrides = values; lock.unlock()
     }
 
+    /// The current overrides, keyed by knob key.
     public var values: [String: KnobValue] {
         lock.lock(); defer { lock.unlock() }; return overrides
     }

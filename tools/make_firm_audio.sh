@@ -11,7 +11,7 @@
 #
 # The VO START times below mirror FutureOfTheFirm.anchors (+ a small per-chapter
 # lead-in) so narration lands with each chapter. KEEP IN SYNC with the `durs`
-# array in Sources/SwiftRender/Scenes/FutureOfTheFirm.swift.
+# array in Sources/SwiftRenderScenes/FutureOfTheFirm.swift.
 #
 # Usage:
 #   bash tools/make_firm_audio.sh                 # defaults (`say`, Samantha)

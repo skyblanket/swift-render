@@ -10,13 +10,17 @@ import SwiftRenderKit
 // No whoosh, riser or crash. Every hit time comes from the same functions the
 // visuals use (`FeatureTriad.landTimes`, `CodeReveal.lineTimes`, …).
 
+/// Builds the soundtrack for a `LaunchPlan` (see above).
 public enum LaunchScore {
     /// Shared timing so the visuals and the score agree.
     public enum Cue {
         /// Card i of the triad starts on beat i (+0.1 s so the spring peaks just after).
         public static func triadStart(_ plan: LaunchPlan) -> Double { 0.1 }
+        /// The code shot reveals a line every sixth of a beat.
         public static func codeMode(_ plan: LaunchPlan) -> CodeReveal.Mode { .lines(step: plan.beat / 6) }
+        /// When the code shot's reveal starts.
         public static let codeStart = 0.35
+        /// When the terminal shot's session starts.
         public static let terminalStart = LaunchTerminal.start
         /// The base typing speed; a long session types faster (`terminalSpeed`).
         public static let terminalCPS = LaunchTerminal.cps
@@ -28,10 +32,15 @@ public enum LaunchScore {
         /// The hero's specular sweep and name reveal sit on the beat grid (beat 2), so they move
         /// with the tempo — and the blip and bell that mark them move with them.
         public static func heroSweep(_ plan: LaunchPlan) -> Double { plan.beat * 2 - 0.2 }
+        /// When the hero's name starts to focus in.
         public static func heroName(_ plan: LaunchPlan) -> Double { plan.beat * 2 - 0.1 }
+        /// When the hero's tagline rises.
         public static func heroTagline(_ plan: LaunchPlan) -> Double { plan.beat * 3 + 0.1 }
+        /// Stats land one per beat.
         public static func statStagger(_ plan: LaunchPlan) -> Double { plan.beat }
+        /// When the first stat starts counting.
         public static let statStart = 0.1
+        /// Feature and changelog rows land every half beat.
         public static func rowStagger(_ plan: LaunchPlan) -> Double { plan.beat / 2 }
     }
 
@@ -77,6 +86,7 @@ public enum LaunchScore {
         return out
     }
 
+    /// The full score for `plan`: harmony, groove (unless the mood is calm), cue hits and any voiceover.
     public static func make(_ plan: LaunchPlan, _ p: LaunchProps, duration: Double? = nil) -> Score {
         let beat = plan.beat, bar = plan.bar
         let key = p.music.key

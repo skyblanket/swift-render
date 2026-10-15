@@ -26,6 +26,7 @@ public struct ProjectConfig: Codable, Sendable, Equatable {
     /// Default author name for comments written from this machine.
     public var author: String?
 
+    /// Creates a config; `product` defaults to "swift-render".
     public init(product: String = "swift-render", scenesDir: String? = nil, author: String? = nil) {
         self.product = product
         self.scenesDir = scenesDir
@@ -34,6 +35,7 @@ public struct ProjectConfig: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey { case product, scenesDir, author }
 
+    /// Decodes leniently: a missing `product` means "swift-render".
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         product = try c.decodeIfPresent(String.self, forKey: .product) ?? "swift-render"
@@ -42,10 +44,14 @@ public struct ProjectConfig: Codable, Sendable, Equatable {
     }
 }
 
+/// A swift-render package on disk and the paths it shares with Studio and agents.
 public struct Project: Sendable, Equatable {
+    /// Package root directory (standardized).
     public let root: URL
+    /// Settings from `swift-render.json`, or defaults.
     public let config: ProjectConfig
 
+    /// Creates a project at `root` with the given config.
     public init(root: URL, config: ProjectConfig = ProjectConfig()) {
         self.root = root.standardizedFileURL
         self.config = config
@@ -94,25 +100,34 @@ public struct Project: Sendable, Equatable {
         }
     }
 
+    /// `<root>/.swift-render/`.
     public var dotDir: URL { root.appendingPathComponent(".swift-render", isDirectory: true) }
+    /// `.swift-render/reviews/`, one review JSON per scene.
     public var reviewsDir: URL { dotDir.appendingPathComponent("reviews", isDirectory: true) }
+    /// `.swift-render/knobs/`, one knob-override JSON per scene.
     public var knobsDir: URL { dotDir.appendingPathComponent("knobs", isDirectory: true) }
+    /// `.swift-render/attachments/`, before/after frames for comments.
     public var attachmentsDir: URL { dotDir.appendingPathComponent("attachments", isDirectory: true) }
+    /// `.swift-render/cache/`, gitignored scratch.
     public var cacheDir: URL { dotDir.appendingPathComponent("cache", isDirectory: true) }
+    /// `<root>/out/`, where renders are written.
     public var rendersDir: URL { root.appendingPathComponent("out", isDirectory: true) }
 
     // Per-scene files are always direct children of their directory: a scene name is
     // a Swift type name, and anything else (a "../" from an agent's tool call, a
     // crafted review file) maps to a harmless file name instead of a path.
+    /// `.swift-render/reviews/<Scene>.json`.
     public func reviewURL(scene: String) -> URL {
         reviewsDir.appendingPathComponent("\(Self.fileComponent(scene: scene)).json")
     }
+    /// `.swift-render/knobs/<Scene>.json`.
     public func knobsURL(scene: String) -> URL {
         knobsDir.appendingPathComponent("\(Self.fileComponent(scene: scene)).json")
     }
 
     /// Saved props variants for a PropsScene, one JSON file each (Studio's Props tab).
     public var propsDir: URL { dotDir.appendingPathComponent("props", isDirectory: true) }
+    /// `.swift-render/props/<Scene>/`, the scene's saved props variants.
     public func propsVariantsDir(scene: String) -> URL {
         propsDir.appendingPathComponent(Self.fileComponent(scene: scene), isDirectory: true)
     }

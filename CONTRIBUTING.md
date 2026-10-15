@@ -21,7 +21,7 @@ Sources/
   SwiftRenderStudio/   swift-render Studio (SwiftUI app; depends only on SwiftRenderKit):
                        App/ Core/ (build, host, playback, review, agent, render queue) Timeline/
                        Viewer/ Inspector/ Render/ Sidebar/ Agent/
-  SwiftRenderMCP/      swift-render-mcp: hand-written MCP stdio server (13 tools)
+  SwiftRenderMCP/      swift-render-mcp: hand-written MCP stdio server (21 tools)
 Plugins/
   MetalCompilerPlugin/ compiles Shaders/*.metal (falls back to prebuilt.metallib)
   SceneRegistryPlugin/ generates the scene registry for a CLI target + its same-package deps
@@ -29,9 +29,10 @@ Tests/
   SwiftRenderTests/        engine, Kit, host, review loop, launch, determinism
   SwiftRenderStudioTests/  Studio, against FakeHost / fake processes (real-host tests are opt-in)
 Support/Studio/        Info.plist + entitlements for the packaged app
-.claude/ claude-plugin/ .claude-plugin/   director agent, review skill, Claude Code plugin + marketplace
-scripts/               host-smoke.py, mcp-smoke.py, package-studio.sh, typecheck-budget.sh
-docs/                  ai-quickstart, launch, studio, review-loop
+.claude/ claude-plugin/ .claude-plugin/   director agent, make + review skills, Claude Code plugin + marketplace
+scripts/               host-smoke.py, mcp-smoke.py, package-studio.sh, typecheck-budget.sh, embed-quickstart.py
+tools/                 voiceover and audio pipelines for the narrated demo films
+docs/                  guides; start at docs/README.md (architecture.md explains how the pieces fit)
 ```
 
 Dependency rule: Studio and the MCP server link **only** `SwiftRenderKit`. They never import the
@@ -106,8 +107,11 @@ Then cover it in `Tests/SwiftRenderTests/LaunchTests.swift` and `docs/launch.md`
   `ReviewLoopTests` checks this. Run `claude plugin validate claude-plugin` and
   `claude plugin validate .` after you edit a manifest.
 - **Version**: `swiftRenderVersion` in `SwiftRenderTool/Tool.swift`, `CHANGELOG.md`,
-  `.claude-plugin/marketplace.json`, `claude-plugin/.claude-plugin/plugin.json`, and the
-  `from:` that `swift-render init` writes.
+  `.claude-plugin/marketplace.json`, `claude-plugin/.claude-plugin/plugin.json`,
+  `Support/Studio/Info.plist` (`CFBundleShortVersionString`), and the `from:` that
+  `swift-render init` writes.
+- **The API guide** `docs/ai-quickstart.md` is compiled into `swift-render-mcp`. After editing it,
+  run `python3 scripts/embed-quickstart.py` (`MCPCreateTests` fails until you do).
 
 ## Tests
 

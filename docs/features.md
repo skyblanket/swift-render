@@ -127,7 +127,7 @@ twelve running at once:
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/style-reel.mp4
 
 ```bash
-swift run swift-render render StyleReel --audio out/reel.wav
+swift run swift-render render StyleReel        # scores itself in Swift
 ```
 
 ## More demos
@@ -140,12 +140,15 @@ swift run swift-render render StyleReel --audio out/reel.wav
 | `SpiderNoir` - a 1-bit charcoal-and-cream noir short | `swift run swift-render render SpiderNoir` |
 | `PixelSonnet` - an 8-bit pixel-art short with a chiptune score | `swift run swift-render render PixelSonnet` |
 | `FutureOfTheFirm` - a narrated, animated essay explainer ([docs](future-of-the-firm.md)) | `bash tools/make_firm_audio.sh` |
-| `LaunchFilm2` - the launch film: every feature, one file | `swift run swift-render render LaunchFilm2 --audio out/launch.wav` |
-| `StyleReel` - 12 aesthetics with card-zoom transitions | `swift run swift-render render StyleReel --audio out/reel.wav` |
+| `LaunchFilm2` - the launch film: every feature, one file | `swift run swift-render render LaunchFilm2` |
+| `StyleReel` - 12 aesthetics with card-zoom transitions | `swift run swift-render render StyleReel` |
 | `Kinetic` - 12s kinetic-typography reel: word slams, marquee, galaxy iris, odometer ring | `swift run swift-render render Kinetic` |
 | `JustRenderIt` - the hero ad, beat-synced soundtrack included | `swift run swift-render render JustRenderIt --audio audio/jri.m4a` |
 | `AudioBars` - audio-reactive + props reference scene | `swift run swift-render render AudioBars --audio audio/jri.m4a` |
 | `TimelineDemo` - Timeline/transition/springs reference | `swift run swift-render render TimelineDemo` |
+| `Showcase3D` - true 3D: a device with a live SwiftUI screen, studio light, depth of field ([docs](3d.md)) | `swift run swift-render render Showcase3D` |
+| `AppleLaunch` - the launch-film template behind `swift-render launch` ([docs](launch.md)) | `swift run swift-render launch /path/to/MyApp` |
+| `KnobLab` - knobs reference: values you tune live in Studio | `swift run swift-render info KnobLab` |
 | `ShaderGallery`, `ShaderShowcase`, `TextReveal`, `CardStack`, `ParticleField`, … | `swift run swift-render list` |
 
 https://github.com/skyblanket/swift-render/raw/main/docs/assets/kinetic.mp4

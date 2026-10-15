@@ -7,6 +7,7 @@ import Foundation
 // `swift-render review` CLI). One pretty-printed JSON file per scene under
 // `.swift-render/reviews/` so threads diff and merge cleanly in git.
 
+/// Where a review comment stands.
 public enum ReviewStatus: String, Codable, Sendable, CaseIterable {
     case open
     /// An agent (or person) has claimed it and is working on it.
@@ -14,45 +15,68 @@ public enum ReviewStatus: String, Codable, Sendable, CaseIterable {
     case resolved
     case wontFix
 
+    /// True for `.open` and `.inProgress`.
     public var isActive: Bool { self == .open || self == .inProgress }
 }
 
+/// Who wrote a comment or reply.
 public struct ReviewAuthor: Codable, Sendable, Equatable, Hashable {
+    /// Whether the author is a person or an agent.
     public enum Kind: String, Codable, Sendable { case human, agent }
+    /// Display name.
     public var name: String
+    /// Person or agent.
     public var kind: Kind
+    /// Creates an author; defaults to a human.
     public init(name: String, kind: Kind = .human) { self.name = name; self.kind = kind }
+    /// An agent author, "Claude" by default.
     public static func agent(_ name: String = "Claude") -> ReviewAuthor { ReviewAuthor(name: name, kind: .agent) }
 }
 
 /// Normalized rectangle on the frame, origin top-left, 0…1 in both axes.
 public struct ReviewRegion: Codable, Sendable, Equatable, Hashable {
+    /// Left edge, 0…1 of frame width.
     public var x: Double
+    /// Top edge, 0…1 of frame height.
     public var y: Double
+    /// Width, 0…1 of frame width.
     public var w: Double
+    /// Height, 0…1 of frame height.
     public var h: Double
+    /// Creates a region from normalized coordinates.
     public init(x: Double, y: Double, w: Double, h: Double) {
         self.x = x; self.y = y; self.w = w; self.h = h
     }
 }
 
+/// A file (frame or video) attached to a comment or reply.
 public struct ReviewAttachment: Codable, Sendable, Equatable, Hashable {
+    /// Attachment type: a frame before or after a fix, a plain frame, or a video.
     public enum Kind: String, Codable, Sendable { case before, after, frame, video }
+    /// What the attachment shows.
     public var kind: Kind
     /// Path relative to the project root (e.g. `.swift-render/attachments/c1a2b3c4-after.png`).
     public var path: String
     /// Scene time the attachment shows.
     public var t: Double?
+    /// Creates an attachment.
     public init(kind: Kind, path: String, t: Double? = nil) { self.kind = kind; self.path = path; self.t = t }
 }
 
+/// One reply in a comment thread.
 public struct ReviewReply: Codable, Sendable, Equatable, Identifiable {
+    /// Unique id, "r" + 8 hex chars by default.
     public var id: String
+    /// Who wrote the reply.
     public var author: ReviewAuthor
+    /// Reply text.
     public var body: String
+    /// When the reply was written.
     public var createdAt: Date
+    /// Frames or videos attached to the reply.
     public var attachments: [ReviewAttachment]
 
+    /// Creates a reply with a fresh id and the current date.
     public init(id: String = ReviewIDs.make("r"), author: ReviewAuthor, body: String,
                 createdAt: Date = Date(), attachments: [ReviewAttachment] = []) {
         self.id = id; self.author = author; self.body = body
@@ -60,18 +84,27 @@ public struct ReviewReply: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// A timecoded, optionally region-pinned note on a scene.
 public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
+    /// Unique id, "c" + 8 hex chars by default.
     public var id: String
     /// Scene time the note is about (seconds).
     public var t: Double
     /// Optional end of a time range (seconds) — "this whole beat drags".
     public var end: Double?
+    /// Optional area of the frame the note points at.
     public var region: ReviewRegion?
+    /// Comment text.
     public var body: String
+    /// Who wrote the comment.
     public var author: ReviewAuthor
+    /// Where the comment stands.
     public var status: ReviewStatus
+    /// When the comment was created.
     public var createdAt: Date
+    /// When the comment or its thread last changed.
     public var updatedAt: Date
+    /// Replies, oldest first.
     public var replies: [ReviewReply]
     /// Short note on how it was resolved (agent or human).
     public var resolution: String?
@@ -91,6 +124,7 @@ public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
     /// Human sign-off on an agent's resolution.
     public var acceptedBy: ReviewAuthor?
 
+    /// Creates a comment; `updatedAt` starts equal to `createdAt`.
     public init(id: String = ReviewIDs.make("c"), t: Double, end: Double? = nil, region: ReviewRegion? = nil,
                 body: String, author: ReviewAuthor, status: ReviewStatus = .open,
                 createdAt: Date = Date(), replies: [ReviewReply] = [], resolution: String? = nil,
@@ -116,13 +150,19 @@ public struct ReviewComment: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// Frame size and rate a comment was made against.
 public struct ReviewCanvas: Codable, Sendable, Equatable, Hashable {
+    /// Width in pixels.
     public var width: Int
+    /// Height in pixels.
     public var height: Int
+    /// Frames per second.
     public var fps: Int
+    /// Creates a canvas.
     public init(width: Int, height: Int, fps: Int) { self.width = width; self.height = height; self.fps = fps }
 }
 
+/// Project-relative paths for review attachment files.
 public enum ReviewAttachmentPaths {
     /// Project-relative directory every attachment file lives in.
     public static let directory = ".swift-render/attachments/"
@@ -139,20 +179,27 @@ public enum ReviewAttachmentPaths {
     }
 }
 
+/// One scene's review file, `.swift-render/reviews/<Scene>.json`.
 public struct ReviewFile: Codable, Sendable, Equatable {
+    /// File format version; currently 1.
     public var version: Int
+    /// Scene the comments belong to.
     public var scene: String
+    /// The scene's comments, sorted by time.
     public var comments: [ReviewComment]
 
+    /// Creates a review file for a scene.
     public init(scene: String, comments: [ReviewComment] = []) {
         self.version = 1; self.scene = scene; self.comments = comments
     }
 
+    /// Sorts comments by time, then creation date.
     public mutating func sort() {
         comments.sort { ($0.t, $0.createdAt) < ($1.t, $1.createdAt) }
     }
 }
 
+/// Review id generation and sanitizing.
 public enum ReviewIDs {
     /// Short random id: "c" + 8 hex chars. Collisions within one scene are vanishingly rare.
     public static func make(_ prefix: String) -> String {
@@ -178,9 +225,11 @@ public enum ReviewIDs {
     }
 }
 
+/// Errors from review file operations.
 public enum ReviewError: Error, CustomStringConvertible {
     case notFound(scene: String, id: String)
     case io(String)
+    /// Human-readable message.
     public var description: String {
         switch self {
         case .notFound(let s, let id): return "no comment \(id) on scene \(s)"
@@ -192,10 +241,13 @@ public enum ReviewError: Error, CustomStringConvertible {
 /// Reads and writes `.swift-render/reviews/<Scene>.json`. Writers (Studio, MCP,
 /// CLI) can run concurrently, so every read-modify-write holds an `flock`.
 public struct ReviewStore: Sendable {
+    /// The project whose review files this store manages.
     public let project: Project
 
+    /// Creates a store for a project.
     public init(project: Project) { self.project = project }
 
+    /// Pretty, sorted-key JSON encoder with ISO 8601 dates.
     public static var encoder: JSONEncoder {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -203,6 +255,7 @@ public struct ReviewStore: Sendable {
         return e
     }
 
+    /// JSON decoder with ISO 8601 dates.
     public static var decoder: JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
@@ -215,6 +268,7 @@ public struct ReviewStore: Sendable {
         return files.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted()
     }
 
+    /// Loads a scene's review file; an empty file when none exists.
     public func load(scene: String) throws -> ReviewFile {
         let url = project.reviewURL(scene: scene)
         guard FileManager.default.fileExists(atPath: url.path) else { return ReviewFile(scene: scene) }
@@ -253,12 +307,14 @@ public struct ReviewStore: Sendable {
 
     // MARK: Convenience operations (shared by Studio, CLI and MCP)
 
+    /// Appends a comment to the scene's review file and returns it.
     @discardableResult
     public func add(scene: String, _ comment: ReviewComment) throws -> ReviewComment {
         try mutate(scene: scene) { $0.comments.append(comment) }
         return comment
     }
 
+    /// Appends a reply to comment `id` and returns the updated comment.
     @discardableResult
     public func reply(scene: String, id: String, _ reply: ReviewReply) throws -> ReviewComment {
         try mutate(scene: scene) { file in
@@ -271,6 +327,7 @@ public struct ReviewStore: Sendable {
         }
     }
 
+    /// Sets a comment's status (and optional resolution); `author` becomes the assignee when in progress.
     @discardableResult
     public func setStatus(scene: String, id: String, _ status: ReviewStatus,
                           by author: ReviewAuthor? = nil, resolution: String? = nil) throws -> ReviewComment {
@@ -314,6 +371,7 @@ public struct ReviewStore: Sendable {
         c.updatedAt = Date()
     }
 
+    /// Edits comment `id` under the lock and bumps `updatedAt`.
     @discardableResult
     public func update(scene: String, id: String, _ edit: (inout ReviewComment) -> Void) throws -> ReviewComment {
         try mutate(scene: scene) { file in
@@ -326,6 +384,7 @@ public struct ReviewStore: Sendable {
         }
     }
 
+    /// Removes comment `id` from the scene's review file (attachment files are kept; see `remove`).
     public func delete(scene: String, id: String) throws {
         try mutate(scene: scene) { file in
             guard let i = file.comments.firstIndex(where: { $0.id == id }) else {
@@ -438,8 +497,11 @@ public extension ReviewComment {
 
 /// A comment with its scene — the shape `review … --json` and the MCP server emit.
 public struct ReviewEntry: Codable, Sendable, Equatable {
+    /// Scene name.
     public var scene: String
+    /// The comment.
     public var comment: ReviewComment
+    /// Creates an entry.
     public init(scene: String, comment: ReviewComment) { self.scene = scene; self.comment = comment }
 }
 

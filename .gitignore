@@ -1,9 +1,19 @@
+# SwiftPM / Xcode build products
 .build
 .swiftpm
-.DS_Store
-out/*.mp4
-out/*.mov
 Package.resolved
 *.xcodeproj
-.idea
+
+# Renders, check sheets and reports (launch films write their own out/.gitignore too)
 out/
+
+# Per-project scratch; reviews/ and knobs/ are meant to be committed (see .swift-render/.gitignore)
+.swift-render/cache/
+
+# Claude Code worktrees and personal settings
+.claude/worktrees/
+.claude/settings.local.json
+
+# Editors and macOS
+.idea
+.DS_Store

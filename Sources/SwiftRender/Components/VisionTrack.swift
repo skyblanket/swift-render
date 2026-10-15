@@ -8,24 +8,32 @@ import Vision
 
 /// A tracked point in normalized frame coordinates: (0,0) top-left, (1,1) bottom-right.
 public struct VisionPoint: Codable, Sendable, Hashable {
+    /// Horizontal position, 0…1 from the left.
     public var x: Double
+    /// Vertical position, 0…1 from the top.
     public var y: Double
+    /// Vision's confidence, 0…1.
     public var confidence: Double
+    /// Creates a point from normalized coordinates and a confidence.
     public init(x: Double, y: Double, confidence: Double) { self.x = x; self.y = y; self.confidence = confidence }
+    /// The point in a frame of `size`.
     public func at(_ size: CGSize) -> CGPoint { CGPoint(x: x * Double(size.width), y: y * Double(size.height)) }
 }
 
 /// Everything Vision found in one video frame.
 public struct VisionFrame: Codable, Sendable {
+    /// Frame time in seconds from the start of the video.
     public var time: Double
     /// Body joints by name: nose, neck, leftShoulder … rightAnkle, root (see `VisionTrack.bones`).
     public var body: [String: VisionPoint]
     /// Up to two hands; joints by name: wrist, thumbTip, indexTip, middleTip, ringTip, littleTip, …
     public var hands: [[String: VisionPoint]]
 
+    /// Creates a frame; no body joints or hands by default.
     public init(time: Double, body: [String: VisionPoint] = [:], hands: [[String: VisionPoint]] = []) {
         self.time = time; self.body = body; self.hands = hands
     }
+    /// True when any body joint was detected.
     public var hasPerson: Bool { !body.isEmpty }
 }
 
@@ -44,19 +52,25 @@ public struct VisionFrame: Codable, Sendable {
 /// path, size, modification date and the sample rate — later renders (and every
 /// `--jobs` process) read the cache, so output is stable across runs.
 public final class VisionTrack: @unchecked Sendable {
+    /// Analysis sample rate in frames per second.
     public let fps: Double
+    /// Analyzed frames, one per 1/`fps` seconds.
     public let frames: [VisionFrame]
+    /// Person-mask size in pixels; (0, 0) when masks weren't requested.
     public let maskSize: (width: Int, height: Int)
     private let maskBytes: Data                      // frames × w × h, 8-bit
     private var maskCache: [Int: CGImage] = [:]
     private let lock = NSLock()
 
+    /// Creates a track from analyzed frames and optional packed 8-bit masks (`frames × width × height` bytes).
     public init(fps: Double, frames: [VisionFrame], maskSize: (Int, Int) = (0, 0), maskBytes: Data = Data()) {
         self.fps = fps; self.frames = frames; self.maskSize = (maskSize.0, maskSize.1); self.maskBytes = maskBytes
     }
 
+    /// Length covered by the analyzed frames, in seconds.
     public var duration: Double { Double(frames.count) / fps }
 
+    /// Index of the analyzed frame at `t` (rounded down, clamped); nil for an empty track.
     public func index(at t: Double) -> Int? {
         guard !frames.isEmpty else { return nil }
         return min(frames.count - 1, max(0, Int((t * fps).rounded(.down))))
@@ -120,6 +134,7 @@ public final class VisionTrack: @unchecked Sendable {
     private static var memory: [String: VisionTrack] = [:]
     private static let memoryLock = NSLock()
 
+    /// Where analysis results are cached: `~/Library/Caches/swift-render/vision`.
     public static var cacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("swift-render/vision", isDirectory: true)
@@ -310,10 +325,12 @@ public struct PoseOverlay: View {
     let lineWidth: Double
     let minConfidence: Double
 
+    /// Draws `frame`'s bones and joints whose confidence meets `minConfidence`; a nil frame draws nothing.
     public init(_ frame: VisionFrame?, color: Color = .white, lineWidth: Double = 6, minConfidence: Double = 0.25) {
         self.frame = frame; self.color = color; self.lineWidth = lineWidth; self.minConfidence = minConfidence
     }
 
+    /// Body and hand bones stroked, and body joints dotted, in `color`.
     public var body: some View {
         Canvas { ctx, size in
             guard let frame else { return }

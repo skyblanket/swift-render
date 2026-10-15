@@ -55,10 +55,13 @@ import Foundation
 // - stdin EOF or `shutdown` → exit 0. Crashes print the signal and the scene/t
 //   being rendered to stderr before the default handler (or Swift backtracer) runs.
 
+/// Constants for the Studio ↔ render-host JSON Lines protocol.
 public enum HostProtocol {
+    /// Protocol version sent in the `ready` event.
     public static let version = 1
 }
 
+/// Request methods a client can send to the render host.
 public enum HostMethod: String, Codable, Sendable {
     /// → `HostListResult`
     case list
@@ -87,11 +90,16 @@ public enum HostMethod: String, Codable, Sendable {
     case check
 }
 
+/// One request line sent to the host.
 public struct HostRequest: Codable, Sendable {
+    /// Client-chosen id echoed on the response.
     public var id: Int
+    /// Which method to run.
     public var method: HostMethod
+    /// The method's parameters, if any.
     public var params: HostParams?
 
+    /// Creates a request.
     public init(id: Int, method: HostMethod, params: HostParams? = nil) {
         self.id = id; self.method = method; self.params = params
     }
@@ -101,22 +109,30 @@ public struct HostRequest: Codable, Sendable {
 /// format flat and the decoder trivial on both ends.
 public struct HostParams: Codable, Sendable, Equatable {
     // open
+    /// Scene name to open.
     public var scene: String?
+    /// Duration override in seconds; nil uses the scene's own length.
     public var duration: Double?
+    /// Render width in pixels.
     public var width: Int?
+    /// Render height in pixels.
     public var height: Int?
+    /// Frames per second for `open`; on `stream`, an optional playback rate.
     public var fps: Int?
+    /// Whether to apply the post-processing pass; nil uses the host default.
     public var postFX: Bool?
     /// Props JSON text (PropsScene kinds). nil = scene defaults.
     public var propsJSON: String?
     /// Path to an external audio file (overrides the scene's Score).
     public var audioPath: String?
     // frame
+    /// Time in seconds from scene start.
     public var t: Double?
     /// Longest edge cap for the returned image, in pixels (aspect preserved).
     public var maxWidth: Int?
     /// "jpeg" (default, fast) or "png" (lossless, for comparisons/attachments).
     public var format: String?
+    /// JPEG quality 0–1 (host defaults to 0.8 for frames, 0.92 for stills).
     public var quality: Double?
     // setKnobs
     /// The complete override set: keys left out revert to their source defaults.
@@ -135,13 +151,19 @@ public struct HostParams: Codable, Sendable, Equatable {
     /// and returns it in `result.frame` (raw payload follows for "bgra8").
     public var deferProbe: Bool?
     // stream / credit / cancel
+    /// Stream start time, in seconds.
     public var from: Double?
+    /// Stream end time, in seconds; nil runs to the scene end.
     public var to: Double?
+    /// Frames granted to a stream (initial grant on `stream`, more on `credit`).
     public var credits: Int?
+    /// Id of the stream a `credit` or `cancel` refers to.
     public var streamID: Int?
     // still / check
+    /// Output file path for `still` and `check`.
     public var path: String?
 
+    /// Creates params; set only the fields the method uses.
     public init(scene: String? = nil, duration: Double? = nil, width: Int? = nil, height: Int? = nil,
                 fps: Int? = nil, postFX: Bool? = nil, propsJSON: String? = nil, audioPath: String? = nil,
                 t: Double? = nil, maxWidth: Int? = nil, format: String? = nil, quality: Double? = nil,
@@ -157,10 +179,13 @@ public struct HostParams: Codable, Sendable, Equatable {
     }
 }
 
+/// An error returned on a failed request.
 public struct HostError: Codable, Sendable, Equatable, Error {
     /// "superseded" | "noScene" | "unknownScene" | "badParams" | "renderFailed" | "internal"
     public var code: String
+    /// Human-readable explanation.
     public var message: String
+    /// Creates an error.
     public init(code: String, message: String) { self.code = code; self.message = message }
 }
 
@@ -171,16 +196,24 @@ public extension HostError {
         public static let superseded = "superseded"
         /// The request needs a prior successful `open`.
         public static let noScene = "noScene"
+        /// The `open` request named a scene the host doesn't have.
         public static let unknownScene = "unknownScene"
+        /// The request's params were missing or invalid.
         public static let badParams = "badParams"
+        /// Rendering the frame failed.
         public static let renderFailed = "renderFailed"
+        /// An unexpected host-side failure.
         public static let `internal` = "internal"
     }
 }
 
+/// One rendered frame, as returned by `frame`, `open` or a stream.
 public struct HostFrame: Codable, Sendable, Equatable {
+    /// Frame time in seconds from scene start.
     public var t: Double
+    /// Image width in pixels.
     public var width: Int
+    /// Image height in pixels.
     public var height: Int
     /// "jpeg" | "png" | "bgra8"
     public var format: String
@@ -192,6 +225,7 @@ public struct HostFrame: Codable, Sendable, Equatable {
     public var index: Int?
     /// Non-nil ⇒ exactly this many raw bytes follow the JSON line.
     public var bytes: Int?
+    /// Creates a frame.
     public init(t: Double, width: Int, height: Int, format: String, data: String, ms: Double,
                 index: Int? = nil, bytes: Int? = nil) {
         self.t = t; self.width = width; self.height = height; self.format = format; self.data = data; self.ms = ms
@@ -201,8 +235,11 @@ public struct HostFrame: Codable, Sendable, Equatable {
 
 /// Union of every result (unused fields nil).
 public struct HostResult: Codable, Sendable, Equatable {
+    /// `list` and `ready`: scenes the host can open.
     public var scenes: [SceneSummary]?
+    /// `open`, `setKnobs`, `setProps`: the opened scene's metadata.
     public var info: SceneInfo?
+    /// `frame` (and `open` with `t`): the rendered frame.
     public var frame: HostFrame?
     /// `still` / `check` output file.
     public var path: String?
@@ -210,6 +247,7 @@ public struct HostResult: Codable, Sendable, Equatable {
     public var report: [String]?
     /// `open` with `deferProbe`: `info` has no clips/knobs/events yet; an "info" event follows.
     public var probing: Bool?
+    /// Creates a result; set only the fields the method returns.
     public init(scenes: [SceneSummary]? = nil, info: SceneInfo? = nil, frame: HostFrame? = nil,
                 path: String? = nil, report: [String]? = nil, probing: Bool? = nil) {
         self.scenes = scenes; self.info = info; self.frame = frame; self.path = path; self.report = report
@@ -221,27 +259,35 @@ public struct HostResult: Codable, Sendable, Equatable {
 public struct HostMessage: Codable, Sendable {
     /// Present on responses.
     public var id: Int?
+    /// Present on successful responses.
     public var result: HostResult?
+    /// Present on failed responses.
     public var error: HostError?
     /// Present on unsolicited events: "ready" | "log" | "warning".
     public var event: String?
+    /// Text of a `log`, `warning` or failed `streamEnd` event.
     public var message: String?
     /// `ready` carries the scene list and host version.
     public var scenes: [SceneSummary]?
+    /// Host version string (`ready`).
     public var version: String?
+    /// Protocol version (`ready`); see `HostProtocol.version`.
     public var protocolVersion: Int?
     /// `frame` events: the stream's request id and the frame.
     public var streamID: Int?
+    /// `frame` events: the pushed frame.
     public var frame: HostFrame?
     /// `info` events: refreshed scene metadata.
     public var info: SceneInfo?
     /// `audio` events: synthesized score file + loudness envelope.
     public var audioPath: String?
+    /// `audio` events: RMS loudness envelope, 0…1 (rate as in `SceneInfo.loudnessRate`).
     public var loudness: [Float]?
     /// `audio` events: the scene the soundtrack belongs to (absent from older hosts), so a
     /// client that already switched away can drop it.
     public var scene: String?
 
+    /// Creates a message; prefer the static helpers.
     public init(id: Int? = nil, result: HostResult? = nil, error: HostError? = nil, event: String? = nil,
                 message: String? = nil, scenes: [SceneSummary]? = nil, version: String? = nil,
                 protocolVersion: Int? = nil, streamID: Int? = nil, frame: HostFrame? = nil,
@@ -252,12 +298,17 @@ public struct HostMessage: Codable, Sendable {
         self.audioPath = audioPath; self.loudness = loudness; self.scene = scene
     }
 
+    /// A successful response to request `id`.
     public static func response(_ id: Int, _ result: HostResult) -> HostMessage { HostMessage(id: id, result: result) }
+    /// A failed response to request `id`.
     public static func failure(_ id: Int, _ error: HostError) -> HostMessage { HostMessage(id: id, error: error) }
+    /// The `ready` event the host sends first, listing its scenes.
     public static func ready(scenes: [SceneSummary], version: String) -> HostMessage {
         HostMessage(event: "ready", scenes: scenes, version: version, protocolVersion: HostProtocol.version)
     }
+    /// A `log` event.
     public static func log(_ text: String) -> HostMessage { HostMessage(event: "log", message: text) }
+    /// A `warning` event.
     public static func warning(_ text: String) -> HostMessage { HostMessage(event: "warning", message: text) }
     /// One pushed playback frame (raw payload follows when `frame.bytes` is set).
     public static func streamFrame(_ streamID: Int, _ frame: HostFrame) -> HostMessage {
@@ -267,9 +318,11 @@ public struct HostMessage: Codable, Sendable {
     public static func streamEnd(_ streamID: Int, message: String? = nil) -> HostMessage {
         HostMessage(event: "streamEnd", message: message, streamID: streamID)
     }
+    /// The `audio` event: score file ready, with its loudness envelope.
     public static func audio(path: String?, loudness: [Float], scene: String? = nil) -> HostMessage {
         HostMessage(event: "audio", audioPath: path, loudness: loudness, scene: scene)
     }
+    /// The `info` event: refreshed scene metadata.
     public static func infoChanged(_ info: SceneInfo) -> HostMessage { HostMessage(event: "info", info: info) }
 }
 
@@ -279,15 +332,20 @@ public struct HostMessage: Codable, Sendable {
 /// `{"progress":{"frame":120,"total":540,"fps":41.7}}`, every ~10 frames and on the last.
 /// Other stderr lines are plain text; skip lines that don't decode.
 public struct RenderProgressLine: Codable, Sendable, Equatable {
+    /// The progress payload.
     public struct Progress: Codable, Sendable, Equatable {
         /// Frames encoded so far (1-based count).
         public var frame: Int
+        /// Total frames to encode.
         public var total: Int
         /// Encode throughput so far, frames per second.
         public var fps: Double
+        /// Creates progress.
         public init(frame: Int, total: Int, fps: Double) { self.frame = frame; self.total = total; self.fps = fps }
     }
+    /// The progress payload.
     public var progress: Progress
+    /// Creates a progress line.
     public init(frame: Int, total: Int, fps: Double) { progress = Progress(frame: frame, total: total, fps: fps) }
 }
 
@@ -297,14 +355,19 @@ public struct RenderProgressLine: Codable, Sendable, Equatable {
 /// analysis — can take seconds), `render` (frames about to flow), `mux` (encoding is done;
 /// the file is being finalized, stitched or given its soundtrack).
 public struct RenderStageLine: Codable, Sendable, Equatable {
+    /// Export stage names.
     public enum Stage: String, Codable, Sendable { case build, audio, render, mux }
+    /// The current stage.
     public var stage: Stage
+    /// Optional human-readable detail, e.g. "Synthesizing the score".
     public var detail: String?
+    /// Creates a stage line.
     public init(_ stage: Stage, _ detail: String? = nil) { self.stage = stage; self.detail = detail }
 }
 
 /// One-line JSON encode/decode shared by both ends.
 public enum HostWire {
+    /// Encodes a value as one JSON line (with trailing newline).
     public static func encode<T: Encodable>(_ value: T) throws -> Data {
         let enc = JSONEncoder()
         enc.outputFormatting = [.withoutEscapingSlashes]
@@ -313,6 +376,7 @@ public enum HostWire {
         return data
     }
 
+    /// Decodes one JSON line into `type`.
     public static func decode<T: Decodable>(_ type: T.Type, line: Data) throws -> T {
         try JSONDecoder().decode(T.self, from: line)
     }
@@ -321,8 +385,10 @@ public enum HostWire {
 /// Splits a byte stream into newline-terminated lines (handles partial reads).
 public struct LineBuffer: Sendable {
     private var buffer = Data()
+    /// Creates an empty buffer.
     public init() {}
 
+    /// Appends a chunk and returns every complete, non-empty line (without the newline).
     public mutating func append(_ chunk: Data) -> [Data] {
         buffer.append(chunk)
         var lines: [Data] = []
@@ -341,6 +407,7 @@ public struct LineBuffer: Sendable {
 public struct HostStreamDecoder: Sendable {
     private var buffer = Data()
     private var pending: (HostMessage, Int)? = nil
+    /// Creates an empty decoder.
     public init() {}
 
     /// Feed a chunk; returns every complete (message, payload?) in order.

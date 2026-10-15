@@ -10,16 +10,21 @@ import SwiftUI
 ///
 /// Row 0 is the top row. Channels are 0…1 through the accessors.
 public struct PixelGrid: Sendable {
+    /// Width in pixels.
     public let cols: Int
+    /// Height in pixels.
     public let rows: Int
+    /// RGBA bytes, row-major, 4 per pixel.
     public var data: [UInt8]
 
+    /// Wraps existing RGBA bytes (`cols × rows × 4`).
     public init(cols: Int, rows: Int, data: [UInt8]) {
         self.cols = cols; self.rows = rows; self.data = data
     }
 
     static let space: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
+    /// Copies `cg` into an sRGB RGBA grid at its own resolution; nil if drawing fails.
     public init?(_ cg: CGImage) {
         let w: Int = cg.width, h: Int = cg.height
         var px = [UInt8](repeating: 0, count: w * h * 4)
@@ -43,12 +48,14 @@ public struct PixelGrid: Sendable {
         return PixelGrid(cg)
     }
 
+    /// RGB at (x, y), 0…1, with coordinates clamped to the grid.
     public func rgb(_ x: Int, _ y: Int) -> (Double, Double, Double) {
         let xx: Int = min(cols - 1, max(0, x)), yy: Int = min(rows - 1, max(0, y))
         let i: Int = (yy * cols + xx) * 4
         return (Double(data[i]) / 255, Double(data[i + 1]) / 255, Double(data[i + 2]) / 255)
     }
 
+    /// Luma (Rec. 601 weights) at (x, y), 0…1.
     public func lum(_ x: Int, _ y: Int) -> Double {
         let c = rgb(x, y)
         return 0.299 * c.0 + 0.587 * c.1 + 0.114 * c.2
@@ -59,6 +66,7 @@ public struct PixelGrid: Sendable {
         rgb(Int(u * Double(cols)), Int(v * Double(rows)))
     }
 
+    /// Luma of the nearest sample at normalized coordinates (0…1).
     public func lumAt(u: Double, v: Double) -> Double {
         lum(Int(u * Double(cols)), Int(v * Double(rows)))
     }
@@ -110,6 +118,7 @@ public struct PixelGrid: Sendable {
         return PixelGrid(cols: cols, rows: rows, data: out)
     }
 
+    /// The grid as an opaque sRGB `CGImage`.
     public func cgImage() -> CGImage? {
         guard let provider = CGDataProvider(data: Data(data) as CFData) else { return nil }
         return CGImage(width: cols, height: rows, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: cols * 4,
@@ -129,11 +138,13 @@ public struct PixelGrid: Sendable {
 ///     Stylize.view(.halftone, grid: grid, size: size)
 ///     Stylize.view(.ascii, grid: grid, size: tileSize, density: 0.5)   // fewer, same-size-on-screen cells
 public enum Stylize {
+    /// The available renderers.
     public enum Style: Int, CaseIterable, Sendable {
         case pixel, dither, gameBoy, ascii, halftone, cmyk, mosaic, led
         case engraving, crosshatch, pointillism, bricks, crossStitch, lowPoly, blueprint, thermal
     }
 
+    /// A Canvas of `size` drawing `grid` in `style`; `density` scales cell counts, `t` drives the styles that drift.
     @MainActor
     public static func view(_ style: Style, grid: PixelGrid, size: CGSize,
                             density: Double = 1, t: Double = 0) -> some View {

@@ -39,25 +39,36 @@ public enum Lighting3DModel: Hashable {
 ///     Material3D(base: .image("tex/wood.jpg"), roughness: 0.6, normal: .image("tex/wood_n.png"))
 ///     .screen(Texture3D.view(width: 390, height: 844) { MyAppScreen(t: t) })
 public struct Material3D {
+    /// Base (albedo) color or texture.
     public var base: Texture3D
+    /// Metalness, 0 (dielectric) to 1 (metal), as a value or texture.
     public var metalness: Texture3D
+    /// Surface roughness, 0 (mirror) to 1 (fully diffuse), as a value or texture; very low values are clamped.
     public var roughness: Texture3D
+    /// Self-illumination color or texture (nil = none).
     public var emission: Texture3D?
     /// Multiplies the emission (above 1 blooms when the camera's bloom is on).
     public var emissionIntensity: Double
+    /// Normal map (nil = none).
     public var normal: Texture3D?
+    /// Strength of the normal map.
     public var normalIntensity: Double
+    /// Ambient occlusion map (nil = none).
     public var ambientOcclusion: Texture3D?
     /// 0…1 extra clear lacquer layer (car paint, glass screens).
     public var clearcoat: Double
+    /// Roughness of the clear coat layer (clamped to a small minimum).
     public var clearcoatRoughness: Double
     /// 1 = opaque.
     public var opacity: Double
+    /// Renders both faces of each polygon (for thin or transparent surfaces).
     public var doubleSided: Bool
+    /// Lighting model used to shade the material.
     public var model: Lighting3DModel
     /// Repeat count for image textures (u, v).
     public var tiling: SIMD2<Double>
 
+    /// Creates a material; `metalness` and `roughness` are scalar values here.
     public init(base: Texture3D = .color(.white), metalness: Double = 0, roughness: Double = 0.5,
                 emission: Texture3D? = nil, emissionIntensity: Double = 1,
                 normal: Texture3D? = nil, normalIntensity: Double = 1, ambientOcclusion: Texture3D? = nil,

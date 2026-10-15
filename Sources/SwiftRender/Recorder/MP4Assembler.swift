@@ -7,8 +7,10 @@ import SwiftRenderKit
 /// the audio is encoded (AAC 256 kbps). Used for the recorder's audio mux and to
 /// stitch `--jobs` chunks back into one file.
 public enum MP4Assembler {
+    /// Why assembly failed.
     public enum Failure: Error, CustomStringConvertible {
         case noVideo(URL), writer(String)
+        /// Human-readable failure message.
         public var description: String {
             switch self {
             case .noVideo(let u): return "no video track in \(u.lastPathComponent)"

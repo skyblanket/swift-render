@@ -25,17 +25,26 @@ import SwiftUI
 /// meshes and environment maps are kept across frames, keyed by `id` (default: the call
 /// site). Give each simultaneously visible `Scene3D` from the same call site its own `id`.
 public struct Scene3D: View {
+    /// The camera.
     public var camera: Camera3D
+    /// Image-based lighting.
     public var environment: Environment3D
+    /// What shows behind the objects.
     public var background: Background3D
+    /// Distance fog (nil = none).
     public var fog: Fog3D?
+    /// Camera-side image processing (HDR, bloom, occlusion, grading).
     public var effects: Effects3D
+    /// Multisampling mode.
     public var antialiasing: Antialiasing3D
+    /// Cache key for the SceneKit scene and renderer (defaults to the call site).
     public var id: String
+    /// The scene description built from the content closure.
     public var nodes: [Node3D]
 
     @Environment(\.displayScale) private var displayScale
 
+    /// Creates a 3D scene. `fileID` and `line` capture the call site, which forms the default `id`.
     public init(camera: Camera3D, environment: Environment3D = .studio, background: Background3D = .color(.black),
                 fog: Fog3D? = nil, effects: Effects3D = .standard, antialiasing: Antialiasing3D = .x4,
                 id: String? = nil, fileID: String = #fileID, line: Int = #line,
@@ -46,6 +55,7 @@ public struct Scene3D: View {
         self.nodes = content()
     }
 
+    /// Draws the rendered frame, sized to the available space at the display scale.
     public var body: some View {
         GeometryReader { geo in
             let scale = max(0.01, displayScale)

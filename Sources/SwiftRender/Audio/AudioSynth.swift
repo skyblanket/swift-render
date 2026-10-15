@@ -13,18 +13,22 @@ public let scoreSampleRate: Double = 44_100
 
 // MARK: - Deterministic noise (same LCG as PostFX.swift's noise tile)
 
+/// Seeded linear congruential generator for reproducible noise.
 public struct NoiseLCG {
     private var state: UInt64
+    /// Creates a generator whose stream is fully determined by `seed`.
     public init(seed: UInt32) {
         // Same multiplier/increment as PostFX.makeNoiseTile; the seed is folded
         // into the fixed PostFX seed so every stream is reproducible.
         state = 0x9E37_79B9_7F4A_7C15 ^ (UInt64(seed) &* 0xD1B5_4A32_D192_ED03 &+ 1)
         state = state &* 6364136223846793005 &+ 1442695040888963407 // warm-up
     }
+    /// Next uniform sample in the open interval (0, 1).
     public mutating func uniform() -> Float { // (0, 1), 24-bit mantissa
         state = state &* 6364136223846793005 &+ 1442695040888963407
         return (Float(state >> 40) + 0.5) * (1.0 / 16_777_216.0)
     }
+    /// `n` standard-normal samples (Box–Muller).
     public mutating func randn(_ n: Int) -> [Float] { // ~N(0,1), Box–Muller
         var out = [Float](repeating: 0, count: n)
         var i = 0
@@ -36,6 +40,7 @@ public struct NoiseLCG {
         }
         return out
     }
+    /// `n` standard-normal samples from a fresh generator seeded with `seed`.
     public static func randn(_ n: Int, seed: UInt32) -> [Float] {
         var g = NoiseLCG(seed: seed); return g.randn(n)
     }
@@ -67,7 +72,9 @@ func diff1(_ x: [Float]) -> [Float] {                    // np.diff(x, prepend=0
 
 // MARK: - Voices (pure functions → [Float])
 
+/// Synthesized one-shot voices. Each returns mono samples at 44.1 kHz.
 public enum Voice {
+    /// Kick drum: a sine swept from `sweep.0` to `sweep.1` Hz plus a noise click, soft-clipped.
     public static func kick(amp: Float = 1, sweep: (Float, Float) = (150, 44), dur: Float = 0.4) -> [Float] {
         let n = samples(dur)
         var freq = vDSP.multiply(sweep.0 - sweep.1, vForce.exp(ramp(n, step: -26 / SR)))
@@ -78,6 +85,7 @@ public enum Voice {
         return vDSP.multiply(amp, vForce.tanh(vDSP.multiply(2.3, body)))
     }
 
+    /// Hand clap: three staggered bursts of high-passed noise.
     public static func clap(amp: Float = 0.5, seed: UInt32 = 21) -> [Float] {
         let n = samples(0.28)
         var g = NoiseLCG(seed: seed)                     // one stream, 3 bursts
@@ -90,16 +98,19 @@ public enum Voice {
         return vDSP.multiply(amp, out)
     }
 
+    /// Closed hi-hat: a short burst of high-passed noise.
     public static func hat(amp: Float = 0.1, dur: Float = 0.05, seed: UInt32 = 3) -> [Float] {
         let n = samples(dur)
         return vDSP.multiply(amp, vDSP.multiply(diff1(NoiseLCG.randn(n, seed: seed)), envExp(n, rate: 95)))
     }
 
+    /// Crash cymbal: high-passed noise with a slow decay.
     public static func crash(amp: Float = 0.3, dur: Float = 0.9, seed: UInt32 = 51) -> [Float] {
         let n = samples(dur)
         return vDSP.multiply(amp, vDSP.multiply(diff1(NoiseLCG.randn(n, seed: seed)), envExp(n, rate: 6)))
     }
 
+    /// Bass note at `f` Hz: sine plus second harmonic, soft-clipped, with a short attack and release.
     public static func bassNote(_ f: Float, amp: Float = 0.32, dur: Float = 0.5) -> [Float] {
         let n = samples(dur)
         let t = ramp(n, step: 1 / SR)
@@ -113,6 +124,7 @@ public enum Voice {
         return sig
     }
 
+    /// Build-up: noise plus a sine swept from 160 to 1500 Hz, growing louder to the end.
     public static func riser(amp: Float = 0.55, dur: Float = 3.4) -> [Float] {
         let n = samples(dur)
         var freq = [Float](repeating: 0, count: n)
@@ -123,6 +135,7 @@ public enum Voice {
         return sig
     }
 
+    /// 808-style sub drop: a low pitch-swept sine with a long decay.
     public static func boom(amp: Float = 1, dur: Float = 2.6) -> [Float] {  // 808 drop
         let n = samples(dur)
         var freq = vDSP.multiply(32, vForce.exp(ramp(n, step: -13 / SR)))
@@ -131,6 +144,7 @@ public enum Voice {
         return vDSP.multiply(amp, vForce.tanh(vDSP.multiply(2.8, sub)))
     }
 
+    /// Sustained drone at `f` Hz with a fifth above, slow tremolo, and fades in and out.
     public static func drone(amp: Float = 0.15, dur: Float = 7, f: Float = 55) -> [Float] {
         let n = samples(dur)
         let t = ramp(n, step: 1 / SR)
@@ -145,6 +159,7 @@ public enum Voice {
         return sig
     }
 
+    /// Filtered-noise sweep that brightens (`rising`) or darkens over `dur` seconds.
     public static func whoosh(amp: Float = 0.5, dur: Float = 0.7, rising: Bool = true, seed: UInt32 = 11) -> [Float] {
         let n = samples(dur)                              // moving-average filtered noise
         let noise = NoiseLCG.randn(n, seed: seed)
@@ -375,15 +390,19 @@ extension Voice {
 
 // MARK: - Event mixer: ducked music bus + clean kick bus, sidechain, master
 
+/// Offline stereo mixer: music, clean and voice buses, with kick sidechain and voiceover ducking.
 public struct Mixer {
+    /// Length of the mix in samples.
     public let n: Int
     var L: [Float], R: [Float]                            // music bus (ducked)
     var KL: [Float], KR: [Float]                          // clean bus (kicks/booms/samples)
     var VL: [Float], VR: [Float]                          // voice bus (never ducked)
+    /// Kick onset times in seconds; each one ducks the music bus.
     public private(set) var kickTimes: [Double] = []
     /// (start, end) of voiceover lines — the music bus ducks under them.
     public private(set) var voiceSpans: [(Double, Double)] = []
 
+    /// Creates a silent mix `duration` seconds long.
     public init(duration: Double) {
         n = Int(duration * Double(SR))
         L = [Float](repeating: 0, count: n); R = L; KL = L; KR = L; VL = L; VR = L
@@ -489,7 +508,9 @@ public struct Mixer {
 
 // MARK: - 16-bit PCM WAV writer
 
+/// Writes 16-bit stereo PCM WAV files at 44.1 kHz.
 public enum WAV {
+    /// Interleaves, clamps and writes `left` and `right` (equal length) to `url`.
     public static func write(left: [Float], right: [Float], to url: URL) throws {
         precondition(left.count == right.count)
         let n = left.count

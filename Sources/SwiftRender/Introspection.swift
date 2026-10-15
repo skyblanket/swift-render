@@ -10,12 +10,17 @@ import SwiftRenderKit
 // it meets reports the clips it places. Collection never changes a pixel, and
 // with no probe running each hook is one task-local read that returns nil.
 
+/// What a probe found in a scene: its clips and the knobs it reads.
 public struct SceneStructure: Sendable, Equatable {
+    /// Clips placed by the scene's Timelines, with their source locations.
     public var clips: [ClipInfo]
+    /// Knobs the scene declared while being probed.
     public var knobs: [KnobInfo]
+    /// Creates a structure from clips and knobs (both empty by default).
     public init(clips: [ClipInfo] = [], knobs: [KnobInfo] = []) { self.clips = clips; self.knobs = knobs }
 }
 
+/// Evaluates a scene off-screen to discover its structure (see `probe`).
 @MainActor
 public enum SceneProbe {
     /// Most probe renders per call. Each is ~0.5–1.5 ms at 16 px wide.

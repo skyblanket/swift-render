@@ -24,8 +24,10 @@ public enum AssetPaths {
         .deletingLastPathComponent()   // Sources
         .deletingLastPathComponent()   // root
 
+    /// Extra directories searched after the defaults, in order.
     nonisolated(unsafe) public static var extraSearchPaths: [URL] = []
 
+    /// The directories relative paths are tried against, in search order.
     public static var searchPaths: [URL] {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         return [cwd, cwd.appendingPathComponent("assets"),

@@ -14,24 +14,32 @@ import SwiftUI
 /// number of bars at 90/100/120 BPM, so every cut lands on a frame and a beat.
 /// Works at 16:9, 9:16 and 1:1 (square canvases stack like vertical ones).
 public struct AppleLaunch: PropsScene {
+    /// The scene is configured by `LaunchProps`.
     public typealias Props = LaunchProps
+    /// The length of the film for the sample props.
     public static let defaultDuration: Double = LaunchPlan(.sample).duration
+    /// The film applies its own lighter finish (`launchPostFX`), so the house PostFX pass is skipped.
     public static var ownsPostFX: Bool { true }
+    /// The built-in sample props.
     public static var defaultProps: LaunchProps { .sample }
 
+    /// The film's length for `props`: the planned shots, a whole number of bars.
     public static func duration(for props: LaunchProps) -> Double {
         LaunchPlan(props.validated().props).duration
     }
 
+    /// The score for the sample props.
     public static func soundtrack(duration: Double) -> Score? {
         soundtrack(duration: duration, props: .sample)
     }
 
+    /// The score for `props`, timed to the same plan as the picture.
     public static func soundtrack(duration: Double, props: LaunchProps) -> Score? {
         let p = props.validated().props
         return LaunchScore.make(LaunchPlan(p), p, duration: duration)
     }
 
+    /// The film at time `t`, with `props` validated first.
     @MainActor public static func body(at t: Double, duration: Double, props: LaunchProps) -> some View {
         AppleLaunchFilm(t: t, duration: duration, props: props.validated().props)
     }
@@ -44,10 +52,12 @@ public struct AppleLaunchFilm: View {
     let props: LaunchProps
     let plan: LaunchPlan
 
+    /// `props` should already be validated; the shot plan is built from them.
     public init(t: Double, duration: Double, props: LaunchProps) {
         self.t = t; self.duration = duration; self.props = props; self.plan = LaunchPlan(props)
     }
 
+    /// Stage, shots cut on the plan's frames, fade in and out, theme and LaunchKit finish.
     public var body: some View {
         let theme = LaunchTheme(props: props)
         let fadeIn = Ease.easeInOut(Ease.clip(t, 0, 1.6))
@@ -94,10 +104,12 @@ public struct AppleLaunchShot: View {
     @Environment(\.renderContext) private var ctx
     @Environment(\.launchTheme) private var theme
 
+    /// Shot `kind` at local time `l` of a shot `length` seconds long.
     public init(_ kind: LaunchShot.Kind, at l: Double, length: Double, props: LaunchProps, plan: LaunchPlan) {
         self.kind = kind; self.l = l; self.length = length; self.props = props; self.plan = plan
     }
 
+    /// The shot's content at canvas size, under a slow push-in.
     public var body: some View {
         let L = LaunchLayout(ctx)
         content(L)

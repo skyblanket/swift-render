@@ -25,6 +25,7 @@ public enum AspectPreset: String, CaseIterable {
     case vertical9x16 = "9:16"
     case square1x1 = "1:1"
 
+    /// Canvas size in points for this preset (1920×1080, 1080×1920 or 1080×1080).
     public var size: CGSize {
         switch self {
         case .landscape16x9: return CGSize(width: 1920, height: 1080)

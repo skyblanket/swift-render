@@ -62,7 +62,7 @@ Full tool table: [docs/agents.md](docs/agents.md).
 
 ```bash
 swift build                     # ≈20 s clean, ≈1 s incremental
-swift test                      # ~340 tests; must stay green
+swift test                      # ~420 tests; must stay green
 swift run swift-render smoke    # one frame of every scene + house-rule audio check (CI)
 python3 scripts/host-smoke.py   # render-host protocol
 python3 scripts/mcp-smoke.py    # MCP server (add --full for the review loop and creation tools)
@@ -73,11 +73,12 @@ python3 scripts/mcp-smoke.py    # MCP server (add --full for the review loop and
 | `Sources/SwiftRender/` | Engine: scene protocols, Timeline, Score/synth, Recorder, Knobs, introspection, LaunchKit + `AppleLaunch` |
 | `Sources/SwiftRenderScenes/` | Demo films (where `swift-render new` puts scenes in this repo) |
 | `Sources/SwiftRenderTool/` | The whole CLI as a library (`SwiftRenderCommand.main(scenes:)`), incl. `serve`, `launch`, `review` |
+| `Sources/SwiftRenderCLI/` | This repo's `swift-render` executable: one line plus the generated scene registry |
 | `Sources/SwiftRenderKit/` | Foundation-only shared model: project layout, review comments, host protocol, builds |
 | `Sources/SwiftRenderStudio/` | The native editor (talks to `serve`; never links scene code) |
 | `Sources/SwiftRenderMCP/` | The MCP server |
 | `Plugins/` | Metal compiler + scene registry build plugins |
-| `.swift-render/` | Per-project state: `reviews/` (commit), `knobs/` (commit), `attachments/`, `cache/` (ignored) |
+| `.swift-render/` | Per-project state: `reviews/` (commit), `knobs/` (commit), `props/`, `launch/`, `attachments/`, `cache/` (ignored) |
 
 Conventions: Swift tools 5.10 (Swift 5 mode), macOS 14, **zero third-party dependencies**, doc comments on
 public API, terse "why" comments, tests next to every behavior change. Keep `README.md`, `CHANGELOG.md` and the
@@ -85,9 +86,13 @@ relevant `docs/*.md` in sync with user-visible changes.
 
 ## Deeper docs
 
+- [docs/README.md](docs/README.md) — the index of every guide
+- [docs/architecture.md](docs/architecture.md) — targets, processes, data on disk, hot reload, the review loop
+- [docs/cli.md](docs/cli.md) — every CLI subcommand and option
 - [docs/ai-quickstart.md](docs/ai-quickstart.md) — the full scene API in one page (Timeline, easing, springs, Score, knobs, LaunchKit, media, captions, shaders, gotchas)
 - [docs/agents.md](docs/agents.md) — MCP install/config for every client, tool list, CLI-only alternative
 - [docs/launch.md](docs/launch.md) — `launch`, `init`, LaunchKit components, what the scanner reads
 - [docs/review-loop.md](docs/review-loop.md) — comments, the director agent, the Claude Code plugin
-- [docs/studio.md](docs/studio.md) — the editor, its snapshot options for CI
+- [docs/studio.md](docs/studio.md) — the editor, its keys and menus, its snapshot options for CI
+- [docs/3d.md](docs/3d.md) — `Scene3D`
 - [ROADMAP.md](ROADMAP.md)

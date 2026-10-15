@@ -13,6 +13,7 @@ import SwiftUI
 /// The palette is ordered dark → light. Scenes using this should set
 /// `ownsPostFX = true` (film grain on top of a dither reads as noise).
 public enum Dither {
+    /// 8×8 Bayer threshold matrix, row-major, values in 0…1.
     public static let bayer8: [Float] = (0..<64).map { i in
         let x = i % 8, y = i / 8, xc = x ^ y
         let v = ((y & 1) << 5) | ((xc & 1) << 4) | ((y & 2) << 2) | ((xc & 2) << 1)
@@ -20,12 +21,15 @@ public enum Dither {
         return (Float(v) + 0.5) / 64
     }
 
+    /// Two-tone charcoal and cream palette.
     public static let noir: [Color] = [Color(red: 0.10, green: 0.10, blue: 0.11), Color(red: 0.94, green: 0.90, blue: 0.80)]
+    /// Four-tone green Game Boy palette, dark to light.
     public static let gameBoy: [Color] = [
         Color(red: 0.06, green: 0.22, blue: 0.06), Color(red: 0.19, green: 0.38, blue: 0.19),
         Color(red: 0.55, green: 0.67, blue: 0.06), Color(red: 0.61, green: 0.74, blue: 0.06),
     ]
 
+    /// Renders `content` at `size`, dithers it to `palette` with `cell`-pixel dots and returns the result; black if rendering fails.
     @MainActor
     public static func render<V: View>(_ content: V, size: CGSize, cell: Int = 3, palette: [Color] = noir,
                                        contrast: Float = 1.0, bias: Float = 0.0) -> AnyView {

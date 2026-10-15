@@ -1,11 +1,13 @@
 import AVFoundation
 import Accelerate
 
+/// Errors thrown while decoding or analyzing an audio file.
 public enum AudioAnalyzerError: Error, CustomStringConvertible {
     case unreadable(URL, String)
     case empty(URL)
     case fftSetupFailed
 
+    /// Human-readable error message.
     public var description: String {
         switch self {
         case .unreadable(let u, let why): return "cannot read audio \(u.path): \(why)"

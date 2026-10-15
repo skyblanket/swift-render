@@ -8,22 +8,34 @@
 //
 import Foundation
 
+/// One spoken word with its estimated start and end time.
 public struct CaptionWord: Sendable, Hashable {
+    /// The word as written.
     public let text: String
+    /// Start time in seconds.
     public let start: Double
+    /// End time in seconds.
     public let end: Double
 }
 
+/// One caption: a run of words shown on screen together.
 public struct CaptionCue: Sendable, Hashable {
+    /// Start time in seconds.
     public let start: Double
+    /// End time of the last word in seconds.
     public let end: Double
+    /// The words in this cue, in order.
     public let words: [CaptionWord]
+    /// The cue's words joined with spaces.
     public var text: String { words.map(\.text).joined(separator: " ") }
 }
 
+/// A list of caption cues, sorted by start time.
 public struct CaptionTrack: Sendable {
+    /// Cues in start-time order.
     public var cues: [CaptionCue]
 
+    /// Creates a track from `cues`, sorting them by start time.
     public init(cues: [CaptionCue]) { self.cues = cues.sorted { $0.start < $1.start } }
 
     /// Captions for every `speak(...)` event in `score`.
@@ -103,12 +115,14 @@ public struct CaptionTrack: Sendable {
         return max(cues[i].end, min(cues[i].end + hold, next))
     }
 
+    /// The cues as SubRip (.srt) text.
     public func srt() -> String {
         cues.indices.map { i in
             "\(i + 1)\n\(Self.stamp(cues[i].start, ",")) --> \(Self.stamp(displayEnd(i), ","))\n\(cues[i].text)\n"
         }.joined(separator: "\n")
     }
 
+    /// The cues as WebVTT (.vtt) text.
     public func vtt() -> String {
         "WEBVTT\n\n" + cues.indices.map { i in
             "\(Self.stamp(cues[i].start, ".")) --> \(Self.stamp(displayEnd(i), "."))\n\(cues[i].text)\n"

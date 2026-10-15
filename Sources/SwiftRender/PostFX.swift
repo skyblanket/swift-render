@@ -10,11 +10,13 @@ public struct PostFX: ViewModifier {
     var vignetteAmount: Double = 0.40
     var enabled: Bool = true
 
+    /// `time` drives the grain animation; `enabled: false` passes content through untouched.
     public init(time: Double, grainAmount: Double = 0.10, vignetteAmount: Double = 0.40, enabled: Bool = true) {
         self.time = time; self.grainAmount = grainAmount
         self.vignetteAmount = vignetteAmount; self.enabled = enabled
     }
 
+    /// Puts an opaque black base under the content and the vignette and grain over it.
     public func body(content: Content) -> some View {
         ZStack {
             // Opaque base: scenes that fade by lowering their own opacity would

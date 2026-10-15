@@ -2,7 +2,7 @@
 """Synthesize the beat track for the JustRenderIt scene.
 
 Every hit time below mirrors a timeline anchor in
-Sources/SwiftRender/Scenes/JustRenderIt.swift — keep them in sync.
+Sources/SwiftRenderScenes/JustRenderIt.swift — keep them in sync.
 
 Usage: python3 tools/make_jri_audio.py out/jri.wav
 """
