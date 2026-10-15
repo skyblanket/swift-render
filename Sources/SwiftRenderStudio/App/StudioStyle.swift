@@ -356,11 +356,17 @@ extension View {
     @ViewBuilder
     func studioGlass(cornerRadius: CGFloat = StudioStyle.Radius.large) -> some View {
         // Snapshots can't capture glass (its content lives in a portal layer): use material there.
+        // `glassEffect` is only in the macOS 26 SDK (Swift 6.2+); older toolchains, like CI's
+        // macos-15 image, never see it.
+        #if compiler(>=6.2)
         if #available(macOS 26, *), !StudioStyle.isSnapshot {
             self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
             self.background(.regularMaterial, in: StudioStyle.rounded(cornerRadius))
         }
+        #else
+        self.background(.regularMaterial, in: StudioStyle.rounded(cornerRadius))
+        #endif
     }
 
     /// Studio's text field look: plain field, soft 8 pt corners, a hairline that turns
