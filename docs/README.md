@@ -5,6 +5,7 @@ Start with the [project README](../README.md) for positioning, setup, and a firs
 | Guide | Use it for |
 | --- | --- |
 | [Features](features.md) | Timelines, springs, native scoring, shaders, looks, media, and Vision examples |
+| [3D](3d.md) | `Scene3D`: SceneKit models, PBR materials, SwiftUI textures, lights, cameras, determinism, and performance |
 | [CLI reference](cli.md) | Preview, checks, frame/contact exports, parallel rendering, and captions |
 | [Launch films](launch.md) | `launch`, `init`, LaunchKit components, what the scanner reads |
 | [Studio](studio.md) | The native editor, its keys, menus and snapshot options |

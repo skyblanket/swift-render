@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **True 3D: `Scene3D`** (`Sources/SwiftRender/ThreeD/`). A SceneKit scene rendered offscreen with
+  `SCNRenderer` at the frame's real pixel size (layout × display scale) and returned as an image.
+  It composites with SwiftUI, shaders and PostFX. You describe the scene from `t` with a small
+  value API, and every property is set every frame:
+  - Primitives: `Box3D`, `Sphere3D`, `Plane3D`, `Cylinder3D`, `Cone3D`, `Torus3D`, `Capsule3D`,
+    extruded `Text3D`, the rounded device `Slab3D` (with a `screen:` panel), `Floor3D` and
+    `Group3D`.
+  - `Model3D` loads USDZ, OBJ, SCN and DAE through `AssetPaths` from cached templates, with
+    `fit:`/`anchor:`. Named parts are posed with `.part("Arm") { … }`.
+  - PBR `Material3D` with presets, normal and AO maps, clear coat, and `Texture3D.view { }`, which
+    textures a surface with any SwiftUI view rendered at `t`.
+  - `Light3D` directional, spot, omni, area, ambient and `studioRig`, with soft shadows. A
+    procedural HDR studio environment by default, or `.file("x.exr")`.
+  - Backgrounds: `.color`, a SwiftUI `.view` drawn inside the 3D frame (so DOF and shadow
+    catchers work), `.transparent` and `.environment`.
+  - `Camera3D` with FOV, depth of field, `orbit`, `lerp`, `dolly`, `spring` and `dollied`.
+    `Motion3D.turntable`/`easedTurntable`/`oscillate`/`hover`.
+  - `Fog3D` and `Effects3D` (HDR, exposure, bloom, SSAO, vignette).
+  - SceneKit's clock is never used: the scene is paused, there's no jitter or TAA, exposure
+    adaptation and motion blur are off, and embedded model animations are removed.
+  - The same `t` gives bit-identical pixels, independent of render history and across processes.
+    A scene re-created in the same process stays within PSNR ≥ 45 dB (SceneKit re-seeds its
+    sampling noise). See [docs/3d.md](docs/3d.md).
+- **`Showcase3D` demo**: a titanium device with a live SwiftUI screen, studio light, an eased turn
+  and dolly, depth of field, a soft floor shadow and a score. The 3D layer costs ≈18–19 ms/frame at
+  1080p (release). `SR_3D_STATS=1` prints the Scene3D cost.
+
 ## 0.10.0 — 2026-10-06
 
 "Studio preview". This release makes swift-render a way to make Apple-style launch films for Swift

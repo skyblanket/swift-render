@@ -478,6 +478,41 @@ stitched without re-encoding, frame-exact. Use it for anything over ~20 s.
 more and a 10th percentile above +6 dB. When it warns, it lists the buried spans — lower the
 pads/arps/kicks/samples that overlap those seconds, or raise `speak(…, amp:)`.
 
+## True 3D (`Scene3D`)
+
+SceneKit is rendered offscreen at the frame's pixel size and returned as an image, so it
+composites like any view. Describe the scene for this `t`. The engine sets every property each
+frame, so nothing leaks between frames. Units are metres. Full guide: [3d.md](3d.md).
+
+```swift
+let center: Vec3 = [0, 0.08, 0]
+let cam = Camera3D.dolly(t, from: .orbit(target: center, distance: 0.7, azimuth: -20, elevation: 14, fov: 24),
+                         to: .orbit(target: center, distance: 0.5, azimuth: 4, elevation: 10, fov: 24),
+                         start: 0, end: duration).focused(on: center, fStop: 2.8)
+Scene3D(camera: cam, environment: .studio, background: .view { Backdrop() }, effects: .cinematic) {
+    Slab3D(width: 0.0716, height: 0.1476, depth: 0.0078, cornerRadius: 0.0112,
+           screen: .screen(.view(width: 390, height: 844) { AppScreen(t: t) }))   // any SwiftUI view, live
+        .material(.metal(Color(white: 0.6), roughness: 0.34))
+        .rotation(y: Motion3D.easedTurntable(t, degreesPerSecond: 12)).position(center)
+    Model3D("models/robot.usdz", fit: .height(0.3), anchor: .bottom)              // USDZ/OBJ/SCN via AssetPaths
+        .part("Head") { $0.rotated(Motion3D.oscillate(t, degrees: 15), axis: [0, 1, 0]) }
+        .position(0.2, 0, 0)
+    Text3D("Hello", size: 0.04, depth: 0.008).material(.plastic(.orange))
+    Floor3D(material: .shadowCatcher())
+    Light3D.directional(intensity: 900, from: [-0.1, 1, -0.2], at: center, shadow: .soft(extent: 0.25))
+}
+```
+
+- Primitives: `Box3D` `Sphere3D` `Plane3D` `Cylinder3D` `Cone3D` `Torus3D` `Capsule3D` `Slab3D` `Text3D` `Floor3D` `Group3D`.
+  Modifiers: `.position` `.rotation(x:y:z:)` (degrees) `.rotated(_:axis:)` `.look(at:)` `.scale` `.material` `.opacity` `.hidden` `.part`.
+- Materials: `.plastic` `.matte` `.metal` `.glass` `.emissive(_, intensity:)` `.unlit(tex)` `.screen(tex)` `.shadowCatcher()`.
+  Textures are `.color`, `.image(path)` or `.view(width:height:) { … }`.
+- Lights: `Light3D.directional/spot/omni/area/ambient`, `Light3D.studioRig(target:size:)`. `environment: .studio`, `.file("x.exr")` or `.none`.
+- Background: `.color`, `.view { }` (needed when the camera uses depth of field), `.transparent` (composite over SwiftUI) or `.environment`.
+- Give each `Scene3D` visible at the same time from one call site its own `id:`. `SR_3D_STATS=1` prints ms/render.
+- Same `t` gives the same pixels, independent of history. Embedded model animations don't play;
+  pose `.part`s from `t`.
+
 ## Vision (live action)
 
 ```swift

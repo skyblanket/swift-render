@@ -341,12 +341,15 @@ struct LoudnessSparkline: View {
             let n = Int(size.width.rounded())
             var area = Path()
             area.move(to: CGPoint(x: 0, y: size.height))
+            let width = Double(max(1, n)), last = Double(levels.count - 1)
             for x in 0...max(1, n) {
                 // Max over the samples under this pixel, so short hits stay visible.
-                let a = Int(Double(x) / Double(max(1, n)) * Double(levels.count - 1))
-                let b = min(levels.count - 1, Int(Double(x + 1) / Double(max(1, n)) * Double(levels.count - 1)))
-                let v = CGFloat(levels[a...max(a, b)].max() ?? 0) / peak
-                area.addLine(to: CGPoint(x: CGFloat(x), y: size.height - v * (size.height - 2)))
+                let a = Int(Double(x) / width * last)
+                let b = min(levels.count - 1, Int(Double(x + 1) / width * last))
+                let level: Float = levels[a...max(a, b)].max() ?? 0
+                let v = CGFloat(level) / peak
+                let y: CGFloat = size.height - v * (size.height - 2)
+                area.addLine(to: CGPoint(x: CGFloat(x), y: y))
             }
             area.addLine(to: CGPoint(x: size.width, y: size.height))
             area.closeSubpath()

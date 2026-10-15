@@ -72,14 +72,21 @@ struct WaveformMips: Sendable {
         while level + 1 < levels.count, pow(4, Double(level + 1)) <= basePerOut { level += 1 }
         let lv = levels[level]
         let secondsPer = secondsPerBase * pow(4, Double(level))
-        return (0..<buckets).map { b in
-            let a = Int(((from + Double(b) * (to - from) / Double(buckets)) / secondsPer).rounded(.down))
-            let z = max(a + 1, Int(((from + Double(b + 1) * (to - from) / Double(buckets)) / secondsPer).rounded(.up)))
+        let span = (to - from) / Double(buckets)
+        var out: [(min: Float, max: Float)] = []
+        out.reserveCapacity(buckets)
+        for b in 0..<buckets {
+            // Split up so Swift 6.1 type-checks it in time.
+            let start: Double = (from + Double(b) * span) / secondsPer
+            let end: Double = (from + Double(b + 1) * span) / secondsPer
+            let a = Int(start.rounded(.down))
+            let z = max(a + 1, Int(end.rounded(.up)))
             let lo = max(0, a), hi = min(lv.count, z)
-            guard lo < hi else { return (0, 0) }
+            guard lo < hi else { out.append((min: 0, max: 0)); continue }
             var mn: Float = 0, mx: Float = 0
             for i in lo..<hi { mn = min(mn, lv[i].min); mx = max(mx, lv[i].max) }
-            return (mn, mx)
+            out.append((min: mn, max: mx))
         }
+        return out
     }
 }
