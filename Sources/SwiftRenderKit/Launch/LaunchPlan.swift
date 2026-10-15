@@ -9,6 +9,7 @@ import Foundation
 
 /// One shot of the film.
 public struct LaunchShot: Codable, Sendable, Equatable, Identifiable {
+    /// The kinds of shot a launch film can contain.
     public enum Kind: String, Codable, Sendable, CaseIterable {
         /// Stage light comes up; "Introducing".
         case open
@@ -35,24 +36,35 @@ public struct LaunchShot: Codable, Sendable, Equatable, Identifiable {
         /// Lockup, call to action, URL.
         case end
     }
+    /// Shot id (the kind's raw value), matched by `ShotOverride.id`.
     public var id: String
+    /// What the shot shows.
     public var kind: Kind
+    /// Length in bars.
     public var bars: Double
+    /// Creates a shot of `kind` lasting `bars`.
     public init(_ kind: Kind, bars: Double) { self.id = kind.rawValue; self.kind = kind; self.bars = bars }
 }
 
+/// The launch film's shot list and timing, computed from props.
 public struct LaunchPlan: Sendable, Equatable {
+    /// Tempo in beats per minute (always 90, 100 or 120).
     public let bpm: Double
+    /// Length of one beat, in seconds.
     public let beat: Double
+    /// Length of one 4-beat bar, in seconds.
     public let bar: Double
+    /// Shots in order, after overrides.
     public let shots: [LaunchShot]
     /// Start time of each shot (seconds).
     public let starts: [Double]
+    /// Total film length in seconds, snapped to the 60 fps grid.
     public let duration: Double
 
     /// Hard-cut times (every shot start after the first).
     public var cuts: [Double] { Array(starts.dropFirst()) }
 
+    /// Plans the film for `props`, applying its shot overrides.
     public init(_ props: LaunchProps) {
         bpm = Self.frameExactBPM(props.music.bpm)
         beat = 60 / bpm
@@ -113,10 +125,12 @@ public struct LaunchPlan: Sendable, Equatable {
         [90.0, 100.0, 120.0].min { abs($0 - bpm) < abs($1 - bpm) } ?? 100
     }
 
+    /// Start time (seconds) of the first shot of `kind`, or nil if the film has none.
     public func start(_ kind: LaunchShot.Kind) -> Double? {
         shots.firstIndex { $0.kind == kind }.map { starts[$0] }
     }
 
+    /// Index of the first shot of `kind`, or nil.
     public func index(of kind: LaunchShot.Kind) -> Int? { shots.firstIndex { $0.kind == kind } }
 
     /// Seconds a shot lasts.
@@ -145,15 +159,20 @@ public enum LaunchTerminal {
     /// How long the finished session stays on screen before the cut.
     public static let hold = 1.2
 
+    /// How a terminal line is styled: typed command, output, ✓ success, ✗ failure or # comment.
     public enum Kind: Sendable, Equatable { case command, output, success, failure, comment }
 
+    /// One scheduled line of the terminal session.
     public struct Line: Sendable, Equatable {
+        /// Line text, without the "$ " prompt for commands.
         public var text: String
+        /// How the line is styled.
         public var kind: Kind
         /// Seconds into the shot.
         public var at: Double
     }
 
+    /// Times each transcript line: commands type at `cps`, other lines print shortly after.
     public static func schedule(_ transcript: [String], start: Double = start, cps: Double = cps) -> [Line] {
         var t = start, out: [Line] = []
         for raw in transcript {

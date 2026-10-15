@@ -28,30 +28,39 @@ public struct Node3D: Object3D {
         case light(Light3D)
     }
 
+    /// What the node draws.
     public var kind: Kind
     /// Optional name (shows up in SceneKit's graph; handy for debugging).
     public var name: String?
+    /// Position in the parent's space.
     public var position: Vec3 = .zero
     /// Orientation. Compose with ``rotation(x:y:z:)``, ``rotated(_:axis:)`` and ``look(at:up:)``.
     public var orientation: simd_quatd = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+    /// Per-axis scale.
     public var scale: Vec3 = [1, 1, 1]
     /// Materials for geometry nodes (one per geometry element; the last one repeats).
     /// For models, a non-empty list replaces every material of the model.
     public var materials: [Material3D] = []
+    /// Child nodes, which move with this one.
     public var children: [Node3D] = []
+    /// Whether this node casts shadows.
     public var castsShadow: Bool = true
+    /// Node opacity, 0 to 1.
     public var opacity: Double = 1
+    /// Hides the node and its children.
     public var isHidden: Bool = false
     /// Higher draws later (useful for transparent overlays).
     public var renderingOrder: Int = 0
     /// Per-part overrides for loaded models (see ``Object3D/part(_:_:)``).
     public var parts: [Part3D] = []
 
+    /// Creates a node of the given kind with optional children.
     public init(_ kind: Kind, children: [Node3D] = []) {
         self.kind = kind
         self.children = children
     }
 
+    /// The node itself (`Object3D` conformance).
     public var node: Node3D { self }
 }
 
@@ -138,19 +147,29 @@ public enum Rotation3D {
 /// Builds a list of ``Node3D`` from primitives, `if`, `switch` and `for`.
 @resultBuilder
 public enum Scene3DBuilder {
+    /// Wraps a single primitive or node.
     public static func buildExpression(_ o: some Object3D) -> [Node3D] { [o.node] }
+    /// Passes an array of nodes through (e.g. `Light3D.studioRig`).
     public static func buildExpression(_ nodes: [Node3D]) -> [Node3D] { nodes }
+    /// Concatenates the statements of a block.
     public static func buildBlock(_ parts: [Node3D]...) -> [Node3D] { parts.flatMap { $0 } }
+    /// Handles `if` without `else`.
     public static func buildOptional(_ part: [Node3D]?) -> [Node3D] { part ?? [] }
+    /// Handles the first branch of `if`/`else` or `switch`.
     public static func buildEither(first: [Node3D]) -> [Node3D] { first }
+    /// Handles the second branch of `if`/`else` or `switch`.
     public static func buildEither(second: [Node3D]) -> [Node3D] { second }
+    /// Concatenates the results of a `for` loop.
     public static func buildArray(_ parts: [[Node3D]]) -> [Node3D] { parts.flatMap { $0 } }
+    /// Handles `if #available` blocks.
     public static func buildLimitedAvailability(_ part: [Node3D]) -> [Node3D] { part }
 }
 
 /// A transform-only parent for other nodes.
 public struct Group3D: Object3D {
+    /// The group node.
     public let node: Node3D
+    /// Creates a group whose children come from the builder.
     public init(@Scene3DBuilder _ content: () -> [Node3D]) {
         node = Node3D(.group, children: content())
     }
@@ -175,15 +194,21 @@ public enum Geometry3D: Hashable {
 
 /// A box, optionally with rounded (chamfered) edges. Elements: front, right, back, left, top, bottom.
 public struct Box3D: Object3D {
+    /// The box node.
     public let node: Node3D
+    /// Creates a box; `length` is the Z extent and `chamfer` rounds the edges.
     public init(width: Double = 1, height: Double = 1, length: Double = 1, chamfer: Double = 0) {
         node = Node3D(.geometry(.box(width: width, height: height, length: length, chamfer: chamfer)))
     }
+    /// Creates a cube with side `size`.
     public init(size: Double, chamfer: Double = 0) { self.init(width: size, height: size, length: size, chamfer: chamfer) }
 }
 
+/// A sphere centred on the origin.
 public struct Sphere3D: Object3D {
+    /// The sphere node.
     public let node: Node3D
+    /// Creates a sphere; `segments` sets its tessellation.
     public init(radius: Double = 0.5, segments: Int = 96) {
         node = Node3D(.geometry(.sphere(radius: radius, segments: segments)))
     }
@@ -191,7 +216,9 @@ public struct Sphere3D: Object3D {
 
 /// A plane in the XY plane facing +Z, optionally with rounded corners.
 public struct Plane3D: Object3D {
+    /// The plane node.
     public let node: Node3D
+    /// Creates a plane of the given size and corner radius.
     public init(width: Double = 1, height: Double = 1, cornerRadius: Double = 0) {
         node = Node3D(.geometry(.plane(width: width, height: height, cornerRadius: cornerRadius)))
     }
@@ -199,28 +226,39 @@ public struct Plane3D: Object3D {
 
 /// A cylinder along Y. Elements: side, top, bottom.
 public struct Cylinder3D: Object3D {
+    /// The cylinder node.
     public let node: Node3D
+    /// Creates a cylinder of the given radius and height.
     public init(radius: Double = 0.5, height: Double = 1) {
         node = Node3D(.geometry(.cylinder(radius: radius, height: height)))
     }
 }
 
+/// A cone or truncated cone along Y; a `topRadius` of 0 gives a point.
 public struct Cone3D: Object3D {
+    /// The cone node.
     public let node: Node3D
+    /// Creates a cone from its top radius, bottom radius and height.
     public init(topRadius: Double = 0, bottomRadius: Double = 0.5, height: Double = 1) {
         node = Node3D(.geometry(.cone(topRadius: topRadius, bottomRadius: bottomRadius, height: height)))
     }
 }
 
+/// A torus (ring) lying in the XZ plane.
 public struct Torus3D: Object3D {
+    /// The torus node.
     public let node: Node3D
+    /// Creates a torus; `ringRadius` is the ring size and `pipeRadius` its thickness.
     public init(ringRadius: Double = 0.5, pipeRadius: Double = 0.15) {
         node = Node3D(.geometry(.torus(ringRadius: ringRadius, pipeRadius: pipeRadius)))
     }
 }
 
+/// A capsule (a cylinder with hemispherical caps) along Y.
 public struct Capsule3D: Object3D {
+    /// The capsule node.
     public let node: Node3D
+    /// Creates a capsule; `height` is the total height including the caps.
     public init(radius: Double = 0.25, height: Double = 1) {
         node = Node3D(.geometry(.capsule(radius: radius, height: height)))
     }
@@ -233,7 +271,9 @@ public struct Capsule3D: Object3D {
 /// Pass `screen:` to put a material (usually a ``Texture3D/view(width:height:scale:content:)``)
 /// on an inset rounded panel just in front of the front face — a device in two lines.
 public struct Slab3D: Object3D {
+    /// The slab node (with the screen panel as a child when `screen` is set).
     public let node: Node3D
+    /// Creates a slab; `screenInset` defaults to 4.5% of the shorter side.
     public init(width: Double, height: Double, depth: Double, cornerRadius: Double,
                 edgeRadius: Double? = nil, screen: Material3D? = nil, screenInset: Double? = nil) {
         let edge = min(edgeRadius ?? depth * 0.45, depth * 0.49, cornerRadius * 0.99)
@@ -254,7 +294,9 @@ public struct Slab3D: Object3D {
 /// scene units; `font` is a PostScript or family name (system font when nil).
 /// Elements: front, back, sides, chamfer front, chamfer back.
 public struct Text3D: Object3D {
+    /// The text node.
     public let node: Node3D
+    /// Creates extruded text; `weight` applies when `font` is nil (the system font).
     public init(_ string: String, size: Double = 0.2, depth: Double = 0.04, font: String? = nil,
                 weight: Font.Weight = .bold, chamfer: Double = 0) {
         node = Node3D(.geometry(.text(string, font: font, weight: Self.weightValue(weight),
@@ -280,7 +322,9 @@ public struct Text3D: Object3D {
 /// An infinite floor at y = 0 (move it with `.position`). Use ``Material3D/shadowCatcher(opacity:)``
 /// to keep only the shadows — the way to composite a product onto any background.
 public struct Floor3D: Object3D {
+    /// The floor node.
     public let node: Node3D
+    /// Creates a floor; `reflectivity` mirrors the scene and `falloff` is the distance over which the reflection fades.
     public init(reflectivity: Double = 0, falloff: Double = 0.5, material: Material3D = .matte(Color(white: 0.06))) {
         var n = Node3D(.geometry(.floor(reflectivity: reflectivity, falloff: falloff)))
         n.materials = [material]
@@ -292,8 +336,11 @@ public struct Floor3D: Object3D {
 
 /// A loaded model reference. Equal references share one cached template.
 public struct ModelRef: Hashable {
+    /// Model file path, resolved through ``AssetPaths``.
     public var path: String
+    /// Size normalisation applied on load (nil = the file's own units).
     public var fit: Fit3D?
+    /// Where the model's origin goes.
     public var anchor: Anchor3D
 }
 
@@ -327,7 +374,9 @@ public enum Anchor3D: Hashable {
 /// Embedded animations are not played (they would run on SceneKit's clock); pose
 /// parts from `t` with ``Object3D/part(_:_:)`` instead.
 public struct Model3D: Object3D {
+    /// The model node.
     public var node: Node3D
+    /// Loads the model at `path`, optionally fitted to a size and re-anchored.
     public init(_ path: String, fit: Fit3D? = nil, anchor: Anchor3D = .original) {
         node = Node3D(.model(ModelRef(path: path, fit: fit, anchor: fit == nil && anchor == .original ? .original : anchor)))
     }
@@ -347,14 +396,22 @@ public extension Object3D {
 
 /// An override for one named node of a ``Model3D``, relative to its rest pose.
 public struct Part3D {
+    /// Name of the node to adjust inside the model.
     public let name: String
+    /// Translation added to the rest position, in the parent's space.
     public var offset: Vec3 = .zero
+    /// Rotation applied on top of the rest orientation.
     public var rotation: simd_quatd = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+    /// Scale multiplied with the rest scale.
     public var scale: Vec3 = [1, 1, 1]
+    /// Visibility override (nil = keep the file's setting).
     public var isHidden: Bool?
+    /// Opacity override (nil = keep the file's setting).
     public var opacity: Double?
+    /// Material that replaces every material on the part's geometry (nil = keep).
     public var material: Material3D?
 
+    /// Creates an override for the named part with no changes.
     public init(name: String) { self.name = name }
 
     /// Moves the part by `d` (in its parent's space).
@@ -365,8 +422,11 @@ public struct Part3D {
         p.rotation = simd_normalize(simd_quatd(angle: degrees * .pi / 180, axis: simd_normalize(axis)) * p.rotation)
         return p
     }
+    /// Multiplies the part's scale by `s`.
     public func scaled(_ s: Double) -> Part3D { var p = self; p.scale *= s; return p }
+    /// Hides (or shows) the part.
     public func hidden(_ h: Bool = true) -> Part3D { var p = self; p.isHidden = h; return p }
+    /// Sets the part's opacity.
     public func opacity(_ o: Double) -> Part3D { var p = self; p.opacity = o; return p }
     /// Replaces every material on this part's geometry.
     public func material(_ m: Material3D) -> Part3D { var p = self; p.material = m; return p }

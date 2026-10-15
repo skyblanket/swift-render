@@ -5,8 +5,11 @@ import SwiftUI
 // `duration` seconds before the outgoing clip ends; during that overlap the
 // outgoing view gets phase `.out` and the incoming view gets phase `.in`,
 // each with progress p going 0 → 1. Pure, deterministic, no state.
+/// A cross-transition between two sequential clips (see the notes above).
 public struct Transition {
+    /// Which side of a transition a view is on: `.in` for the incoming clip, `.out` for the outgoing one.
     public enum Phase { case `in`, out }
+    /// Overlap length in seconds; 0 means a hard cut.
     public var duration: Double
     /// What editors and `info` show: "cut", "fade", "slide", "flash", "overlap",
     /// or a custom transition's name. Never affects pixels.
@@ -20,6 +23,7 @@ public struct Transition {
         self.name = name; self.duration = duration; self.apply = apply
     }
 
+    /// Hard cut with no overlap.
     public static let cut = Transition("cut", duration: 0) { v, _, _ in v }
 
     /// Hold both clips on screen for `d` seconds with no visual blend.
@@ -27,6 +31,7 @@ public struct Transition {
         Transition("overlap", duration: d) { v, _, _ in v }
     }
 
+    /// Cross-fade over `d` seconds: incoming fades in while outgoing fades out.
     public static func fade(_ d: Double = 0.35) -> Transition {
         Transition("fade", duration: d) { v, p, phase in
             AnyView(v.opacity(phase == .in ? Ease.easeInOut(p) : 1 - Ease.easeInOut(p)))
@@ -59,6 +64,7 @@ public struct Transition {
 // previous sequential clip ended, minus their transition's overlap. Clips
 // pinned with `at:` float free (overlays, HUDs) and don't move the cursor.
 // Content is a pure function of *local* time, 0 ..< duration.
+/// One span on a `Timeline` (see the notes above).
 public struct Clip {
     var duration: Double
     var pinnedStart: Double?
@@ -71,6 +77,7 @@ public struct Clip {
     let file: String
     let line: Int
 
+    /// A sequential clip lasting `duration` seconds; `content` receives local time.
     public init<V: View>(_ duration: Double, file: String = #filePath, line: Int = #line,
                          @ViewBuilder _ content: @escaping (Double) -> V) {
         self.duration = duration
@@ -79,6 +86,7 @@ public struct Clip {
         self.line = line
     }
 
+    /// A clip pinned at `start` for `duration` seconds; it does not move the sequential cursor.
     public init<V: View>(at start: Double, for duration: Double, file: String = #filePath, line: Int = #line,
                          @ViewBuilder _ content: @escaping (Double) -> V) {
         self.init(duration, file: file, line: line, content)
@@ -99,13 +107,20 @@ public struct Clip {
 
 // MARK: - TimelineBuilder
 
+/// Result builder that collects `Clip`s for a `Timeline`.
 @resultBuilder
 public enum TimelineBuilder {
+    /// Wraps a single clip.
     public static func buildExpression(_ c: Clip) -> [Clip] { [c] }
+    /// Concatenates clip lists in order.
     public static func buildBlock(_ cs: [Clip]...) -> [Clip] { cs.flatMap { $0 } }
+    /// Flattens clips produced by a `for` loop.
     public static func buildArray(_ cs: [[Clip]]) -> [Clip] { cs.flatMap { $0 } }
+    /// Clips from an `if` without `else`, or none.
     public static func buildOptional(_ c: [Clip]?) -> [Clip] { c ?? [] }
+    /// Clips from the first branch of an `if`/`else`.
     public static func buildEither(first c: [Clip]) -> [Clip] { c }
+    /// Clips from the second branch of an `if`/`else`.
     public static func buildEither(second c: [Clip]) -> [Clip] { c }
 }
 
@@ -113,6 +128,7 @@ public enum TimelineBuilder {
 // A plain View: feed it the scene's `t`, it shows the right clips with local
 // time remapped to each. Later clips stack on top during overlaps. Nest by
 // returning another `Timeline(local) { … }` inside a Clip.
+/// Lays clips out in time and shows the ones active at `t` (see the notes above).
 public struct Timeline: View {
     struct Placed {
         let start: Double
@@ -130,6 +146,7 @@ public struct Timeline: View {
     let file: String
     let line: Int
 
+    /// Places the built clips and evaluates them at scene time `t`; `label` names the lane for editors.
     public init(_ t: Double, label: String? = nil, file: String = #filePath, line: Int = #line,
                 @TimelineBuilder _ content: () -> [Clip]) {
         self.t = t
@@ -162,6 +179,7 @@ public struct Timeline: View {
         ProbeCollector.current?.timelineBuilt(self)
     }
 
+    /// The active clips, or a probe reporter during introspection renders.
     public var body: some View {
         if let probe = ProbeCollector.current, probe.isRendering {
             ProbeReporter(timeline: self, probe: probe)

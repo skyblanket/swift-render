@@ -6,10 +6,12 @@ import simd
 public struct DepthOfField3D: Equatable {
     /// Distance from the camera to the plane in focus, in scene units.
     public var focusDistance: Double
+    /// Aperture as an f-number; lower values give a shallower focus range and more blur.
     public var fStop: Double
     /// Aperture blades (bokeh shape); 0 = round.
     public var blades: Int
 
+    /// Creates depth-of-field settings focused `focusDistance` scene units from the camera.
     public init(focusDistance: Double, fStop: Double = 2.8, blades: Int = 0) {
         self.focusDistance = focusDistance; self.fStop = fStop; self.blades = blades
     }
@@ -23,19 +25,26 @@ public struct DepthOfField3D: Equatable {
 ///     Camera3D.orbit(target: .zero, distance: 1.4, azimuth: Motion3D.turntable(t, degreesPerSecond: 10), elevation: 12)
 ///     Camera3D.dolly(t, from: wide, to: close, start: 1, end: 5)        // eased push-in
 public struct Camera3D: Equatable {
+    /// Camera position in world space.
     public var position: Vec3
+    /// World point the camera looks at.
     public var target: Vec3
+    /// Up direction used to orient the camera.
     public var up: Vec3
     /// Vertical field of view in degrees.
     public var fov: Double
     /// Roll about the view axis in degrees.
     public var roll: Double
+    /// Near clipping distance in scene units.
     public var near: Double
+    /// Far clipping distance in scene units.
     public var far: Double
+    /// Depth of field settings (nil = everything in focus).
     public var depthOfField: DepthOfField3D?
     /// Orthographic projection: half the view height in scene units (nil = perspective).
     public var orthographicScale: Double?
 
+    /// Creates a camera at `position` looking at `target`; perspective unless `orthographicScale` is set.
     public init(position: Vec3 = [0, 0, 3], target: Vec3 = .zero, up: Vec3 = [0, 1, 0], fov: Double = 35,
                 roll: Double = 0, near: Double = 0.01, far: Double = 200,
                 depthOfField: DepthOfField3D? = nil, orthographicScale: Double? = nil) {

@@ -6,6 +6,7 @@ import Foundation
 // the MCP server's `instructions`, Studio's appended system prompt, the director
 // agent and the review skill (those two are Markdown files that say the same).
 
+/// The rules every agent working on swift-render scenes is given.
 public enum HouseRules {
     /// Visual grammar of launch films (LaunchKit / AppleLaunch / a `Launch/` package).
     /// Scoped on purpose: the demo films use shake and flash deliberately.

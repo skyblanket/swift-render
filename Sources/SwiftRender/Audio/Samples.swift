@@ -9,6 +9,7 @@ import Foundation
 /// An audio file the Score plays. Anything AVAudioFile reads works: wav, aiff,
 /// caf, m4a, mp3, and the audio track of mp4/mov.
 public struct SampleRef: Sendable, Hashable {
+    /// File path, resolved against cwd, assets/ and the package root.
     public var path: String
     /// Varispeed: 2 = an octave up and twice as fast. Small offsets (0.95…1.05)
     /// keep repeated one-shots from sounding identical.
@@ -16,6 +17,7 @@ public struct SampleRef: Sendable, Hashable {
     /// Seconds into the file to start playing.
     public var offset: Double
 
+    /// Creates a reference to the file at `path`.
     public init(_ path: String, rate: Double = 1, offset: Double = 0) {
         self.path = path; self.rate = rate; self.offset = offset
     }
@@ -23,17 +25,24 @@ public struct SampleRef: Sendable, Hashable {
 
 /// Decoded audio at `scoreSampleRate`, stereo.
 public struct SampleBuffer: Sendable {
+    /// Left-channel samples.
     public let left: [Float]
+    /// Right-channel samples.
     public let right: [Float]
+    /// Number of sample frames per channel.
     public var frames: Int { left.count }
+    /// Length in seconds.
     public var duration: Double { Double(left.count) / scoreSampleRate }
+    /// A buffer with no samples.
     public static let empty = SampleBuffer(left: [], right: [])
 }
 
+/// Errors thrown when a sample file can't be found or decoded.
 public enum SampleError: Error, CustomStringConvertible {
     case notFound(String)
     case unreadable(String, String)
 
+    /// Human-readable error message.
     public var description: String {
         switch self {
         case .notFound(let p): return "sample not found: \(p) (searched cwd, assets/, package root)"
@@ -42,6 +51,7 @@ public enum SampleError: Error, CustomStringConvertible {
     }
 }
 
+/// Loads, caches and shapes the audio files that Score samples play.
 public enum SampleLibrary {
     private static let cache = LockedCache<String, SampleBuffer>()
 

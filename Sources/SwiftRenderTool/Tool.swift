@@ -5,6 +5,7 @@ import SwiftRender
 import SwiftRenderKit
 import SwiftUI
 
+/// The swift-render version reported by `--version` and the render host.
 public let swiftRenderVersion = "0.10.0"
 
 // MARK: - Scene registry
@@ -21,6 +22,7 @@ public let swiftRenderVersion = "0.10.0"
 ///     import SwiftRenderTool
 ///     await SwiftRenderCommand.main(scenes: generatedSceneRunners)
 public enum SwiftRenderCommand {
+    /// Registers `scenes` (plus built-in templates) and runs the CLI with `arguments`, then exits.
     @MainActor
     public static func main(scenes: [String: SceneRunner],
                             arguments: [String] = CommandLine.arguments) async {

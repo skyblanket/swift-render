@@ -3,6 +3,7 @@ import Foundation
 /// Immutable result of offline audio analysis. Pure value type: every accessor
 /// is a deterministic function of `t`, so scenes that read it remain pure.
 public struct AudioTrack: Sendable {
+    /// Frequency bands tracked by the analyzer.
     public enum Band: String, CaseIterable, Sendable {
         case bass   // 20–250 Hz
         case mid    // 250–4000 Hz
@@ -19,6 +20,7 @@ public struct AudioTrack: Sendable {
 
     /// Envelope sample rate — matches the render fps so frame f maps to index f.
     public let fps: Int
+    /// Length of the analyzed audio in seconds.
     public let duration: Double
     let rmsEnv: [Float]                 // 0…1, one entry per frame
     let bandEnvs: [Band: [Float]]       // 0…1, one entry per frame
@@ -26,6 +28,7 @@ public struct AudioTrack: Sendable {
     /// Empty track for scenes rendered without `--audio`. All queries return 0.
     public static let silent = AudioTrack(fps: 60, duration: 0, rmsEnv: [], bandEnvs: [:])
 
+    /// True when the track has no analysis data (e.g. `silent`).
     public var isSilent: Bool { rmsEnv.isEmpty }
 
     /// Overall loudness (smoothed, normalized RMS) at time `t` seconds. 0…1.

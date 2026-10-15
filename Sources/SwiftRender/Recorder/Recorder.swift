@@ -10,18 +10,23 @@ import SwiftUI
 /// rely on display links or timers that may not tick during capture.
 @MainActor
 public final class Recorder {
+    /// Output settings for a render.
     public struct Config {
+        /// Frames per second.
         public var fps: Int
         /// Layout size in points — what the scene and `RenderContext` see.
         public var size: CGSize
         /// Raster density in pixels per point. Changes resolution, never layout.
         public var scale: CGFloat
+        /// Video codec (H.264 by default).
         public var codec: AVVideoCodecType
+        /// Target bitrate in bits per second; nil picks one from `outputSize`.
         public var bitrate: Int?
         /// Global grain+vignette pass. CLI --no-postfx sets this false.
         public var postFX: Bool
         private var explicitOutputSize: CGSize?
 
+        /// Creates a config; defaults to 1920×1080 at 60 fps, H.264, PostFX on.
         public init(
             fps: Int = 60,
             size: CGSize = CGSize(width: 1920, height: 1080),
@@ -52,6 +57,7 @@ public final class Recorder {
 
         private static func even(_ x: CGFloat) -> CGFloat { max(2, (x / 2).rounded() * 2) }
 
+        /// `bitrate` if set, otherwise a value scaled to the output resolution (6–35 Mbps).
         public var defaultBitrate: Int {
             if let b = bitrate { return b }
             let pixels = Int(outputSize.width) * Int(outputSize.height)
@@ -65,7 +71,9 @@ public final class Recorder {
         }
     }
 
+    /// Settings this recorder renders with.
     public let config: Config
+    /// Creates a recorder with `config`.
     public init(config: Config = Config()) { self.config = config }
 
     /// Render a SwiftUI view that's a pure function of time `t` (in seconds)

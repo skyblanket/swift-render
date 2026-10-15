@@ -107,6 +107,7 @@ public struct SceneRunner {
     /// True when frames depend on the AudioTrack (audio / propsAudio kinds).
     var reactsToAudio: Bool { kind == .audio || kind == .propsAudio }
 
+    /// Wraps a `RenderScene` type.
     public init<S: RenderScene>(_ type: S.Type) {
         kind = .render
         defaultDuration = S.defaultDuration
@@ -132,6 +133,7 @@ public struct SceneRunner {
         makeViewWithTrack = { dur, _, _ in { t in AnyView(S.body(at: t, duration: dur)) } }
     }
 
+    /// Wraps an `AudioReactiveScene` type.
     public init<S: AudioReactiveScene>(_ type: S.Type) {
         kind = .audio
         defaultDuration = S.defaultDuration
@@ -161,6 +163,7 @@ public struct SceneRunner {
         makeViewWithTrack = { dur, track, _ in { t in AnyView(S.body(at: t, duration: dur, audio: track)) } }
     }
 
+    /// Wraps a `PropsScene` type.
     public init<S: PropsScene>(_ type: S.Type) {
         kind = .props
         defaultDuration = S.defaultDuration
@@ -200,6 +203,7 @@ public struct SceneRunner {
         }
     }
 
+    /// Wraps a `PropsAudioScene` type.
     public init<S: PropsAudioScene>(_ type: S.Type) {
         kind = .propsAudio
         defaultDuration = S.defaultDuration

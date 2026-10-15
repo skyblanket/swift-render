@@ -10,28 +10,39 @@ import Foundation
 
 /// Why the scanner chose each value, plus what it could not find.
 public struct LaunchScanReport: Codable, Sendable, Equatable {
+    /// One chosen value and where it came from.
     public struct Evidence: Codable, Sendable, Equatable {
+        /// Props field name, e.g. "tagline".
         public var field: String
+        /// The value chosen, as text.
         public var value: String
         /// "README.md:5", "git rev-list", "AppIcon.appiconset/Contents.json"
         public var source: String
+        /// Creates evidence.
         public init(field: String, value: String, source: String) {
             self.field = field; self.value = value; self.source = source
         }
     }
+    /// The scanned directory path.
     public var root: String
+    /// Evidence for each value, in the order chosen.
     public var evidence: [Evidence] = []
     /// Disagreements the scanner resolved by precedence (e.g. CHANGELOG version vs latest tag).
     public var conflicts: [String] = []
     /// Fields it could not fill.
     public var missing: [String] = []
+    /// Non-fatal problems found while scanning.
     public var warnings: [String] = []
+    /// Creates an empty report for `root`.
     public init(root: String) { self.root = root }
 
+    /// Source of the last value chosen for `field`, if any.
     public func source(of field: String) -> String? { evidence.last { $0.field == field }?.source }
 }
 
+/// Reads a Swift codebase and proposes `LaunchProps`, recording evidence for each value.
 public struct LaunchScanner {
+    /// What the scanner may run and how far it walks.
     public struct Options: Sendable {
         /// Run `swift package dump-package` (executes the manifest). Off for untrusted repos;
         /// a regex reading of Package.swift is used instead.
@@ -41,6 +52,7 @@ public struct LaunchScanner {
         /// Stop walking the tree after this many files. The walk is breadth-first, so
         /// top-level files (README, CHANGELOG, LICENSE) and shallow manifests are always seen.
         public var maxFiles: Int
+        /// Creates options; everything on, 20,000-file walk limit.
         public init(executeManifest: Bool = true, git: Bool = true, maxFiles: Int = 20_000) {
             self.executeManifest = executeManifest; self.git = git; self.maxFiles = maxFiles
         }
@@ -48,10 +60,12 @@ public struct LaunchScanner {
 
     /// The scanned directory, symlinks resolved (FileManager won't enumerate a symlink).
     public let root: URL
+    /// Scan options in effect.
     public let options: Options
     /// The folder name as given (a symlink keeps its own name for the fallback product name).
     let folderName: String
 
+    /// Creates a scanner for `root`.
     public init(root: URL, options: Options = Options()) {
         let given = root.standardizedFileURL
         self.root = given.resolvingSymlinksInPath()

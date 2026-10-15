@@ -6,19 +6,27 @@ import Foundation
 // editor or agent about a scene without the editor linking the scene code.
 // All times are absolute seconds from scene start.
 
+/// How a scene is driven: plain render, audio-reactive, props-driven, or props plus audio.
 public enum SceneKind: String, Codable, Sendable {
     case render, audio, props, propsAudio
 }
 
+/// A scene as listed by a host, before it is opened.
 public struct SceneSummary: Codable, Sendable, Equatable, Hashable {
+    /// Scene name as registered.
     public var name: String
+    /// What drives the scene.
     public var kind: SceneKind
+    /// The scene's own length, in seconds.
     public var defaultDuration: Double
+    /// Whether the scene declares a Score soundtrack.
     public var hasSoundtrack: Bool
+    /// Whether the scene takes JSON props.
     public var hasProps: Bool
     /// The Swift file that declares the scene (from the registry plugin); nil from older hosts.
     public var sourcePath: String?
 
+    /// Creates a summary.
     public init(name: String, kind: SceneKind, defaultDuration: Double, hasSoundtrack: Bool, hasProps: Bool,
                 sourcePath: String? = nil) {
         self.name = name; self.kind = kind; self.defaultDuration = defaultDuration
@@ -28,8 +36,11 @@ public struct SceneSummary: Codable, Sendable, Equatable, Hashable {
 
 /// Where in the source a timeline element was declared.
 public struct SourceLocation: Codable, Sendable, Equatable, Hashable {
+    /// Source file path.
     public var file: String
+    /// 1-based line number.
     public var line: Int
+    /// Creates a location.
     public init(file: String, line: Int) { self.file = file; self.line = line }
 }
 
@@ -40,14 +51,19 @@ public struct ClipInfo: Codable, Sendable, Equatable, Hashable {
     public var id: String
     /// `Clip(...).named("Hero")`, else nil (editors show "Clip · File.swift:42").
     public var label: String?
+    /// Start time, in seconds from scene start.
     public var start: Double
+    /// End time, in seconds from scene start (exclusive).
     public var end: Double
     /// 0 = top-level Timeline; nested Timelines inside a clip are depth+1.
     public var depth: Int
+    /// True when placed with `at:` (floats free of the timeline cursor).
     public var pinned: Bool
     /// Transition *into* this clip: "cut", "fade", "slide", "flash", "overlap", or a custom name.
     public var transitionIn: String
+    /// Length of the incoming transition, in seconds.
     public var transitionDuration: Double
+    /// Where the clip was declared.
     public var source: SourceLocation?
     /// `id` of the clip whose content holds this clip's Timeline; nil at depth 0.
     public var parentID: String?
@@ -56,6 +72,7 @@ public struct ClipInfo: Codable, Sendable, Equatable, Hashable {
     /// Where the enclosing `Timeline(…)` was written.
     public var timelineSource: SourceLocation?
 
+    /// Creates clip metadata.
     public init(id: String, label: String?, start: Double, end: Double, depth: Int, pinned: Bool,
                 transitionIn: String, transitionDuration: Double, source: SourceLocation?,
                 parentID: String? = nil, timelineLabel: String? = nil, timelineSource: SourceLocation? = nil) {
@@ -75,7 +92,9 @@ public struct ClipInfo: Codable, Sendable, Equatable, Hashable {
         label ?? source.map { "\(($0.file as NSString).lastPathComponent):\($0.line)" } ?? id
     }
 
+    /// `end - start`, in seconds.
     public var duration: Double { end - start }
+    /// Whether `t` falls in `start..<end`.
     public func contains(_ t: Double) -> Bool { t >= start && t < end }
 }
 
@@ -87,10 +106,14 @@ public struct ScoreEventInfo: Codable, Sendable, Equatable, Hashable {
     public var kind: String
     /// Human detail: note name / sample path / spoken text.
     public var detail: String?
+    /// Event time, in seconds from scene start.
     public var time: Double
+    /// Event length, in seconds.
     public var duration: Double
+    /// Event amplitude (gain), as written in the Score.
     public var amp: Double
 
+    /// Creates event metadata.
     public init(lane: String, kind: String, detail: String?, time: Double, duration: Double, amp: Double) {
         self.lane = lane; self.kind = kind; self.detail = detail
         self.time = time; self.duration = duration; self.amp = amp
@@ -99,16 +122,24 @@ public struct ScoreEventInfo: Codable, Sendable, Equatable, Hashable {
 
 /// A live-tunable constant declared by `Knob.double("key", …)` & friends.
 public struct KnobInfo: Codable, Sendable, Equatable, Hashable {
+    /// The knob's value type.
     public enum Kind: String, Codable, Sendable { case double, bool, text, color }
+    /// Knob key, unique within the scene.
     public var key: String
+    /// The knob's value type.
     public var kind: Kind
+    /// The value written in the source.
     public var defaultValue: KnobValue
     /// Current value (override if one is set, else the default).
     public var value: KnobValue
+    /// Slider minimum, for number knobs.
     public var min: Double?
+    /// Slider maximum, for number knobs.
     public var max: Double?
+    /// Where the knob was declared.
     public var source: SourceLocation?
 
+    /// Creates knob metadata.
     public init(key: String, kind: Kind, defaultValue: KnobValue, value: KnobValue,
                 min: Double? = nil, max: Double? = nil, source: SourceLocation? = nil) {
         self.key = key; self.kind = kind; self.defaultValue = defaultValue; self.value = value
@@ -123,6 +154,7 @@ public enum KnobValue: Codable, Sendable, Equatable, Hashable {
     case bool(Bool)
     case string(String)
 
+    /// Decodes a JSON bool, number or string.
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let b = try? c.decode(Bool.self) { self = .bool(b); return }
@@ -130,6 +162,7 @@ public enum KnobValue: Codable, Sendable, Equatable, Hashable {
         self = .string(try c.decode(String.self))
     }
 
+    /// Encodes as a bare JSON bool, number or string.
     public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
@@ -139,14 +172,21 @@ public enum KnobValue: Codable, Sendable, Equatable, Hashable {
         }
     }
 
+    /// The number, or nil if this isn't `.number`.
     public var doubleValue: Double? { if case .number(let d) = self { return d }; return nil }
+    /// The bool, or nil if this isn't `.bool`.
     public var boolValue: Bool? { if case .bool(let b) = self { return b }; return nil }
+    /// The string, or nil if this isn't `.string`.
     public var stringValue: String? { if case .string(let s) = self { return s }; return nil }
 }
 
+/// A knob file exists but can't be read or isn't valid knob JSON.
 public struct KnobFileError: Error, CustomStringConvertible {
+    /// The offending file.
     public var url: URL
+    /// Why it was rejected.
     public var reason: String
+    /// A message that names the file and how to fix it.
     public var description: String {
         "\(url.path) is not a valid knob file (\(reason)) — fix it by hand or delete it; it was left untouched"
     }
@@ -187,24 +227,39 @@ public enum KnobFile {
     }
 }
 
+/// One voiceover caption line.
 public struct CaptionInfo: Codable, Sendable, Equatable, Hashable {
+    /// Start time, in seconds from scene start.
     public var start: Double
+    /// End time, in seconds from scene start.
     public var end: Double
+    /// The spoken text.
     public var text: String
+    /// Creates a caption.
     public init(start: Double, end: Double, text: String) { self.start = start; self.end = end; self.text = text }
 }
 
 /// Everything an editor needs to lay out a scene's timeline.
 public struct SceneInfo: Codable, Sendable, Equatable {
+    /// Scene name.
     public var name: String
+    /// What drives the scene.
     public var kind: SceneKind
+    /// Length in seconds.
     public var duration: Double
+    /// Render width in pixels.
     public var width: Int
+    /// Render height in pixels.
     public var height: Int
+    /// Frames per second.
     public var fps: Int
+    /// Clips on the timeline, including nested ones.
     public var clips: [ClipInfo]
+    /// Score events for the timeline lanes.
     public var events: [ScoreEventInfo]
+    /// Live-tunable knobs the scene declared.
     public var knobs: [KnobInfo]
+    /// Voiceover captions.
     public var captions: [CaptionInfo]
     /// Pretty JSON of the props in effect (PropsScene kinds only).
     public var propsJSON: String?
@@ -212,10 +267,12 @@ public struct SceneInfo: Codable, Sendable, Equatable {
     public var audioPath: String?
     /// RMS loudness envelope, `loudnessRate` samples per second, 0…1.
     public var loudness: [Float]
+    /// Samples per second in `loudness`.
     public var loudnessRate: Double
     /// Absolute path of the file declaring the scene, when known.
     public var sourcePath: String?
 
+    /// Creates scene metadata.
     public init(name: String, kind: SceneKind, duration: Double, width: Int, height: Int, fps: Int,
                 clips: [ClipInfo] = [], events: [ScoreEventInfo] = [], knobs: [KnobInfo] = [],
                 captions: [CaptionInfo] = [], propsJSON: String? = nil, audioPath: String? = nil,

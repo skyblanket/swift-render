@@ -11,21 +11,29 @@ import SwiftUI
 ///         }
 ///     }
 public struct RenderContext: Equatable, Sendable {
+    /// Canvas size in points.
     public let size: CGSize
+    /// Frames per second.
     public let fps: Int
     /// Total scene duration in seconds. 0 when unknown (bare single-frame renders).
     public let duration: Double
 
+    /// Creates a context; `duration` defaults to 0 (unknown).
     public init(size: CGSize, fps: Int, duration: Double = 0) {
         self.size = size
         self.fps = fps
         self.duration = duration
     }
 
+    /// Canvas width in points.
     public var width: CGFloat { size.width }
+    /// Canvas height in points.
     public var height: CGFloat { size.height }
+    /// Width divided by height; 0 when height is 0.
     public var aspect: CGFloat { size.height == 0 ? 0 : size.width / size.height }
+    /// True when the canvas is taller than it is wide.
     public var isVertical: Bool { size.height > size.width }
+    /// True when width equals height.
     public var isSquare: Bool { size.height == size.width }
     /// Layout scale relative to the 1920×1080 reference canvas most scenes
     /// are authored against.

@@ -13,10 +13,12 @@ public struct Stage: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `glow` is the accent glow's opacity; `breathe` makes it pulse slowly with `t`.
     public init(glow: Double = 0.12, center: UnitPoint = .top, at t: Double = 0, breathe: Bool = true) {
         self.glow = glow; self.center = center; self.t = t; self.breathe = breathe
     }
 
+    /// The ground color with the accent glow and a faint center lift.
     public var body: some View {
         let b = breathe ? 0.88 + 0.12 * sin(t * 0.9) : 1
         let r = max(ctx.width, ctx.height) * 0.75
@@ -42,10 +44,12 @@ public struct Eyebrow: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `accent` colors the label with the theme accent instead of tertiary.
     public init(_ text: String, at t: Double, start: Double = 0, accent: Bool = false) {
         self.text = text; self.t = t; self.start = start; self.accent = accent
     }
 
+    /// The uppercased label, rising in at `start`.
     public var body: some View {
         let L = LaunchLayout(ctx)
         Text(text.uppercased())
@@ -65,6 +69,7 @@ public struct Eyebrow: View {
 /// All lines share one size: when the widest is too wide for `maxWidth`, the whole block
 /// scales down together.
 public struct KeynoteTitle: View {
+    /// How the lines come in.
     public enum Reveal: Sendable {
         /// Each line rises 28pt and fades in over 0.5 s.
         case rise
@@ -88,6 +93,7 @@ public struct KeynoteTitle: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `accentLine` is the index of the line drawn in the accent (nil for none); `gradient` uses the accent gradient for it when the theme has `accentSecondary`.
     public init(_ lines: [String], eyebrow: String? = nil, sub: String? = nil, at t: Double,
                 start: Double = 0.1, size: CGFloat = 120, alignment: HorizontalAlignment = .center,
                 reveal: Reveal = .rise, accentLine: Int? = 1, gradient: Bool = false, maxWidth: CGFloat? = nil) {
@@ -99,6 +105,7 @@ public struct KeynoteTitle: View {
     /// When line `i` starts revealing.
     public static func lineStart(_ i: Int, start: Double) -> Double { start + 0.14 * Double(i) }
 
+    /// Eyebrow, display lines and sub line, revealed from `start`.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let width = maxWidth ?? L.width

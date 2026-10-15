@@ -20,21 +20,35 @@ public extension Note {
 
 // MARK: - Chords
 
+/// A chord: a root note plus semitone intervals above it.
 public struct Chord: Sendable {
+    /// The chord's root note.
     public var root: Note
+    /// Semitone offsets from the root (0 is the root itself).
     public var intervals: [Int]
+    /// Creates a chord from a root and semitone intervals.
     public init(_ root: Note, _ intervals: [Int]) { self.root = root; self.intervals = intervals }
 
+    /// The chord's notes, from the root upward.
     public var notes: [Note] { intervals.map { root.transposed($0) } }
 
+    /// Major triad.
     public static func major(_ r: Note) -> Chord  { Chord(r, [0, 4, 7]) }
+    /// Minor triad.
     public static func minor(_ r: Note) -> Chord  { Chord(r, [0, 3, 7]) }
+    /// Major seventh chord.
     public static func major7(_ r: Note) -> Chord { Chord(r, [0, 4, 7, 11]) }
+    /// Minor seventh chord.
     public static func minor7(_ r: Note) -> Chord { Chord(r, [0, 3, 7, 10]) }
+    /// Dominant seventh chord.
     public static func dom7(_ r: Note) -> Chord   { Chord(r, [0, 4, 7, 10]) }
+    /// Minor ninth chord.
     public static func minor9(_ r: Note) -> Chord { Chord(r, [0, 3, 7, 10, 14]) }
+    /// Major triad with an added ninth.
     public static func add9(_ r: Note) -> Chord   { Chord(r, [0, 4, 7, 14]) }
+    /// Suspended second chord.
     public static func sus2(_ r: Note) -> Chord   { Chord(r, [0, 2, 7]) }
+    /// Suspended fourth chord.
     public static func sus4(_ r: Note) -> Chord   { Chord(r, [0, 5, 7]) }
 
     /// Same chord, an octave (or n semitones) higher/lower.
@@ -43,6 +57,7 @@ public struct Chord: Sendable {
 
 // MARK: - Scales
 
+/// Musical scales, for picking notes by degree.
 public enum Scale: Sendable {
     case major, minor, dorian, majorPentatonic, minorPentatonic, blues
 
@@ -68,6 +83,7 @@ public enum Scale: Sendable {
 
 // MARK: - Melodic voice selector
 
+/// The melodic voice that phrase helpers such as `strum` and `arpeggio` play.
 public enum Instrument: Sendable {
     case pluck, bell, chip, pad, triBass
 
@@ -111,6 +127,7 @@ public func strum(_ chord: Chord, at t: Double, amp: Double = 0.08, spread: Doub
     }
 }
 
+/// Order in which `arpeggio` steps through a chord's notes.
 public enum ArpPattern: Sendable { case up, down, upDown }
 
 /// Chord notes cycled every `step` seconds from `from` to `to`.

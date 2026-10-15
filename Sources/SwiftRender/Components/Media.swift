@@ -109,6 +109,7 @@ public struct VideoClip: View {
         self.contentMode = contentMode
     }
 
+    /// The video frame at the computed time, or black if it can't be read.
     public var body: some View {
         if let cg = MediaLibrary.frame(path, at: time) {
             Image(decorative: cg, scale: 1).resizable().aspectRatio(contentMode: contentMode)
@@ -123,10 +124,12 @@ public struct ImageClip: View {
     let path: String
     var contentMode: ContentMode
 
+    /// Loads the image at `path`, sized with `contentMode`.
     public init(_ path: String, contentMode: ContentMode = .fit) {
         self.path = path; self.contentMode = contentMode
     }
 
+    /// The image, or clear if it can't be loaded.
     public var body: some View {
         if let cg = MediaLibrary.image(path) {
             Image(decorative: cg, scale: 1).resizable().interpolation(.high).aspectRatio(contentMode: contentMode)

@@ -4,6 +4,7 @@ import SwiftUI
 
 // MARK: - Font registration
 
+/// Registers the bundled Inter fonts for this process; already-registered fonts are ignored.
 @MainActor
 public func registerBundledFonts() {
     let bundle = Bundle.module

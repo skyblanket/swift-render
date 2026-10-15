@@ -4,9 +4,12 @@ import Foundation
 /// analytically (no per-frame integration), so scrubbing or re-rendering any
 /// frame yields identical results.
 public struct Spring: Equatable, Sendable {
+    /// Spring constant k (mass is normalized to 1).
     public var stiffness: Double   // k, with mass normalized to 1
+    /// Damping coefficient c.
     public var damping: Double     // c
 
+    /// Creates a spring from raw stiffness and damping (clamped to valid ranges).
     public init(stiffness: Double = 170, damping: Double = 26) {
         self.stiffness = max(stiffness, 1e-9)
         self.damping = max(damping, 0)
@@ -46,6 +49,7 @@ public struct Spring: Equatable, Sendable {
         return (to + y, dy)
     }
 
+    /// Analytic position at time `t` (seconds); see `evaluate(at:from:to:initialVelocity:)`.
     public func value(at t: Double, from: Double, to: Double, initialVelocity v0: Double = 0) -> Double {
         evaluate(at: t, from: from, to: to, initialVelocity: v0).value
     }
@@ -62,11 +66,13 @@ public struct Spring: Equatable, Sendable {
 /// x(u) is inverted with fixed-count Newton iterations (deterministic).
 public struct CubicBezier: Equatable, Sendable {
     private let ax, bx, cx, ay, by, cy: Double
+    /// Creates the curve from control points p1 and p2; x values are clamped to 0…1.
     public init(_ p1x: Double, _ p1y: Double, _ p2x: Double, _ p2y: Double) {
         let x1 = min(1, max(0, p1x)), x2 = min(1, max(0, p2x))    // keeps x(u) monotonic
         cx = 3 * x1; bx = 3 * (x2 - x1) - cx; ax = 1 - cx - bx
         cy = 3 * p1y; by = 3 * (p2y - p1y) - cy; ay = 1 - cy - by
     }
+    /// Eased output for progress `x` (clamped to 0…1).
     public func callAsFunction(_ x: Double) -> Double {
         let p = min(1, max(0, x))
         var u = p

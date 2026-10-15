@@ -11,12 +11,14 @@ public struct RenderFrame<Content: View>: View {
     let postFX: Bool
     let content: Content
 
+    /// Wraps `content` for scene time `t` at `size`; `postFX` toggles the global grain/vignette pass.
     public init(size: CGSize, fps: Int, duration: Double, t: Double, postFX: Bool,
                 @ViewBuilder content: () -> Content) {
         self.size = size; self.fps = fps; self.duration = duration
         self.t = t; self.postFX = postFX; self.content = content()
     }
 
+    /// The content framed to `size` with the render context and PostFX applied.
     public var body: some View {
         ZStack { content }
             .frame(width: size.width, height: size.height)

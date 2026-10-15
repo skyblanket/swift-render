@@ -7,6 +7,7 @@ import SwiftUI
 ///     CaptionView(captions, at: t)
 ///         .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 90)
 public struct CaptionView: View {
+    /// `.karaoke` highlights the current word; `.plain` shows the cue as one colour.
     public enum Style: Sendable { case karaoke, plain }
 
     let track: CaptionTrack
@@ -17,6 +18,7 @@ public struct CaptionView: View {
     var highlight: Color
     var plate: Bool
 
+    /// Shows the cue active at `t`; `plate` draws a dark rounded backing.
     public init(_ track: CaptionTrack, at t: Double, style: Style = .karaoke,
                 font: Font = .system(size: 52, weight: .semibold),
                 color: Color = .white, highlight: Color = Color(red: 1.0, green: 0.84, blue: 0.36),
@@ -25,6 +27,7 @@ public struct CaptionView: View {
         self.color = color; self.highlight = highlight; self.plate = plate
     }
 
+    /// The current cue, faded and lifted in; empty between cues.
     public var body: some View {
         if let cue = track.cue(at: t) {
             let inP = min(1, max(0, (t - cue.start + 0.08) / 0.12))

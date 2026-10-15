@@ -27,22 +27,30 @@ public enum TTSEngine: Sendable, Hashable {
     }
 }
 
+/// One voiceover line: the text and the TTS engine that speaks it.
 public struct SpeechSpec: Sendable, Hashable {
+    /// The words to speak.
     public var text: String
+    /// The engine (and voice) that renders the line.
     public var engine: TTSEngine
+    /// Creates a line spoken by `engine` (macOS `say` by default).
     public init(_ text: String, engine: TTSEngine = .say()) {
         self.text = text; self.engine = engine
     }
 }
 
+/// Errors thrown when a TTS engine fails.
 public enum SpeechError: Error, CustomStringConvertible {
     case engineFailed(String)
+    /// Human-readable error message.
     public var description: String {
         switch self { case .engineFailed(let why): return "TTS failed: \(why)" }
     }
 }
 
+/// Renders voiceover lines with a local TTS engine and caches the audio.
 public enum Speech {
+    /// Where rendered lines are cached (~/Library/Caches/swift-render/tts).
     public static var cacheDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("swift-render/tts", isDirectory: true)

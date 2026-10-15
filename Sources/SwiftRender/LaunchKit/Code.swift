@@ -7,11 +7,16 @@ import SwiftUI
 /// strings (incl. multi-line and raw), numbers, keywords, `@attributes`,
 /// `#directives`, capitalized types and `call(` sites.
 public enum SwiftHighlighter {
+    /// What a token is, which picks its color.
     public enum Kind: Sendable, Equatable { case plain, keyword, type, call, string, number, comment, attribute, punctuation }
 
+    /// A run of source text and its kind.
     public struct Token: Sendable, Equatable {
+        /// The exact source text.
         public var text: String
+        /// The token's category.
         public var kind: Kind
+        /// Creates a token.
         public init(_ text: String, _ kind: Kind) { self.text = text; self.kind = kind }
     }
 
@@ -105,9 +110,12 @@ public enum SwiftHighlighter {
 
 /// Syntax colors for `CodeReveal`.
 public struct CodePalette: Sendable {
+    /// Color for each token kind.
     public var plain, keyword, type, call, string, number, comment, attribute, punctuation: Color
+    /// Editor window fill.
     public var background: Color
 
+    /// Creates a palette from one color per token kind plus the background.
     public init(plain: Color, keyword: Color, type: Color, call: Color, string: Color, number: Color,
                 comment: Color, attribute: Color, punctuation: Color, background: Color) {
         self.plain = plain; self.keyword = keyword; self.type = type; self.call = call; self.string = string
@@ -149,6 +157,7 @@ public struct CodePalette: Sendable {
 /// A highlighted snippet in an editor window, revealed line by line or typed.
 /// Lines outside `focus` dim once the reveal finishes.
 public struct CodeReveal: View {
+    /// How the snippet appears: typed at `cps` characters per second, line by line every `step` seconds, or all at once.
     public enum Mode: Sendable, Equatable {
         case typed(cps: Double = 42)
         case lines(step: Double = 0.09)
@@ -170,6 +179,7 @@ public struct CodeReveal: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// Non-Swift code is drawn in the plain color. `focus` lists the lines (1-based) left undimmed; `fontSize` nil fits the window.
     public init(_ code: String, language: LaunchProps.CodeLanguage = .swift, at t: Double, start: Double = 0.2,
                 mode: Mode = .lines(), focus: [Int]? = nil, fontSize: CGFloat? = nil,
                 palette: CodePalette = .xcodeDark, title: String? = nil, lineNumbers: Bool = true,
@@ -201,6 +211,7 @@ public struct CodeReveal: View {
         }
     }
 
+    /// The editor window, with font size fitted to the width and height available.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let lines = language == .swift ? SwiftHighlighter.tokenize(code)
@@ -295,11 +306,17 @@ public struct CodeReveal: View {
 /// A terminal window: `$` prompt in the accent, commands typed with a solid caret,
 /// output lines appearing as the command "finishes".
 public struct TerminalCard: View {
+    /// One line of the transcript and when it appears.
     public struct Line: Sendable, Equatable {
+        /// How the line is drawn: typed command, plain output, success, failure or comment.
         public enum Kind: Sendable { case command, output, success, failure, comment }
+        /// The line's text (without the prompt).
         public var text: String
+        /// How the line is drawn.
         public var kind: Kind
+        /// When the line starts (a command starts typing; output appears).
         public var at: Double
+        /// Creates a line; `kind` defaults to output.
         public init(_ text: String, _ kind: Kind = .output, at: Double) { self.text = text; self.kind = kind; self.at = at }
     }
 
@@ -313,6 +330,7 @@ public struct TerminalCard: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `cps` is the typing speed for commands; `width` nil picks a width from the canvas.
     public init(_ lines: [Line], at t: Double, title: String? = nil, cps: Double = 30, prompt: String = "$ ",
                 width: CGFloat? = nil, fontSize: CGFloat = 30) {
         self.lines = lines; self.t = t; self.title = title; self.cps = cps; self.prompt = prompt
@@ -355,6 +373,7 @@ public struct TerminalCard: View {
         return max(floor, min(fontSize, (width - 2 * padding) / CGFloat(cols) / 0.62))
     }
 
+    /// The window with the lines visible at `t`, font size fitted to the longest line.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let w = width ?? min(L.width, 1240 * L.type)

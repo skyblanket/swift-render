@@ -6,11 +6,15 @@ import Foundation
 // MP4Assembler) goes through here, so a missing or mistyped `--out` can never
 // turn "replace the old render" into "recursively delete a directory".
 
+/// A rejected output path, with a message that says how to fix it.
 public struct OutputPathError: Error, CustomStringConvertible, Equatable {
+    /// Human-readable message.
     public var description: String
+    /// Creates an error with message `d`.
     public init(_ d: String) { description = d }
 }
 
+/// Safety checks for user-named output files before they are replaced.
 public enum OutputPath {
     /// Checks a user-supplied output path: not empty, not ending in "/", and not an
     /// existing directory (the old output is replaced, so it must be a file).

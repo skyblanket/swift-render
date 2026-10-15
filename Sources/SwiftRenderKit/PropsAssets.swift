@@ -9,6 +9,7 @@ import Foundation
 // back to a monogram. These helpers find the root a props file's paths are
 // relative to, and make them absolute for a host that doesn't run there.
 
+/// Resolves relative icon and screenshot paths in launch props files.
 public enum PropsAssets {
     /// The directory relative asset paths in `url` are relative to: for
     /// `<R>/.swift-render/launch/<N>.json`, the sibling `<N>.scan.json`'s `root`

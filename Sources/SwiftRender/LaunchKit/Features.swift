@@ -18,6 +18,7 @@ public struct FeatureCard: View {
         self.feature = feature; self.compact = compact; self.detailLines = max(1, detailLines)
     }
 
+    /// The card as a column, or a row when `compact`.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let u = L.type
@@ -82,6 +83,7 @@ public struct FeatureTriad: View {
     var stagger: Double
     @Environment(\.renderContext) private var ctx
 
+    /// Shows the first `shown(count)` features; each card lands `stagger` seconds after the last.
     public init(_ features: [LaunchProps.Feature], at t: Double, start: Double = 0.2, stagger: Double = 0.6) {
         self.features = Array(features.prefix(Self.shown(features.count))); self.t = t; self.start = start; self.stagger = stagger
     }
@@ -94,6 +96,7 @@ public struct FeatureTriad: View {
         (0..<shown(count)).map { start + Double($0) * stagger }
     }
 
+    /// The cards in a row, or a column on stacked canvases, springing in one by one.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let lands = Self.landTimes(count: features.count, start: start, stagger: stagger)
@@ -127,6 +130,7 @@ public struct FeatureList: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// Shows up to four features as rows next to `headline`.
     public init(_ features: [LaunchProps.Feature], headline: [String] = ["And so", "much more."], at t: Double,
                 start: Double = 0.1, stagger: Double = 0.3) {
         self.features = Array(features.prefix(4)); self.headline = headline
@@ -138,6 +142,7 @@ public struct FeatureList: View {
         (0..<count).map { start + 0.5 + Double($0) * stagger }
     }
 
+    /// The headline beside the rows, or above them on stacked canvases.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let u = L.type

@@ -15,6 +15,7 @@ public struct StatCounter: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// Counts from `start` for `duration` seconds; `accent` colors the number with the theme accent.
     public init(_ stat: LaunchProps.Stat, at t: Double, start: Double = 0.1, duration: Double = 1.1,
                 size: CGFloat = 190, accent: Bool = false) {
         self.stat = stat; self.t = t; self.start = start; self.duration = duration; self.size = size; self.accent = accent
@@ -42,6 +43,7 @@ public struct StatCounter: View {
         return (stat.prefix ?? "") + body.replacingOccurrences(of: ".0k", with: "k").replacingOccurrences(of: ".0M", with: "M") + (stat.suffix ?? "")
     }
 
+    /// The number (scaled to fit) over its label, rising in just before the count starts.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let s = size * L.type
@@ -72,14 +74,17 @@ public struct StatRow: View {
     var stagger: Double
     @Environment(\.renderContext) private var ctx
 
+    /// Shows the first three stats; each starts counting `stagger` seconds after the previous.
     public init(_ stats: [LaunchProps.Stat], at t: Double, start: Double = 0.1, stagger: Double = 0.6) {
         self.stats = Array(stats.prefix(3)); self.t = t; self.start = start; self.stagger = stagger
     }
 
+    /// When each of the (at most three) counts settles.
     public static func landTimes(count: Int, start: Double, stagger: Double, duration: Double = 1.1) -> [Double] {
         (0..<min(3, count)).map { StatCounter.landTime(start: start + Double($0) * stagger, duration: duration) }
     }
 
+    /// The counters in a row, or a column on stacked canvases; the first is in the accent.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let size: CGFloat = stats.count == 1 ? 260 : stats.count == 2 ? 210 : 180
@@ -109,12 +114,14 @@ public struct ChangelogList: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// Shows up to `maxItems` rows; `headline` replaces "What's new in <version>.".
     public init(version: String, items: [LaunchProps.ChangelogItem], at t: Double, start: Double = 0.25,
                 stagger: Double = 0.3, maxItems: Int = 5, headline: String? = nil) {
         self.version = version; self.items = Array(items.prefix(maxItems)); self.t = t
         self.start = start; self.stagger = stagger; self.headline = headline
     }
 
+    /// When each row lands (0.55 s after `start`, then every `stagger`).
     public static func rowTimes(count: Int, start: Double, stagger: Double) -> [Double] {
         (0..<count).map { start + 0.55 + Double($0) * stagger }
     }
@@ -131,6 +138,7 @@ public struct ChangelogList: View {
         }
     }
 
+    /// The headline, then one row per item: kind symbol, title and kind label.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let u = L.type
@@ -179,6 +187,7 @@ public struct PlatformBadges: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `swift`, when given, is listed first among the facts as "Swift <version>".
     public init(_ platforms: [LaunchProps.Platform], swift: String? = nil, facts: [String] = [],
                 headline: String? = nil, at t: Double, start: Double = 0.1) {
         self.platforms = platforms
@@ -205,6 +214,7 @@ public struct PlatformBadges: View {
         return p.minimum.map { "\(name) \($0)+" } ?? name
     }
 
+    /// Headline, up to five platform badges (three when vertical) and the facts line.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let u = L.type
@@ -258,12 +268,14 @@ public struct EndCard: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `headline` sits under the name; `cta` picks the chip or button shown below it.
     public init(name: String, icon: Image?, iconShape: LaunchProps.IconShape = .iOS, headline: String = "Available now.",
                 cta: LaunchProps.CTA, url: String? = nil, footnote: String? = nil, at t: Double) {
         self.name = name; self.icon = icon; self.iconShape = iconShape; self.headline = headline
         self.cta = cta; self.url = url; self.footnote = footnote; self.t = t
     }
 
+    /// Icon, name, headline, call to action, URL and footnote, each rising in turn.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let u = L.type

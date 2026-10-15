@@ -13,6 +13,7 @@ public struct LaunchIcon: View {
     var monogram: String
     @Environment(\.launchTheme) private var theme
 
+    /// `monogram` supplies the initial for the generated mark when `image` is nil.
     public init(_ image: Image?, size: CGFloat, shape: LaunchProps.IconShape = .iOS, monogram: String = "") {
         self.image = image; self.size = size; self.shape = shape; self.monogram = monogram
     }
@@ -22,6 +23,7 @@ public struct LaunchIcon: View {
         RoundedRectangle(cornerRadius: size * 0.2237, style: .continuous)
     }
 
+    /// The image in the chosen shape, or the generated mark.
     public var body: some View {
         if let image {
             switch shape {
@@ -78,6 +80,7 @@ public struct AppIconHero: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `beat` pulses the glow (nil for none); `sweepAt`, `nameAt` and `taglineAt` are local times.
     public init(icon: Image?, at t: Double, size: CGFloat = 300, shape: LaunchProps.IconShape = .iOS,
                 beat: Double? = 0.6, sweepAt: Double = 1.0, name: String? = nil, tagline: String? = nil,
                 nameAt: Double = 1.1, taglineAt: Double = 1.9) {
@@ -94,6 +97,7 @@ public struct AppIconHero: View {
                   name: name, tagline: tagline, nameAt: nameAt, taglineAt: taglineAt)
     }
 
+    /// The icon, its glow and sweep, then the name and tagline below.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let s = size * L.type
@@ -152,6 +156,7 @@ public struct GlassPanel<Content: View>: View {
     var content: Content
     @Environment(\.launchTheme) private var theme
 
+    /// `tint` overrides the default fill; `sheenAt` adds a specular sweep at that local time.
     public init(cornerRadius: CGFloat = 28, tint: Color? = nil, backdrop: AnyView? = nil, blur: CGFloat = 40,
                 material: Bool = false, at t: Double = 0, sheenAt: Double? = nil,
                 @ViewBuilder content: () -> Content) {
@@ -159,6 +164,7 @@ public struct GlassPanel<Content: View>: View {
         self.material = material; self.t = t; self.sheenAt = sheenAt; self.content = content()
     }
 
+    /// The content over the panel fill, with a gradient hairline border.
     public var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let fill = tint ?? (theme.isDark ? Color.white.opacity(0.055) : Color.white.opacity(0.75))
@@ -192,6 +198,7 @@ public struct GlassPanel<Content: View>: View {
 /// laid out at the device's point size, then the whole device is scaled to
 /// `width`, so screenshots and text stay sharp.
 public struct DeviceFrame<Screen: View>: View {
+    /// How the device arrives: already in place, springing in, or rising in.
     public enum Enter: Sendable { case none, settle, rise }
 
     var kind: LaunchProps.Device
@@ -203,6 +210,7 @@ public struct DeviceFrame<Screen: View>: View {
     @Environment(\.launchTheme) private var theme
     @Environment(\.renderContext) private var ctx
 
+    /// `width` nil picks a width from the canvas; the default `t` of 10 shows the device settled.
     public init(_ kind: LaunchProps.Device, at t: Double = 10, enter: Enter = .settle, width: CGFloat? = nil,
                 title: String? = nil, @ViewBuilder screen: () -> Screen) {
         self.kind = kind; self.t = t; self.enter = enter; self.width = width; self.title = title; self.screen = screen()
@@ -229,6 +237,7 @@ public struct DeviceFrame<Screen: View>: View {
         }
     }
 
+    /// The device drawn at point size, then scaled to the target width.
     public var body: some View {
         let L = LaunchLayout(ctx)
         let size = Self.bodySize(kind)
@@ -328,8 +337,10 @@ public struct DeviceFrame<Screen: View>: View {
 /// A screenshot from disk filling a device screen; a soft placeholder when missing.
 public struct ScreenshotView: View {
     var path: String?
+    /// `path` is loaded through `LaunchAssets`; nil or missing shows the placeholder.
     @Environment(\.launchTheme) private var theme
     public init(_ path: String?) { self.path = path }
+    /// The image filling the frame, or a gradient placeholder.
     public var body: some View {
         if let img = LaunchAssets.image(path) {
             img.resizable().interpolation(.high).aspectRatio(contentMode: .fill)

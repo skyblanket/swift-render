@@ -10,29 +10,39 @@ import Foundation
 //
 // Foundation-only: colors are hex strings, symbols are SF Symbol names.
 
+/// Everything an Apple-style launch film shows about a codebase; decodes leniently from JSON.
 public struct LaunchProps: Codable, Sendable, Equatable {
+    /// What the project is; shapes the film's wording and CTA.
     public enum Kind: String, Codable, Sendable, CaseIterable { case app, library, cli, framework, plugin }
+    /// Stage color scheme for the film.
     public enum Appearance: String, Codable, Sendable { case dark, light }
     /// Display face. `sfPro` is the Apple look; `inter` (SIL OFL, bundled) is the
     /// license-safe fallback for commercial renders.
     public enum Typeface: String, Codable, Sendable, CaseIterable { case sfPro, sfRounded, newYork, inter }
     /// `iOS` clips to the continuous-corner squircle; `macOS` art already carries its shape.
     public enum IconShape: String, Codable, Sendable { case iOS, macOS, none }
+    /// Device frame a screenshot is shown in.
     public enum Device: String, Codable, Sendable { case iPhone, iPad, mac, macWindow }
+    /// Syntax-highlighting language for a code snippet.
     public enum CodeLanguage: String, Codable, Sendable { case swift, shell, json, plain }
     /// How a stat is printed: 1,234 · 1.2k · 98% · 10×.
     public enum StatFormat: String, Codable, Sendable { case integer, compact, percent, multiplier }
 
+    /// The app icon shown on the hero shot.
     public struct Icon: Codable, Sendable, Equatable {
         /// Image path, absolute or relative to the project root.
         public var path: String
+        /// Optional icon variant used on a light stage.
         public var darkPath: String?
+        /// How the icon art is masked.
         public var shape: IconShape
+        /// Creates an icon from an image path.
         public init(path: String, darkPath: String? = nil, shape: IconShape = .iOS) {
             self.path = path; self.darkPath = darkPath; self.shape = shape
         }
     }
 
+    /// One feature card: a short title, a one-line detail and a symbol.
     public struct Feature: Codable, Sendable, Equatable {
         /// ≤ 4 words.
         public var title: String
@@ -40,14 +50,19 @@ public struct LaunchProps: Codable, Sendable, Equatable {
         public var detail: String
         /// SF Symbol name.
         public var symbol: String
+        /// Optional screenshot path shown with the feature.
         public var screenshot: String?
+        /// Creates a feature; `symbol` defaults to "sparkle".
         public init(title: String, detail: String = "", symbol: String = "sparkle", screenshot: String? = nil) {
             self.title = title; self.detail = detail; self.symbol = symbol; self.screenshot = screenshot
         }
     }
 
+    /// A code or shell snippet shown in an editor-style window.
     public struct CodeSnippet: Codable, Sendable, Equatable {
+        /// The snippet's source text.
         public var source: String
+        /// Language used for syntax highlighting.
         public var language: CodeLanguage
         /// Tab label, e.g. "ContentView.swift".
         public var title: String?
@@ -55,6 +70,7 @@ public struct LaunchProps: Codable, Sendable, Equatable {
         public var focus: [Int]?
         /// Headline shown beside the code.
         public var caption: String?
+        /// Creates a snippet; only `source` is required.
         public init(source: String, language: CodeLanguage = .swift, title: String? = nil,
                     focus: [Int]? = nil, caption: String? = nil) {
             self.source = source; self.language = language; self.title = title
@@ -64,10 +80,13 @@ public struct LaunchProps: Codable, Sendable, Equatable {
 
     /// Raw numbers, each traceable to a source. The film only shows `highlights`.
     public struct Stats: Codable, Sendable, Equatable {
+        /// Repository counts: stars and forks (GitHub), commits and contributors (git).
         public var stars: Int?, forks: Int?, commits: Int?, contributors: Int?
+        /// Codebase counts from the scanner.
         public var swiftLines: Int?, testCount: Int?, dependencies: Int?, releases: Int?, targets: Int?
         /// yyyy-MM-dd
         public var firstCommit: String?
+        /// Creates stats; every field is optional.
         public init(stars: Int? = nil, forks: Int? = nil, commits: Int? = nil, contributors: Int? = nil,
                     swiftLines: Int? = nil, testCount: Int? = nil, dependencies: Int? = nil,
                     releases: Int? = nil, targets: Int? = nil, firstCommit: String? = nil) {
@@ -79,13 +98,19 @@ public struct LaunchProps: Codable, Sendable, Equatable {
 
     /// One number on the stats shot.
     public struct Stat: Codable, Sendable, Equatable {
+        /// The raw number, formatted per `format`.
         public var value: Double
+        /// How the number is printed.
         public var format: StatFormat
+        /// Caption under the number, e.g. "tests".
         public var label: String
+        /// Text printed before the number.
         public var prefix: String?
+        /// Text printed after the number.
         public var suffix: String?
         /// Where the number came from ("git rev-list", "Tests/").
         public var source: String?
+        /// Creates a stat.
         public init(value: Double, format: StatFormat = .integer, label: String,
                     prefix: String? = nil, suffix: String? = nil, source: String? = nil) {
             self.value = value; self.format = format; self.label = label
@@ -93,27 +118,43 @@ public struct LaunchProps: Codable, Sendable, Equatable {
         }
     }
 
+    /// A supported platform with an optional minimum OS version.
     public struct Platform: Codable, Sendable, Equatable {
+        /// Platforms the film can name.
         public enum Name: String, Codable, Sendable, CaseIterable { case iOS, macOS, watchOS, tvOS, visionOS, macCatalyst, linux }
+        /// The platform.
         public var name: Name
+        /// Minimum OS version, e.g. "17".
         public var minimum: String?
+        /// Creates a platform entry.
         public init(_ name: Name, minimum: String? = nil) { self.name = name; self.minimum = minimum }
     }
 
+    /// One line in the changelog shot.
     public struct ChangelogItem: Codable, Sendable, Equatable {
+        /// Category of a changelog entry.
         public enum Kind: String, Codable, Sendable { case added, changed, fixed, performance, removed, security, deprecated }
+        /// The entry's category.
         public var kind: Kind
+        /// One-line summary of the change.
         public var title: String
+        /// Optional longer explanation.
         public var detail: String?
+        /// Creates a changelog entry; kind defaults to `.added`.
         public init(_ kind: Kind = .added, _ title: String, detail: String? = nil) {
             self.kind = kind; self.title = title; self.detail = detail
         }
     }
 
+    /// A screenshot shown in a device frame.
     public struct Screenshot: Codable, Sendable, Equatable {
+        /// Image path, absolute or relative to the project root.
         public var path: String
+        /// Device frame to show it in.
         public var device: Device
+        /// Optional caption shown with the screenshot.
         public var caption: String?
+        /// Creates a screenshot entry.
         public init(path: String, device: Device = .iPhone, caption: String? = nil) {
             self.path = path; self.device = device; self.caption = caption
         }
@@ -121,7 +162,9 @@ public struct LaunchProps: Codable, Sendable, Equatable {
 
     /// The closing call to action. Generic capsules only — never store-badge artwork.
     public struct CTA: Codable, Sendable, Equatable {
+        /// Which call to action the closing shot shows.
         public enum Kind: String, Codable, Sendable { case availableNow, downloadForMac, appStore, swiftPackage, github, brew, custom }
+        /// The call-to-action type.
         public var kind: Kind
         /// Button label override.
         public var title: String?
@@ -129,20 +172,26 @@ public struct LaunchProps: Codable, Sendable, Equatable {
         public var value: String?
         /// Version for `.swiftPackage` (`from:`).
         public var from: String?
+        /// SF Symbol name shown in the capsule.
         public var symbol: String?
+        /// Creates a call to action; defaults to `.availableNow`.
         public init(_ kind: Kind = .availableNow, title: String? = nil, value: String? = nil,
                     from: String? = nil, symbol: String? = nil) {
             self.kind = kind; self.title = title; self.value = value; self.from = from; self.symbol = symbol
         }
     }
 
+    /// Settings for the generated score.
     public struct Music: Codable, Sendable, Equatable {
+        /// Overall feel of the score.
         public enum Mood: String, Codable, Sendable { case calm, bright, driving }
         /// 90, 100 or 120 — tempos whose beats land on whole frames at 60 fps.
         public var bpm: Double
         /// Semitone transpose from D.
         public var key: Int
+        /// Feel of the score.
         public var mood: Mood
+        /// Creates music settings (100 bpm, key of D, bright by default).
         public init(bpm: Double = 100, key: Int = 0, mood: Mood = .bright) {
             self.bpm = bpm; self.key = key; self.mood = mood
         }
@@ -150,56 +199,82 @@ public struct LaunchProps: Codable, Sendable, Equatable {
 
     /// Per-shot edits from Studio or the agent: `{"id": "changelog", "bars": 1}` or `{"id": "stats", "hidden": true}`.
     public struct ShotOverride: Codable, Sendable, Equatable {
+        /// Shot id to edit, e.g. "changelog" or "stats".
         public var id: String
+        /// Length override for the shot, in bars.
         public var bars: Double?
+        /// When true, the shot is dropped from the film.
         public var hidden: Bool?
+        /// Creates a shot override.
         public init(id: String, bars: Double? = nil, hidden: Bool? = nil) {
             self.id = id; self.bars = bars; self.hidden = hidden
         }
     }
 
+    /// JSON schema version; currently 1.
     public var schemaVersion: Int
+    /// Product name shown in the title shot.
     public var name: String
     /// One sentence, ≤ 60 characters.
     public var tagline: String
+    /// Optional second line under the tagline.
     public var subtitle: String?
+    /// What kind of project this is.
     public var kind: Kind
     /// Normalized, no leading "v".
     public var version: String?
+    /// Release date string, as found in the repo.
     public var releaseDate: String?
+    /// License name, e.g. "MIT".
     public var license: String?
+    /// Product website or URL shown in the film.
     public var url: String?
     /// "owner/name"
     public var repo: String?
     /// "#RRGGBB"
     public var accent: String
+    /// Optional second accent "#RRGGBB" for gradients.
     public var accentSecondary: String?
+    /// Dark or light stage.
     public var appearance: Appearance
+    /// Display typeface for all film text.
     public var typeface: Typeface
+    /// Optional app icon for the hero shot.
     public var icon: Icon?
     /// 3…6 read best.
     public var features: [Feature]
+    /// Code snippet for the code shot.
     public var code: CodeSnippet?
+    /// Install command snippet for the install shot.
     public var install: CodeSnippet?
     /// Shell session for the terminal shot: lines starting with "$ " are typed commands.
     public var terminal: [String]?
+    /// Raw numbers gathered by the scanner.
     public var stats: Stats
     /// 0…3 numbers for the stats shot.
     public var highlights: [Stat]
+    /// Supported platforms for the platforms shot.
     public var platforms: [Platform]
+    /// Swift tools version, e.g. "6.0".
     public var swiftVersion: String?
     /// Short facts for the platforms shot ("Zero dependencies").
     public var facts: [String]
+    /// Changelog entries; the film shows up to 5.
     public var changelog: [ChangelogItem]
+    /// Screenshots shown in device frames.
     public var screenshots: [Screenshot]
+    /// The closing call to action.
     public var cta: CTA
     /// Speak a voiceover (local TTS) over the film.
     public var voiceover: Bool
     /// Voiceover lines by shot id ("hero", "title", "triad", "end", …). Missing shots get generated lines.
     public var voiceoverLines: [String: String]?
+    /// Score settings.
     public var music: Music
+    /// Per-shot overrides from Studio or the agent.
     public var shots: [ShotOverride]
 
+    /// Creates props; only `name` is required.
     public init(name: String, tagline: String = "", subtitle: String? = nil, kind: Kind = .app,
                 version: String? = nil, releaseDate: String? = nil, license: String? = nil,
                 url: String? = nil, repo: String? = nil, accent: String = "#0A84FF", accentSecondary: String? = nil,
@@ -298,6 +373,7 @@ struct LenientElement<T: Decodable>: Decodable {
 }
 
 extension LaunchProps {
+    /// Decodes leniently: missing, null or invalid values fall back to defaults.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = LaunchProps.fallback
@@ -336,6 +412,7 @@ extension LaunchProps {
 }
 
 extension LaunchProps.Icon {
+    /// Decodes an object or a bare path string.
     public init(from decoder: Decoder) throws {
         // "icon": "path/to.png" is accepted as shorthand.
         if let s = try? decoder.singleValueContainer().decode(String.self) { self.init(path: s); return }
@@ -348,6 +425,7 @@ extension LaunchProps.Icon {
 }
 
 extension LaunchProps.Feature {
+    /// Decodes an object or a bare title string.
     public init(from decoder: Decoder) throws {
         // "features": ["Fast", "Private"] is accepted as shorthand.
         if let s = try? decoder.singleValueContainer().decode(String.self) { self.init(title: s); return }
@@ -361,6 +439,7 @@ extension LaunchProps.Feature {
 }
 
 extension LaunchProps.CodeSnippet {
+    /// Decodes an object or a bare source string.
     public init(from decoder: Decoder) throws {
         if let s = try? decoder.singleValueContainer().decode(String.self) { self.init(source: s); return }
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -370,6 +449,7 @@ extension LaunchProps.CodeSnippet {
 }
 
 extension LaunchProps.Stats {
+    /// Decodes leniently; invalid fields become nil.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(stars: c.lenient(.stars), forks: c.lenient(.forks), commits: c.lenient(.commits),
@@ -380,6 +460,7 @@ extension LaunchProps.Stats {
 }
 
 extension LaunchProps.Stat {
+    /// Decodes leniently; `value` is required.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         guard let value: Double = c.lenient(.value) else {
@@ -391,6 +472,7 @@ extension LaunchProps.Stat {
 }
 
 extension LaunchProps.Platform {
+    /// Decodes an object or a bare platform name string.
     public init(from decoder: Decoder) throws {
         // "platforms": ["iOS", "macOS"] is accepted as shorthand.
         if let s = try? decoder.singleValueContainer().decode(String.self) {
@@ -408,6 +490,7 @@ extension LaunchProps.Platform {
 }
 
 extension LaunchProps.ChangelogItem {
+    /// Decodes an object or a bare title string (kind `.added`).
     public init(from decoder: Decoder) throws {
         if let s = try? decoder.singleValueContainer().decode(String.self) { self.init(.added, s); return }
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -419,6 +502,7 @@ extension LaunchProps.ChangelogItem {
 }
 
 extension LaunchProps.Screenshot {
+    /// Decodes an object or a bare path string.
     public init(from decoder: Decoder) throws {
         if let s = try? decoder.singleValueContainer().decode(String.self) { self.init(path: s); return }
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -430,6 +514,7 @@ extension LaunchProps.Screenshot {
 }
 
 extension LaunchProps.CTA {
+    /// Decodes an object or a bare kind string; unknown strings become a `.custom` title.
     public init(from decoder: Decoder) throws {
         if let s = try? decoder.singleValueContainer().decode(String.self) {
             self.init(Kind(rawValue: s) ?? .custom, title: Kind(rawValue: s) == nil ? s : nil); return
@@ -441,6 +526,7 @@ extension LaunchProps.CTA {
 }
 
 extension LaunchProps.Music {
+    /// Decodes leniently with defaults for missing fields.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(bpm: c.lenient(.bpm, 100), key: c.lenient(.key, 0), mood: c.lenient(.mood, .bright))
@@ -448,6 +534,7 @@ extension LaunchProps.Music {
 }
 
 extension LaunchProps.ShotOverride {
+    /// Decodes leniently; `id` is required.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         guard let id: String = c.lenient(.id) else {
@@ -557,6 +644,7 @@ extension LaunchProps {
 
 // MARK: - Text helpers (shared by the scanner and validation)
 
+/// Text helpers shared by the launch scanner and validation.
 public enum LaunchText {
     /// Strips markdown emphasis, links, inline code ticks, HTML tags and emoji shortcodes.
     public static func clean(_ s: String) -> String {
@@ -620,6 +708,7 @@ public enum LaunchText {
         return f.uppercased() + s.dropFirst()
     }
 
+    /// Trims whitespace and a leading "v"/"V" from a version string.
     public static func normalizeVersion(_ v: String) -> String {
         var s = v.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
@@ -724,6 +813,7 @@ public enum LaunchText {
 
 // MARK: - Color math (hex strings; no SwiftUI)
 
+/// Hex color math for launch films (no SwiftUI).
 public enum LaunchColor {
     /// (r, g, b) in 0…1 from "#RRGGBB" / "RRGGBB" / "#RRGGBBAA".
     public static func rgb(_ hex: String) -> (Double, Double, Double)? {
@@ -735,6 +825,7 @@ public enum LaunchColor {
         return (Double((x >> 16) & 0xFF) / 255, Double((x >> 8) & 0xFF) / 255, Double(x & 0xFF) / 255)
     }
 
+    /// "#RRGGBB" from components in 0…1, clamped.
     public static func hex(_ r: Double, _ g: Double, _ b: Double) -> String {
         func c(_ v: Double) -> Int { Int((min(1, max(0, v)) * 255).rounded()) }
         return String(format: "#%02X%02X%02X", c(r), c(g), c(b))
@@ -747,6 +838,7 @@ public enum LaunchColor {
         return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
 
+    /// WCAG contrast ratio between two hex colors (1…21).
     public static func contrast(_ a: String, _ b: String) -> Double {
         let la = luminance(a), lb = luminance(b)
         return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)

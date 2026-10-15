@@ -3,17 +3,21 @@ import SwiftUI
 /// Shadow settings for a light. Soft shadows come from `softness` (blur radius in
 /// shadow-map texels) and `samples` (more = smoother penumbra, slower).
 public struct Shadow3D {
+    /// Shadow color (its alpha sets how dark the shadow is).
     public var color: Color
     /// Blur radius of the shadow edge.
     public var softness: Double
+    /// Shadow samples per pixel; more gives a smoother penumbra at higher cost.
     public var samples: Int
     /// Shadow map resolution (square).
     public var mapSize: Int
     /// Directional lights only: half-height, in scene units, of the area that can
     /// receive shadows. Keep it just larger than the subject for crisp maps.
     public var extent: Double
+    /// Depth bias that offsets the shadow map to avoid self-shadowing artifacts.
     public var bias: Double
 
+    /// Creates shadow settings; the defaults give a soft shadow with a 4096-pixel map.
     public init(color: Color = Color.black.opacity(0.6), softness: Double = 8, samples: Int = 24,
                 mapSize: Int = 4096, extent: Double = 1, bias: Double = 1) {
         self.color = color; self.softness = softness; self.samples = samples
@@ -24,6 +28,7 @@ public struct Shadow3D {
     public static func soft(extent: Double = 1, opacity: Double = 0.55) -> Shadow3D {
         Shadow3D(color: Color.black.opacity(opacity), softness: 14, samples: 32, extent: extent)
     }
+    /// A crisp, single-sample shadow with almost no edge blur.
     public static func hard(extent: Double = 1, opacity: Double = 0.8) -> Shadow3D {
         Shadow3D(color: Color.black.opacity(opacity), softness: 1, samples: 1, extent: extent)
     }
@@ -40,6 +45,7 @@ public struct Shadow3D {
 /// Intensities are SceneKit lumens (1000 ≈ a neutral key light). Image-based lighting
 /// from ``Environment3D`` adds on top of these.
 public struct Light3D {
+    /// The type of light. Spot cone angles are in degrees; area sizes are in scene units.
     public enum Kind: Hashable {
         case directional
         case spot(inner: Double, outer: Double)
@@ -48,15 +54,20 @@ public struct Light3D {
         case ambient
     }
 
+    /// The type of light.
     public var kind: Kind
+    /// Light color (multiplied with `temperature` when set).
     public var color: Color
+    /// Brightness in SceneKit lumens (1000 is roughly a neutral key light).
     public var intensity: Double
     /// Optional color temperature in Kelvin (6500 = neutral), multiplied with `color`.
     public var temperature: Double?
+    /// Shadow settings (nil = no shadow). Only directional and spot lights cast shadows.
     public var shadow: Shadow3D?
     /// Omni/spot: distance where light starts and finishes fading (nil = physical falloff).
     public var attenuation: ClosedRange<Double>?
 
+    /// Creates a light description. The static builders are usually easier, since they also position the light.
     public init(_ kind: Kind, color: Color = .white, intensity: Double = 1000, temperature: Double? = nil,
                 shadow: Shadow3D? = nil, attenuation: ClosedRange<Double>? = nil) {
         self.kind = kind; self.color = color; self.intensity = intensity

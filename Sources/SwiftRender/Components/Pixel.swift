@@ -10,35 +10,41 @@ import SwiftUI
 ///         px.rect(10, 10, 4, 4, .red)
 ///         px.text("HELLO", 20, 20, scale: 2, .white, shadow: .black)
 ///     }
-
 public struct PixelCanvas {
+    /// The Canvas graphics context being drawn into.
     public let ctx: GraphicsContext
     /// Device pixels per logical pixel.
     public let s: Double
     /// Logical offset applied to every draw (camera shake, scrolling).
     public var ox = 0.0, oy = 0.0
 
+    /// Wraps `ctx` with `s` device pixels per logical pixel and an optional offset.
     public init(ctx: GraphicsContext, s: Double, ox: Double = 0, oy: Double = 0) {
         self.ctx = ctx; self.s = s; self.ox = ox; self.oy = oy
     }
 
+    /// Fills the whole canvas with `c`.
     public func fillAll(_ c: Color) { rawRect(-1, -1, 100_000, 100_000, c) }
 
+    /// Fills a rect in raw device coordinates, ignoring scale, offset and snapping.
     public func rawRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double, _ c: Color) {
         ctx.fill(Path(CGRect(x: x, y: y, width: w, height: h)), with: .color(c))
     }
 
+    /// Fills a logical-pixel rect, snapped to whole device pixels.
     public func rect(_ x: Double, _ y: Double, _ w: Double, _ h: Double, _ c: Color) {
         let x0 = ((x + ox) * s).rounded(), y0 = ((y + oy) * s).rounded()
         let x1 = ((x + ox + w) * s).rounded(), y1 = ((y + oy + h) * s).rounded()
         ctx.fill(Path(CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)), with: .color(c))
     }
 
+    /// Draws a 1-logical-pixel outline of the rect.
     public func frame(_ x: Double, _ y: Double, _ w: Double, _ h: Double, _ c: Color) {
         rect(x, y, w, 1, c); rect(x, y + h - 1, w, 1, c)
         rect(x, y, 1, h, c); rect(x + w - 1, y, 1, h, c)
     }
 
+    /// Draws ASCII-art `rows` at (x, y): each character maps through `pal` (unmapped = transparent), `sc` logical pixels per cell.
     public func sprite(_ rows: [String], _ pal: [Character: Color], _ x: Double, _ y: Double, _ sc: Double) {
         for (r, row) in rows.enumerated() {
             for (c, ch) in row.enumerated() {
@@ -113,6 +119,7 @@ public struct PixelCanvas {
         }
     }
 
+    /// Draws `str` in `PixelFont` at `scale`, with an optional drop shadow offset by one scaled pixel.
     public func text(_ str: String, _ x: Double, _ y: Double, scale: Double, _ c: Color, shadow: Color? = nil) {
         if let sh = shadow { glyphs(str, x + scale, y + scale, scale, sh) }
         glyphs(str, x, y, scale, c)
@@ -138,6 +145,7 @@ public enum PixelFont {
     /// Width in logical pixels of `text` at `scale`.
     public static func width(_ text: String, scale: Double = 1) -> Double { Double(max(0, text.count * 6 - 1)) * scale }
 
+    /// Glyph bitmaps: seven 5-character rows per character, `X` = filled.
     public static let glyphs: [Character: [String]] = {
         let raw: [Character: String] = [
             "A": ".XXX./X...X/X...X/XXXXX/X...X/X...X/X...X",

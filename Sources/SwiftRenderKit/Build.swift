@@ -2,10 +2,15 @@ import Foundation
 
 // MARK: - Process helper
 
+/// Outcome of a finished child process.
 public struct ProcessResult: Sendable {
+    /// Exit status.
     public var status: Int32
+    /// Captured standard output, UTF-8 decoded.
     public var stdout: String
+    /// Captured standard error, UTF-8 decoded.
     public var stderr: String
+    /// Wall time the child ran, in seconds.
     public var seconds: Double
 }
 
@@ -14,6 +19,7 @@ public enum ProcessRunnerError: Error, CustomStringConvertible, Equatable {
     case timedOut(seconds: Double)
     case cancelled
 
+    /// Human-readable reason.
     public var description: String {
         switch self {
         case .timedOut(let s): return String(format: "timed out after %.0fs (stopped)", s)
@@ -31,8 +37,10 @@ public final class ProcessCancel: @unchecked Sendable {
     private var running: [Int32] = []
     private var cancelled = false
 
+    /// Creates a token that has not been cancelled.
     public init() {}
 
+    /// Whether `cancel` has been called.
     public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
 
     /// Stops the running child's process group: SIGTERM, then SIGKILL two seconds later
@@ -57,6 +65,7 @@ public final class ProcessCancel: @unchecked Sendable {
     }
 }
 
+/// Runs child processes synchronously, capturing output, with timeout and cancellation.
 public enum ProcessRunner {
     /// Run a program to completion, capturing both streams.
     ///
@@ -136,14 +145,22 @@ public enum ProcessRunner {
 
 // MARK: - Compiler diagnostics
 
+/// One compiler error, warning or note parsed from build output.
 public struct CompilerDiagnostic: Codable, Sendable, Equatable, Hashable {
+    /// Diagnostic level.
     public enum Severity: String, Codable, Sendable { case error, warning, note }
+    /// Absolute source file path.
     public var file: String
+    /// 1-based line number.
     public var line: Int
+    /// 1-based column number.
     public var column: Int
+    /// Error, warning or note.
     public var severity: Severity
+    /// The diagnostic text.
     public var message: String
 
+    /// Creates a diagnostic.
     public init(file: String, line: Int, column: Int, severity: Severity, message: String) {
         self.file = file; self.line = line; self.column = column; self.severity = severity; self.message = message
     }
@@ -169,18 +186,24 @@ public struct CompilerDiagnostic: Codable, Sendable, Equatable, Hashable {
 
 // MARK: - Build
 
+/// Outcome of a `swift build`.
 public struct BuildResult: Sendable {
+    /// Whether the build exited 0.
     public var success: Bool
+    /// Wall time the build took, in seconds.
     public var seconds: Double
+    /// Parsed compiler diagnostics, deduplicated.
     public var diagnostics: [CompilerDiagnostic]
     /// Combined raw output (for a log pane).
     public var log: String
     /// Absolute path of the built executable when `success`.
     public var executable: URL?
 
+    /// Only the error-level diagnostics.
     public var errors: [CompilerDiagnostic] { diagnostics.filter { $0.severity == .error } }
 }
 
+/// Builds a scene project with SwiftPM and locates its executable.
 public enum ProjectBuilder {
     /// `swift build --product <product>` in the project root. Blocking; call off the main thread.
     /// `timeout`/`cancel` stop the build (and its compiler processes) — see `ProcessRunner.run`.
@@ -238,6 +261,7 @@ private final class BinPathCache: @unchecked Sendable {
 
 // MARK: - Streaming build (Studio's build HUD)
 
+/// Live events from a streaming `swift build`.
 public enum BuildEvent: Sendable {
     /// A progress line, e.g. "[12/40] Compiling SwiftRender NeverHeard.swift".
     case progress(String)
@@ -257,6 +281,7 @@ public final class BuildCancel: @unchecked Sendable {
         process = p
         return !cancelled
     }
+    /// Interrupts the build, then terminates it two seconds later if it's still running.
     public func cancel() {
         lock.lock(); cancelled = true; let p = process; lock.unlock()
         guard let p, p.isRunning else { return }
