@@ -120,21 +120,25 @@ the setup for every client.
 
 ### Tools (names are a contract with Studio and the director agent)
 
+The review-loop and rendering tools. The creation tools (`docs`, `launch_film`, `init_project`,
+`new_scene`, `write_scene`, `get_props`, `set_props`) and `render_status` are in
+[agents.md](agents.md#tools); the server has 21 in all.
+
 | tool | arguments | returns |
 |---|---|---|
-| `list_scenes` | — | one line per scene: kind, length, score/props, active comment count |
-| `scene_info` | `scene` | clips (start–end, transition, `file:line`), knobs, captions, score events (first 80) |
-| `render_frames` | `scene`, `times[]` (≤ 8), `width?` (160–1280, default 960), `comment?`, `aspect?` | a label + PNG per time, rendered at ≈`width` |
-| `contact_sheet` | `scene`, `comment?`, `aspect?` | grid PNG (≤ 1280 wide) |
-| `check_scene` | `scene`, `comment?`, `aspect?` | the `check` report (blank frames, loudness, clipping, whoosh/riser warning) + sheet PNG |
-| `build` | — | `BUILD OK …` or `BUILD FAILED …` + `file:line:col: error: …` (`isError` on failure) |
+| `list_scenes` | `all?` | one line per scene: kind, length, score/props, active comment count |
+| `scene_info` | `scene`, `source?` | clips (start–end, transition, `file:line`), knobs, captions, score events (first 80) |
+| `render_frames` | `scene`, `times[]` (≤ 8), `width?` (160–1280, default 960), `comment?`, `aspect?`, `props?`, `props_file?` | a label + PNG per time, rendered at ≈`width` |
+| `contact_sheet` | `scene`, `comment?`, `aspect?`, `props?`, `props_file?` | grid PNG (≤ 1280 wide) |
+| `check_scene` | `scene`, `comment?`, `aspect?`, `props?`, `props_file?` | the `check` report (blank frames, loudness, clipping, whoosh/riser warning) + sheet PNG |
+| `build` | `wait?` | `BUILD OK …` or `BUILD FAILED …` + `file:line:col: error: …` (`isError` on failure) |
 | `list_comments` | `scene?`, `status?` (`open,inProgress` / `active` default / `all`) | each comment: id · scene · timecode · status · region · author, body, reply count |
 | `get_comment` | `id` | `ReviewEntry` JSON; the clips active at `t` with `file:line` (or the scene source); current frame at `t` with the region boxed in pink (≤ 1280) |
 | `claim_comment` | `id` | status `inProgress`, assignee `Claude` (agent); captures `<id>-before.png` if the comment has none. Refuses resolved/wontFix |
 | `reply_comment` | `id`, `body`, `attach_frame?`, `reopen?` | agent reply; `attach_frame` renders + attaches the current frame (and returns it); `reopen` gives a claim back (inProgress → open) |
 | `resolve_comment` | `id`, `summary` | renders the after-frame first (fails without changing anything if that fails), adds it on a reply with `summary`, status `resolved`, `resolution = summary`; returns the frame |
 | `set_knobs` | `scene`, `values` (key → number/bool/string/null), `reset?` | merged overrides written to `.swift-render/knobs/<Scene>.json`; warns about keys the scene doesn't declare. Fails, writing nothing, for an unknown scene or a value of the wrong type for a declared knob (e.g. a string for a number knob, a malformed color); never overwrites a knob file that isn't valid knob JSON |
-| `render_video` | `scene`, `preview?`, `aspect?`, `props?`, `props_file?` | renders `out/<Scene>[-9x16\|-1x1].mp4` (or `-preview.mp4`, half-res 30 fps) and returns its absolute path |
+| `render_video` | `scene`, `preview?`, `aspect?`, `props?`, `props_file?`, `wait?` | renders `out/<Scene>[-9x16\|-1x1].mp4` (or `-preview.mp4`, half-res 30 fps) and returns its absolute path |
 
 `render_frames`, `contact_sheet` and `check_scene` also take `props` (an object merged over the
 current props) or `props_file` (a variant name, a `.json` in the project, or `"defaults"`). Without
@@ -176,10 +180,12 @@ ambiguous, `check_scene` before finishing. Its `tools` are 14 `mcp__swift-render
 `Read, Edit, Write, Glob, Grep, Bash(swift build:*)`.
 
 `.claude/skills/swift-render-review/SKILL.md` teaches any session the comment model, the MCP tools,
-the CLI, and to hand real work to the director.
+the CLI, and to hand real work to the director. `.claude/skills/swift-render-make/SKILL.md` covers
+making a video (launch films, new scenes, the check-before-render loop).
 
 **Plugin** (for repos other than this one): `claude-plugin/` holds `.claude-plugin/plugin.json`,
-`agents/swift-render-director.md`, `skills/swift-render-review/SKILL.md`, `.mcp.json` and
+`agents/swift-render-director.md`, `skills/swift-render-review/SKILL.md`,
+`skills/swift-render-make/SKILL.md`, `.mcp.json` and
 `bin/swift-render-mcp-launch`. Install with
 
 ```
@@ -247,7 +253,7 @@ One JSON object per stdout line. Decode with optionals everywhere and ignore unk
   (`[{name, status: "connected"|"pending"|"failed", source: "dynamic"|"project"|"plugin"|"user"}]`),
   `agents`, `skills`, `plugins` (`[{name, path, source, version}]`), `slash_commands`, `apiKeySource`,
   `claude_code_version`, `output_style`, `uuid`, … With `--agent swift-render-director` and
-  `--mcp-config .mcp.json`, `tools` was exactly the 13 `mcp__swift-render__*` tools + `Read, Edit, Write,
+  `--mcp-config .mcp.json`, `tools` was exactly the agent's `mcp__swift-render__*` tools (13 at the time, before `render_status` existed) + `Read, Edit, Write,
   Bash` and `swift-render` was `connected` (source `dynamic`). 2.1.284 has no `Glob`/`Grep` tools (they
   are ignored in the agent's list), and `Bash(swift build:*)` shows up as plain `Bash`.
 - **`{"type":"assistant","message":{"content":[…]}}`** — `content[]` holds `{type:"text",text}` and
@@ -283,11 +289,11 @@ Gotchas seen while verifying:
   `loggedIn: false`). The model turn (list → reply "ack") and the `user`/`tool_result` events are
   therefore **not yet observed**: run `claude auth login`, then `python3 scripts/mcp-smoke.py --claude`.
 - The plugin, via `--plugin-dir ./claude-plugin`: plugin, agent (`swift-render:swift-render-director`) and
-  skill load; its MCP server connects through the launcher and the agent's tools resolve to the 13
-  `mcp__plugin_swift-render_swift-render__*` tools. `claude plugin validate` passes for
+  skill load; its MCP server connects through the launcher and the agent's tools resolve to its
+  `mcp__plugin_swift-render_swift-render__*` tools (13 at the time; the agent now lists 14). `claude plugin validate` passes for
   `claude-plugin/` and the marketplace (it checks manifests only, not agent/skill front matter).
 - The plugin launcher, run from an app repo after `swift-render init` (so a `Launch/` package
   depends on swift-render) with that repo trusted: it built `swift-render-mcp` from `./Launch`, and
-  the server answered `initialize` and listed all 13 tools. Untrusted, it builds nothing and exits
+  the server answered `initialize` and listed all its tools (13 then, 21 now). Untrusted, it builds nothing and exits
   with a message saying how to trust the project. The `marketplace add` / `install` commands were not run,
   because they change the user's Claude Code configuration.

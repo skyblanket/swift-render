@@ -81,27 +81,46 @@ your project.
 - **Timeline.** The ruler, then the clips the engine probed (nested rows; each clip links to its
   `file:line`), score lanes by kind, the loudness envelope, and comment markers.
 - **Inspector.** Comments (filter, thread, resolve), Knobs (`Knob.double/bool/text/color`, live,
-  with Save writing `.swift-render/knobs/<Scene>.json`), Props JSON, and Info (canvas, structure,
-  host pid/generation).
+  with Save writing `.swift-render/knobs/<Scene>.json`), Content (the props of a data-driven scene;
+  `--tab props`), and Info (canvas, structure, host pid/generation).
 - **Agent panel.** Shows the live transcript of a headless Claude Code run working through your
   comments (see [review-loop.md](review-loop.md) and [Agent runs and Revert Run](#agent-runs-and-revert-run)).
 
 ### Keys
 
+Help › Keyboard Shortcuts (⇧⌘/) shows the same list in the app.
+
 | Key | Action | Key | Action |
 |---|---|---|---|
-| Space | play / pause | J K L | shuttle (hold K + J/L = frame step) |
+| Space | play / pause | J K L | play backward, stop, play forward (hold K + J/L = frame step) |
 | ← → | one frame (⇧: one second) | ↑ ↓ | previous / next edit |
+| Home / End | start / end | Esc | cancel the region tool, a draft comment or compare |
 | I / O | set in / out (⇧: go to) | ⌥X | clear in/out |
 | / | loop in→out | C | comment at playhead (range when in/out set) |
-| R | mark a region | [ ] | previous / next comment |
-| \\ | A/B compare (\| cycles) | G | cycle guides |
-| ⌘B | build now | ⌘. | stop (agent, build, then render) |
-| ⌘R | render with the last preset | ⇧⌘R | Render… sheet |
-| ⇧⌘A | Ask Claude… | ⇧⌘O | open scene / clip source |
-| ⌘1–4 | inspector tabs | ⌥⌘I / ⌥⌘S | inspector / sidebar |
+| R | mark a region (or hold ⌥ and drag) | [ ] | previous / next comment |
+| \\ | A/B compare (\| cycles the mode) | G | next guide |
+| ⇧Z | zoom the timeline to fit | ⌘= / ⌘− | zoom the timeline in / out |
+| ⌘↩ | post a comment | ⇧⌘↩ | post and ask Claude |
+| ⌘B | rebuild now | ⌘. | stop (agent, build, then render) |
+| ⌘R | export again with the last preset | ⇧⌘R | Export… sheet |
+| ⇧⌘A | Ask Claude… | ⌥⌘J | show / hide the Claude panel |
+| ⇧⌘O | open scene / clip source | ⌘O | open project… |
+| ⌘1–4 | Comments, Knobs, Content, Info | ⌥⌘I / ⌥⌘S | inspector / scenes sidebar |
 | ⌫ | delete the selected comment (asks first) | ⌘Z / ⇧⌘Z | undo / redo a delete or Trash move |
-| ⌘C | copy the selected comment's text (Edit › Copy) | | |
+| ⌘C | copy the selected comment's text (Edit › Copy) | ⇧⌘0 | Welcome window |
+
+### Menus
+
+| Menu | Commands |
+|---|---|
+| File | Open Project… (⌘O), Welcome Window (⇧⌘0) |
+| Playback | Play or Pause, Play Forward, Play Backward, Next/Previous Frame, Next/Previous Edit, Set In, Set Out, Clear Range, Loop Range |
+| Comments | New Comment at Playhead, Mark a Spot on the Frame, Next/Previous Comment, Compare Before and After |
+| Build | Rebuild Now (⌘B), Stop (⌘.), Open Scene Source (⇧⌘O) |
+| Claude | Ask Claude… (⇧⌘A), Show/Hide Claude Panel (⌥⌘J) |
+| Export | Export Again (⌘R), Export… (⇧⌘R) |
+| View | Show or Hide Scenes, Show or Hide Inspector, the four inspector tabs, Zoom Timeline In/Out/to Fit, Next Guide, Appearance (and Show Playback Statistics in debug builds) |
+| Help | Keyboard Shortcuts (⇧⌘/) |
 
 Studio handles unmodified keys itself, never as menu shortcuts. They pass straight through
 while you type in a text field, so typing "jkl" in a comment never moves the playhead.
@@ -218,11 +237,10 @@ The sheet also lets you set:
 - **Range.** Choose the whole scene or In→Out. The CLI skips the audio mux for ranges, so when
   `ffmpeg` is installed, Studio exports the score with `<p> audio` and muxes in the matching
   slice (AAC 256 kb/s). Without ffmpeg, a range export is silent and the sheet says so.
-- **Build.** *Optimized* runs `swift build -c release` in `.build/studio` first. That is the
-  default for Master and App Store presets, because debug renders run 1.2–5× slower. The first
-  release build compiles the whole package; later builds are incremental. *Current debug
-  build* starts right away with the binary the viewer is running, and is the default for social,
-  drafts and ranges.
+- **Build.** *Final* (the default for every preset) uses the release CLI in
+  `.build/studio-release` described above. The first Final export compiles the whole package;
+  later ones start at once unless sources changed. *Quick* starts right away with the debug
+  binary the viewer is running.
 - **Knobs.** When the live values differ from `.swift-render/knobs/<Scene>.json`, you choose
   between rendering the live values (snapshotted to a file and passed as `--knobs`) and saving
   them to the file first. Live props are passed as `--props`. Both are snapshotted when you
@@ -263,14 +281,17 @@ render outlives the app.
 ## Command line and snapshots
 
 ```
-swift-render-studio [project] [--scene X] [--at t] [--tab comments|knobs|props|info]
-                    [--snapshot out.png [--play-for s]
-                                        [--in-out a:b] [--render <preset> [--render-wait done]]
+swift-render-studio [project | --project dir] [--scene X] [--at t] [--tab comments|knobs|props|info]
+                    [--appearance light|dark|system]
+                    [--snapshot out.png [--window WxH] [--play-for s]
+                                        [--in-out a:b] [--render <preset> [--render-wait done] [--render-build quick]]
                                         [--show render-sheet|renders]]
                     [--fake-host | --fake-process-host] [--fake-crash-at t [--fake-crash-scene X]] [--fake-build-fail]
+                    [--fake-render-ms n] [--fake-open-ms n]
 ```
 
-`--snapshot` lays the project window out offscreen, at 1600×1000 with the dark appearance. It
+`--snapshot` lays the project window out offscreen, at 1600×1000 (`--window 1280x800` changes
+it) with the dark appearance unless `--appearance` says otherwise. It
 never activates the app or steals focus. It waits for the first real frame, writes a PNG of the
 whole window, and exits 0. Agents and CI use it to check the UI itself:
 
@@ -281,7 +302,8 @@ swift run swift-render-studio . --scene RepoPromo --render master1080p60 --show 
 swift run swift-render-studio . --scene RepoPromo --in-out 2:8 --render preview --render-wait done --snapshot out/range.png
 ```
 
-- `--render <preset>` runs a real export with the current debug build. By default the snapshot
+- `--render <preset>` runs a real export: a Final (release) build, or the current debug build
+  with `--render-build quick`. By default the snapshot
   is captured at about 40% progress; with `--render-wait done` it waits for the export to
   finish.
 - `--show` composites the sheet or the popover where AppKit would draw it.
@@ -295,6 +317,8 @@ The other panels have snapshot options too:
 | Timeline | `--wait-audio` (wait for the waveform), `--timeline-zoom <px/s>`, `--timeline-start <s>`, `--inout a,b`, `--select-clip <n\|id>`, `--hover x,y`; `-layout.timelineHeightManual N` sets the timeline height (`0` = fit the lanes, capped at 35% of the column) |
 | Review | `--comment <id\|first\|N>` selects a thread, `--compare split\|toggle\|sideBySide\|difference` opens A/B compare, `--draft x,y,w,h\|point:x,y` and `--draft-text "…"` show the composer |
 | Inspector | `--knob key=value` (repeatable), `--props file.json` (relative to the project root), `--check` runs the host check for the Info tab |
+| Playback | `--play-for <s>` plays that long before the capture and prints playback stats |
+| Fakes (tests) | `--fake-host` (in-process), `--fake-process-host` (a fake `serve` in a child process), `--fake-crash-at t`, `--fake-crash-scene X`, `--fake-build-fail`, `--fake-render-ms n`, `--fake-open-ms n` |
 | Agent | `--ask-sheet` draws the Ask Claude sheet, `--agent-replay run.jsonl` replays a recorded `claude` stream-json run into the panel (Reply-only, so nothing is claimed or checkpointed) |
 | Launch | `--new-launch-film` runs **New Launch Film…**: the project CLI's `launch --no-render` scan, then AppleLaunch opens with those props |
 | Scene switch | `--switch-to X` picks scene X once the first scene shows and captures the settled result; add `--switch-hold` to capture the loading state mid-switch (the open is never sent) |

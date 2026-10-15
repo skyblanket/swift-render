@@ -10,7 +10,8 @@ Claude Code specifics:
   (claim → look at the frame → edit → build → re-render → resolve). Studio's **Ask Claude** runs it headless:
   `claude -p "…" --agent swift-render-director --output-format stream-json --verbose --permission-mode acceptEdits`
   (exact flags in [docs/review-loop.md](docs/review-loop.md)).
-- **Skill:** `.claude/skills/swift-render-review/` explains the review loop.
+- **Skills:** `.claude/skills/swift-render-make/` (making a video) and `.claude/skills/swift-render-review/`
+  (the review loop).
 - **Plugin for other repos:** `/plugin marketplace add skyblanket/swift-render`, then `/plugin install swift-render@swift-render`.
 - Look at what you render: `swift run swift-render check <Scene>` writes `out/check-<Scene>.png` — Read it.
   Say plainly that you reviewed frames and levels but could not listen.

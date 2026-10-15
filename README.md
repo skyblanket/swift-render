@@ -20,11 +20,11 @@ Swift Render is an engine and CLI. Use it directly to author films, or embed the
 - True 3D with `Scene3D`: SceneKit rendered offscreen from `t`, with models (USDZ/OBJ/SCN), PBR materials, SwiftUI views as textures, studio lighting, soft shadows, and depth of field. It composites like any view. See the `Showcase3D` demo and [docs/3d.md](docs/3d.md).
 - Local render workflows with parallel jobs, frame/range exports, contact sheets, and audio reports.
 
-[Feature guide](docs/features.md) · [CLI reference](docs/cli.md) · [Launch films](docs/launch.md) · [Studio](docs/studio.md) · [For agents](AGENTS.md) · [AI quickstart](docs/ai-quickstart.md) · [Contributing](CONTRIBUTING.md)
+[Feature guide](docs/features.md) · [CLI reference](docs/cli.md) · [Launch films](docs/launch.md) · [Studio](docs/studio.md) · [For agents](AGENTS.md) · [AI quickstart](docs/ai-quickstart.md) · [Contributing](CONTRIBUTING.md) · [All docs](docs/README.md)
 
 ## Quick start
 
-Requires macOS 14+ and the Xcode 15+ toolchain. Apple silicon is recommended. The bundled prebuilt Metal library lets you use existing shaders without installing the separate Metal compiler; editing shaders needs that compiler.
+Requires macOS 14+ and Xcode. CI builds with Xcode 26, which Studio needs; the package declares Swift tools 5.10. Apple silicon is recommended. The bundled prebuilt Metal library lets you use existing shaders without installing the separate Metal compiler; editing shaders needs that compiler.
 
 ```bash
 git clone --depth 1 https://github.com/skyblanket/swift-render.git   # ~80 MB; the full history of demo videos is ~190 MB
@@ -169,7 +169,7 @@ Start with `KineticType` for motion and scoring, `AudioBars` for audio-reactive 
 ## Scope and requirements
 
 - macOS 14+; this is a native Apple rendering stack, not a cross-platform browser renderer.
-- Xcode 15+; install the separate Metal toolchain when editing shaders.
+- Xcode (CI uses Xcode 26); install the separate Metal toolchain when editing shaders.
 - Local rendering and preview. No hosted render farm or embeddable web player is included. See [ROADMAP.md](ROADMAP.md).
 - Optional Kokoro dependencies are separate from the Swift package. macOS `say` works without that setup.
 - Timing is designed to be deterministic and has regression tests. Do not assume byte-identical results across every OS, toolchain, font, or external media change.

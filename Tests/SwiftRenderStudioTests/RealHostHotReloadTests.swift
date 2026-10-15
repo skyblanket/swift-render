@@ -4,7 +4,7 @@ import SwiftRenderKit
 @testable import SwiftRenderStudio
 
 /// Hot reload against the real engine and the real `swift-render serve` host, on this
-/// repo: a throwaway solid-color scene is added under Sources/SwiftRender/Scenes, Studio
+/// repo: a throwaway solid-color scene is added under Sources/SwiftRenderScenes, Studio
 /// builds it into .build/studio, then each color edit is timed from the file write to
 /// the first viewer frame showing the new color. The scene file is always deleted.
 /// Edits the repo and runs real compiles, so opt-in:
