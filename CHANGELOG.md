@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Documentation
+- `docs/README.md` is one index for every guide; new `docs/architecture.md` (targets, processes,
+  data on disk, hot reload, the review loop); `docs/cli.md` covers every subcommand and option;
+  `docs/agents.md` lists all 21 MCP tools with their arguments; `docs/studio.md` lists every key
+  and menu.
+- Doc comments on every public declaration in `SwiftRender`, `SwiftRenderKit` and
+  `SwiftRenderTool`.
+- Removed unreferenced screenshots from `docs/assets/`.
+
 ## 0.10.0 — 2026-10-15
 
 "Studio preview". This release makes swift-render a way to make Apple-style launch films for Swift
@@ -90,10 +99,11 @@ codebases. It adds a native editor and an agent review loop on top of the engine
     comments, which can have a range and a region box. They are stored in
     `.swift-render/reviews/<Scene>.json` (file-locked, meant to be committed), with before and
     after frames in `.swift-render/attachments/`.
-  - `swift-render-mcp` is a hand-written MCP stdio server with 13 tools. It returns rendered
-    frames inline and rebuilds the project before rendering when sources changed.
+  - `swift-render-mcp` is a hand-written MCP stdio server. It returns rendered frames inline and
+    rebuilds the project before rendering when sources changed.
   - `.claude/agents/swift-render-director.md` is the film-director subagent.
-  - `.claude/skills/swift-render-review` is a skill for working with review comments.
+  - `.claude/skills/swift-render-review` is a skill for working with review comments, and
+    `.claude/skills/swift-render-make` one for making videos.
   - `.mcp.json` registers the MCP server in this repo.
   - A Claude Code plugin (`claude-plugin/`) and marketplace entry (`.claude-plugin/`) bring the
     agent, skill and server to other repos.
@@ -114,8 +124,29 @@ codebases. It adds a native editor and an agent review loop on top of the engine
 - `swift-render.json` marks a project root (`product`, `scenesDir`, `author`). `new` scaffolds
   into `scenesDir`.
 - `KnobLab` (knobs reference scene) and `StudioAppIcon`.
+- **Videos from any agent in any Swift repo.** `swift-render-mcp` has 21 tools. Besides the review
+  loop it can make videos: `docs` (the API guide, compiled in), `launch_film`, `init_project`,
+  `new_scene`, `write_scene` (for clients without file tools), `get_props`/`set_props` and
+  `render_video`. It runs in *project*, *standalone* (any codebase, built-in templates, the
+  `swift-render` CLI next to the server) or *docs-only* mode. Renders, launch films and builds
+  that take longer than 45 s continue as jobs that `render_status` reports on, so clients that
+  stop tool calls at ~60 s (Claude Desktop, `cursor-agent`) still get the film. Paths and scene
+  names are validated and writes are confined to the project. See `docs/agents.md`.
+- `AGENTS.md` and `CLAUDE.md`: a one-page guide for coding agents working with or on swift-render.
+- The 0.10 teaser film (`docs/assets/macro-film.mp4`, a GIF in the README).
 
 ### Changed
+- **Studio playback is faster.** Frames go to the screen through a zero-copy IOSurface path; the
+  host answers `open` with the first frame and probes the scene afterwards, keeps visited scenes
+  warm and pipelines quick scene switches; playback runs at the scene's fps with a larger frame
+  cache and a quality ladder that steps down (half size, then a lower frame rate) and back up.
+- **Studio's look**: one accent, native controls, Claude as a teammate in the panel, neutral
+  timeline lanes, and a sidebar that groups scenes into Templates, Music-driven and Films with a
+  filter field.
+- **`render --jobs`** cuts the film into small pieces (up to 4 per process) that processes take as
+  they finish, instead of equal slices, so one heavy stretch no longer holds up the export. A
+  failed piece stops the others at once and names the piece.
+- CI runs on `macos-26` (Xcode 26, the toolchain Studio targets).
 - **The CLI is a library.** `SwiftRenderTool` exposes `SwiftRenderCommand.main(scenes:)`, and
   `SceneRegistryPlugin` is an exported product. It scans the CLI target plus its same-package
   dependencies. Any package can now ship its own `swift-render`-style executable, and

@@ -1,6 +1,6 @@
 # swift-render roadmap
 
-*Shipped so far: 0.9 added the `SwiftRenderScenes` demo target (consumers no longer compile the demo films), `render --jobs`, frame-exact `--range`, `smoke` CI, and VisionTrack + Rotoscope.*
+*Shipped so far: 0.9 added the `SwiftRenderScenes` demo target, `render --jobs`, frame-exact `--range`, `smoke` CI, and VisionTrack + Rotoscope. 0.10 added Studio, the review loop, the MCP server, LaunchKit and launch films, and Scene3D ([below](#010-studio-preview--shipped)).*
 
 **Goal:** make swift-render the default way Swift teams produce launch films, App Store previews and release videos.
 The film is written in SwiftUI and reviewed in a native editor. A specialized agent applies the review notes.
@@ -27,51 +27,24 @@ The rule for where the line falls: anything one person can do offline on their o
 
 ---
 
-## 0.10: Studio preview *(built; not yet tagged)*
+## 0.10: Studio preview — shipped
 
-The foundation for the editor and the agent loop. Everything below is implemented and tested (336 tests, `smoke`, host/MCP smoke scripts).
+Released as 0.10.0 on 2026-10-15; the full list is in [CHANGELOG.md](CHANGELOG.md#0100--2026-10-15).
 
-- **Packages for any codebase.** The CLI is now a library (`SwiftRenderTool`). Any package can ship its own `swift-render`-style executable for its own scenes. `SceneRegistryPlugin` is exported, and `swift-render.json` marks the project.
-- **`SwiftRenderKit`.** A Foundation-only shared model:
-  - the project layout under `.swift-render/`
-  - review comments, with a file-locked store
-  - the render-host protocol
-  - scene metadata
-  - streaming builds and compiler diagnostics
-- **Engine introspection:**
-  - clips report their source file and line, a `.named()` label, nesting and transitions;
-  - `Knob.double/bool/text/color` are live-tunable constants;
-  - Score events are sorted into lanes;
-  - `swift-render info --json` exposes all of it.
-- **Recorder:**
-  - `--range` now renders the scene at its full length;
-  - progress callback;
-  - true output size (4K, real half-res previews);
-  - faster pixel-buffer path.
-- **`swift-render serve`.** The render host behind Studio. It speaks JSON lines plus binary frames, coalesces scrubbing, streams playback, and caches score audio.
-- **swift-render Studio:**
-  - hot reload (save, then about 2 s to new pixels);
-  - timeline lanes for clips, score, captions, waveform and comments;
-  - viewer with safe areas and A/B compare;
-  - knobs, props and check report in the inspector;
-  - region and range comments;
-  - agent panel (headless Claude Code with checkpoints and revert) and render queue, including App Store preview presets;
-  - `scripts/package-studio.sh` builds an ad-hoc-signed `.app`;
-  - `--snapshot` for CI.
-- **Review loop:**
-  - `swift-render review list|show|add|reply|status|frame`;
-  - the `swift-render-mcp` server, which returns rendered frames inline so the agent can see them;
-  - the `swift-render-director` subagent;
-  - a Claude Code plugin and marketplace entry.
-- **LaunchKit.** Apple-keynote-grammar components: `KeynoteTitle`, `AppIconHero`, `DeviceFrame`, `FeatureTriad`, `CodeReveal`, `StatCounter`, `EndCard`, and others.
-  - `AppleLaunch` is a template scene that sizes itself to your data.
-  - `swift-render launch <repo>` scans `Package.swift`, `.xcodeproj`, `AppIcon`, README, CHANGELOG and git, then renders a film.
-  - `swift-render init` scaffolds a `Launch/` package you own.
+- [x] **Packages for any codebase.** The CLI is a library (`SwiftRenderTool`); any package ships its own `swift-render`-style executable. `SceneRegistryPlugin` is exported, `swift-render.json` marks the project, and `SwiftRenderKit` holds the Foundation-only shared model.
+- [x] **Engine introspection.** Clips report `file:line`, `.named()` labels and transitions; `Knob.double/bool/text/color`; Score lanes; `swift-render info --json`.
+- [x] **swift-render Studio.** Hot reload (≈2 s), timeline lanes, viewer with safe areas and A/B compare, knobs/props/check in the inspector, region and range comments, the agent panel with checkpoints and Revert Run, the render queue with App Store presets, right-click menus with Delete and Undo, `--snapshot` for CI, and a packaged `.app` (`scripts/package-studio.sh`).
+- [x] **Studio performance.** Release-built exports with `--jobs auto`, zero-copy IOSurface display, first-frame-first opens, warm scenes and a playback quality ladder.
+- [x] **Review loop.** `swift-render review`, the `swift-render-director` agent, the review and make skills, and the Claude Code plugin and marketplace entry.
+- [x] **MCP server.** `swift-render-mcp` with 21 tools: creation (launch films, scenes, props), rendering with jobs for long work, the API guide, and the review loop; project, standalone and docs-only modes.
+- [x] **LaunchKit and `AppleLaunch`.** Keynote-grammar components; `swift-render launch <repo>` scans a codebase and renders its film; `swift-render init` scaffolds a `Launch/` package you own.
+- [x] **3D.** `Scene3D`: deterministic SceneKit inside any scene, with models, PBR materials, SwiftUI textures, lights and depth of field (`Showcase3D`).
+- [x] **Parallel export.** `render --jobs` hands out small pieces of the film as processes free up.
 
-**Still open before tagging 0.10:**
+**Still open from 0.10:**
+- Push the `v0.10.0` tag. Until it exists on the remote, `init` without `--local` (which writes `from: "0.10.0"`) can't resolve the package.
 - A real model turn of the review loop: everything up to the model call is verified; run `python3 scripts/mcp-smoke.py --claude` on a machine with a signed-in `claude` CLI.
-- Studio gestures (retime drag, region drag, compare wipe, sheets) have only been exercised through snapshots and unit tests, not by hand in a visible window.
-- `init` without `--local` needs the 0.10.0 tag to exist on the remote.
+- Studio gestures (retime drag, region drag, compare wipe, sheets) have been exercised through snapshots and unit tests, not by hand in a visible window.
 - Knob values saved from Studio's inspector fail silently when the knob file is unreadable (MCP and the CLI already report it).
 - Review `source.file` is stored as an absolute path; make it project-relative so comments survive a checkout move.
 - LaunchKit polish: the package CTA chip at 9:16, long product names on the 9:16 end card.
