@@ -6,6 +6,10 @@ Build motion graphics, data-driven films, and video tools with SwiftUI, Metal, a
 
 Swift Render is an engine and CLI. Use it directly to author films, or embed the library in your own app or workflow.
 
+https://github.com/skyblanket/swift-render/raw/main/docs/assets/macro-film.mp4
+
+*A 20-second teaser for 0.10. Every frame is SwiftUI and Metal: a glass dome shader, refraction, ripples, a gel, caustics, and type set along a curve, all cut to the beat. The 1,200 frames at 1080p60 rendered in 5.3 s on an Apple M5 Mac, and 4K took 17.8 s. It was directed in [Studio](docs/studio.md) with 38 timecoded notes. Claude (Opus 5.5) picked up each note, fixed it, and answered with an after-frame. The macro textures are generated images, and everything they pass through is code. Shown here without sound.*
+
 ## What you can build
 
 - App launch and product videos, rendered straight from your Swift code.
