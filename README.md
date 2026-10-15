@@ -27,7 +27,7 @@ Swift Render is an engine and CLI. Use it directly to author films, or embed the
 Requires macOS 14+ and the Xcode 15+ toolchain. Apple silicon is recommended. The bundled prebuilt Metal library lets you use existing shaders without installing the separate Metal compiler; editing shaders needs that compiler.
 
 ```bash
-git clone https://github.com/skyblanket/swift-render.git
+git clone --depth 1 https://github.com/skyblanket/swift-render.git   # ~80 MB; the full history of demo videos is ~190 MB
 cd swift-render
 swift run swift-render list
 swift run swift-render render KineticType --out out/kinetic-type.mp4

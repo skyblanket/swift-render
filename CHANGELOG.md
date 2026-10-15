@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-10-15
+
+"Studio preview". This release makes swift-render a way to make Apple-style launch films for Swift
+codebases. It adds a native editor and an agent review loop on top of the engine.
+
 ### Added
 - **True 3D: `Scene3D`** (`Sources/SwiftRender/ThreeD/`). A SceneKit scene rendered offscreen with
   `SCNRenderer` at the frame's real pixel size (layout × display scale) and returned as an image.
@@ -29,13 +34,6 @@
 - **`Showcase3D` demo**: a titanium device with a live SwiftUI screen, studio light, an eased turn
   and dolly, depth of field, a soft floor shadow and a score. The 3D layer costs ≈18–19 ms/frame at
   1080p (release). `SR_3D_STATS=1` prints the Scene3D cost.
-
-## 0.10.0 — 2026-10-06
-
-"Studio preview". This release makes swift-render a way to make Apple-style launch films for Swift
-codebases. It adds a native editor and an agent review loop on top of the engine.
-
-### Added
 - **Fast, honest exports in Studio.** Exports use a release CLI built once in
   `.build/studio-release` (skipped while it's newer than every source) and `--jobs auto` for whole
   films. `render --progress json` adds `{"stage":"audio"|"render"|"mux"}` lines, and `--jobs`
