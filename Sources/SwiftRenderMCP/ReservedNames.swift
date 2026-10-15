@@ -24,6 +24,12 @@ enum ReservedNames {
         "SpeechError", "SpeechSpec", "Spring", "Stage", "StatCounter", "StatRow", "Stylize", "SwiftHighlighter",
         "TTSEngine", "TerminalCard", "Timeline", "TimelineBuilder", "Transition", "VideoClip", "VisionFrame",
         "VisionPoint", "VisionTrack", "Voice", "WAV",
+        // ThreeD/
+        "Anchor3D", "Antialiasing3D", "Background3D", "Bloom3D", "Box3D", "Camera3D", "Capsule3D", "Cone3D",
+        "Cylinder3D", "DepthOfField3D", "Effects3D", "Environment3D", "Fit3D", "Floor3D", "Fog3D", "Geometry3D",
+        "Group3D", "Light3D", "Lighting3DModel", "Material3D", "ModelRef", "Motion3D", "Node3D", "Object3D",
+        "Part3D", "Plane3D", "Rotation3D", "Scene3D", "Scene3DBuilder", "Shadow3D", "Slab3D", "Sphere3D", "Text3D",
+        "Texture3D", "Torus3D", "Vec3",
     ]
 
     /// SwiftRenderTool types the generated registry and main.swift use.

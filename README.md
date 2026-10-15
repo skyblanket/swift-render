@@ -13,6 +13,7 @@ Swift Render is an engine and CLI. Use it directly to author films, or embed the
 - Films driven by JSON props, video clips, images, voiceover, and captions.
 - Audio-reactive scenes with a native Swift score, synthesis, samples, and cached local speech.
 - Live-action effects using Apple Vision pose, hand tracking, and person masks. The `Rotoscope` demo combines these with stylized cut-outs.
+- True 3D with `Scene3D`: SceneKit rendered offscreen from `t`, with models (USDZ/OBJ/SCN), PBR materials, SwiftUI views as textures, studio lighting, soft shadows, and depth of field. It composites like any view. See the `Showcase3D` demo and [docs/3d.md](docs/3d.md).
 - Local render workflows with parallel jobs, frame/range exports, contact sheets, and audio reports.
 
 [Feature guide](docs/features.md) · [CLI reference](docs/cli.md) · [Launch films](docs/launch.md) · [Studio](docs/studio.md) · [For agents](AGENTS.md) · [AI quickstart](docs/ai-quickstart.md) · [Contributing](CONTRIBUTING.md)
