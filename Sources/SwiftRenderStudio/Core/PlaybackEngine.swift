@@ -465,7 +465,12 @@ final class PlaybackEngine {
     /// ↑/↓: previous/next clip boundary, comment, or in/out point.
     func jumpToEdit(next: Bool) {
         guard acceptsTransport else { return }
-        var points = editPoints + commentMarks.flatMap { [$0.t] + ($0.end.map { [$0] } ?? []) } + [0, duration]
+        // Spelled out for Swift 6.1, which can't infer the chained version's element type.
+        var points: [Double] = editPoints + [0, duration]
+        for mark in commentMarks {
+            points.append(mark.t)
+            if let end = mark.end { points.append(end) }
+        }
         if let io = inOut { points += [io.lowerBound, io.upperBound] }
         let eps = 0.5 / Double(fps)
         let target = next ? points.filter { $0 > t + eps }.min() : points.filter { $0 < t - eps }.max()
