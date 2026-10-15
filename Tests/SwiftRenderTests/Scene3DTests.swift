@@ -9,7 +9,7 @@ import simd
 @MainActor
 final class Scene3DTests: XCTestCase {
     override func setUp() async throws {
-        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Scene3D needs a Metal device") }
+        guard Engine3D.usableDevice() != nil else { throw XCTSkip("Scene3D needs a real Metal GPU (none, or a VM's paravirtual one)") }
     }
 
     // MARK: helpers

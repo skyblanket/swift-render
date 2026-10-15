@@ -205,9 +205,11 @@ final class RecorderTests: XCTestCase {
             let frame = try await generator.image(at: .zero).image
             let rep = NSBitmapImageRep(cgImage: frame)
             let c = try XCTUnwrap(rep.colorAt(x: frame.width / 2, y: frame.height / 2)?.usingColorSpace(.sRGB))
-            XCTAssertEqual(c.redComponent, 1, accuracy: 0.06)
-            XCTAssertEqual(c.greenComponent, 0.5, accuracy: 0.06)
-            XCTAssertEqual(c.blueComponent, 0, accuracy: 0.06)
+            // Loose enough for VM GPUs' color conversion (0.56 seen on CI), tight enough that
+            // swapped channels (green 0 or 1, red/blue swapped) still fail.
+            XCTAssertEqual(c.redComponent, 1, accuracy: 0.1)
+            XCTAssertEqual(c.greenComponent, 0.5, accuracy: 0.1)
+            XCTAssertEqual(c.blueComponent, 0, accuracy: 0.1)
         }
     }
 }

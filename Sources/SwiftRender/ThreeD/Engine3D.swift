@@ -10,7 +10,20 @@ import simd
 final class Engine3D {
     static let shared = Engine3D()
 
-    let device: MTLDevice? = MTLCreateSystemDefaultDevice()
+    let device: MTLDevice? = Engine3D.usableDevice()
+
+    /// The Metal device SceneKit renders with, or nil when 3D can't run here. Virtual
+    /// machines' paravirtualized GPUs (CI runners, VMs) assert inside the driver when
+    /// SceneKit renders offscreen, so they count as "no GPU" unless `SR_3D_FORCE=1`.
+    static func usableDevice() -> MTLDevice? {
+        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
+        let forced = ProcessInfo.processInfo.environment["SR_3D_FORCE"] == "1"
+        if !forced, device.name.localizedCaseInsensitiveContains("paravirtual") { return nil }
+        return device
+    }
+
+    /// True when Scene3D can render on this machine.
+    nonisolated static var isAvailable: Bool { MainActor.assumeIsolated { shared.device != nil } }
     private var entries: [String: Entry] = [:]
     private var order: [String] = []
     private let entryLimit = 8
@@ -83,7 +96,7 @@ final class Engine3D {
         guard device != nil else {
             if !warnedNoDevice {
                 warnedNoDevice = true
-                fputs("[swift-render] WARN: Scene3D needs Metal; no GPU device is available — drawing nothing\n", stderr)
+                fputs("[swift-render] WARN: Scene3D needs a real Metal GPU (none, or a VM's paravirtual GPU; SR_3D_FORCE=1 to try anyway) — drawing nothing\n", stderr)
             }
             return nil
         }
